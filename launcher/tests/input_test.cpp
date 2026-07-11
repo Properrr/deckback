@@ -136,7 +136,7 @@ void test_button_map_from_shipped_keymap() {
   std::string k;
   assert(find_key(m, BTN_SOUTH, &k) && k == "Enter");
   assert(find_key(m, BTN_EAST, &k) && k == "Escape");
-  assert(find_key(m, BTN_WEST, &k) && k == "MediaPlayPause");  // X
+  assert(find_key(m, BTN_X, &k) && k == "MediaPlayPause");     // X (BTN_X == BTN_NORTH)
   assert(find_key(m, BTN_TL, &k) && k == "ArrowLeft");         // LB
   assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");        // RB
   assert(find_key(m, BTN_SELECT, &k) && k == "c");             // captions
@@ -144,7 +144,7 @@ void test_button_map_from_shipped_keymap() {
   // Y and Start dispatch no DOM key -> not bound, and reported. Both are *launcher* actions
   // (voice_search, show_controls); build_button_map does not know that, so it honestly reports them
   // as unmapped and the constructor removes each one only when its feature is actually enabled.
-  assert(!find_key(m, BTN_NORTH, nullptr));
+  assert(!find_key(m, BTN_Y, nullptr));  // Y (BTN_Y == BTN_WEST) -> voice_search, a launcher action
   assert(!find_key(m, BTN_START, nullptr));
   // dpad/lt/rt are not EV_KEY buttons and must never appear here.
   assert(m.size() == 6);
@@ -673,7 +673,7 @@ void test_find_voice_control() {
   // voice_search is not a DOM key (input-ux §8.2), so the input layer intercepts its control by
   // evdev code rather than looking it up in the button map.
   assert(find_control_for_action({{"y", "voice_search"}, {"a", "select"}}, "voice_search") ==
-         BTN_NORTH);
+         BTN_Y);
   assert(find_control_for_action({{"start", "voice_search"}}, "voice_search") == BTN_START);
   // Absent, or bound to a control we do not know: -1, and startup warns rather than guessing.
   assert(find_control_for_action({{"a", "select"}}, "voice_search") == -1);
@@ -728,7 +728,7 @@ void test_shipped_app_json_keymap_is_current() {
   // Voice ships DISABLED (V0 unverified), so `y` is genuinely a dead control today and the startup
   // warning about it is correct. If this flips, the V0 spike must have passed on hardware.
   assert(cfg->voice_enabled == false);
-  assert(find_control_for_action(cfg->keymap, "voice_search") == BTN_NORTH);  // binding ready
+  assert(find_control_for_action(cfg->keymap, "voice_search") == BTN_Y);  // binding ready (Y=BTN_Y)
 
   // The layer sections ship EMPTY on purpose: no Leanback key is bound without an on-Deck spike. If
   // this ever fails, someone guessed a binding — that is the thing to re-examine, not this test.
