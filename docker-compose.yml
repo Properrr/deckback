@@ -1,0 +1,71 @@
+# Podman note (Arch/CachyOS): works rootless with `podman compose`; swap the UID/GID args for
+# `--userns=keep-id` and drop the sudoers line in the Dockerfile if preferred. Either engine is
+# fine — the justfile drives whichever CONTAINER_ENGINE points at.
+services:
+  dev:
+    build:
+      context: docker/
+      target: dev
+      args:
+        # Debian 12 to match Cobalt trunk. Set BASE to the upstream SHA-pinned
+        # marketplace.gcr.io/google/debian12 digest (docker/Dockerfile) for byte-for-byte CI parity.
+        BASE: "${BASE:-debian:12-slim}"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+        COBALT_COMMIT: "${COBALT_COMMIT}"   # sourced from DEPS.pin by the justfile
+    image: deckback-dev:latest
+    volumes:
+      - ${COBALT_SRC:-./cobalt}:/src
+      - .:/work
+      # sccache persistent compile cache — HOST BIND-MOUNT (survives `docker compose down -v`, and is
+      # browsable/backup-able from the host, unlike a named volume). SCCACHE_HOST_DIR (set in .env,
+      # gitignored) picks the host path; the ./.sccache fallback keeps fresh clones / CI self-contained.
+      # Must be writable by uid 1000 (the container's `dev` user) — the host user is 1000, so a dir
+      # created by the host owner just works.
+      - ${SCCACHE_HOST_DIR:-./.sccache}:/cache/sccache
+    working_dir: /work
+    network_mode: host   # deploy/rsync to Deck + remote-debug tunnels from inside the container
+    shm_size: 2g         # Chromium runtime wants real /dev/shm for smoke runs
+    stdin_open: true
+    tty: true
+
+  # Flatpak packaging (Phase 8). Separate image (Dockerfile `pack` stage = dev + flatpak/
+  # flatpak-builder) so the dev image stays lean. flatpak-builder runs Chromium-free module builds in
+  # bubblewrap, which needs a user namespace + mount ns inside the container: SYS_ADMIN + unconfined
+  # seccomp/apparmor grant that (we still run --disable-rofiles-fuse so no /dev/fuse is required).
+  # The runtime/SDK download is persisted to a host bind-mount via XDG_DATA_HOME so rebuilds are warm.
+  pack:
+    build:
+      context: docker/
+      target: pack
+      args:
+        # `pack` has its own base: it runs flatpak-builder, which builds inside the SDK sandbox, so
+        # nothing about the host distro reaches the artifact. Debian 12's flatpak (1.14) cannot
+        # express --device=input and its flatpak-builder (1.2.3) cannot install a metainfo file.
+        PACK_BASE: "${PACK_BASE:-debian:13-slim}"
+        BASE: "${BASE:-debian:12-slim}"
+        UID: "${UID:-1000}"
+        GID: "${GID:-1000}"
+        COBALT_COMMIT: "${COBALT_COMMIT}"
+    image: deckback-pack:latest
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+      # Docker masks /proc subpaths with locked read-only mounts; that blocks flatpak-builder's nested
+      # bwrap from mounting a fresh proc in its module-build sandbox ("Can't mount proc ... Operation
+      # not permitted"). Unmasking the system paths lets the nested proc mount succeed.
+      - systempaths=unconfined
+    environment:
+      # flatpak --user installs into $XDG_DATA_HOME/flatpak; point it at the persisted bind-mount.
+      XDG_DATA_HOME: /cache/flatpak/share
+      XDG_CACHE_HOME: /cache/flatpak/cache
+    volumes:
+      - ${COBALT_SRC:-./cobalt}:/src
+      - .:/work
+      - ${FLATPAK_HOST_DIR:-./.flatpak-cache}:/cache/flatpak
+    working_dir: /work
+    network_mode: host
+    stdin_open: true
+    tty: true

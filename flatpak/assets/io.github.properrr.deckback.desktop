@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Deckback
+GenericName=TV Video Player
+Comment=Living-room video client for Steam Deck, Game Mode native
+Exec=deckback
+Icon=io.github.properrr.deckback
+Terminal=false
+Categories=AudioVideo;Video;Player;
+Keywords=tv;video;leanback;couch;

@@ -1,0 +1,69 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Neutral synthetic screenshot: Deckback feature highlights. No third-party UI. 1280x800.
+     Render to screenshots/03-features.png via render-assets.sh. -->
+<svg width="1280" height="800" viewBox="0 0 1280 800" xmlns="http://www.w3.org/2000/svg" font-family="'DejaVu Sans','Noto Sans',sans-serif">
+  <defs>
+    <linearGradient id="bg3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#191d26"/><stop offset="1" stop-color="#0c0e12"/>
+    </linearGradient>
+    <linearGradient id="accent3" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4fd1c5"/><stop offset="1" stop-color="#38b2ac"/>
+    </linearGradient>
+    <linearGradient id="tile3" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#222732"/><stop offset="1" stop-color="#181c24"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#bg3)"/>
+
+  <!-- header -->
+  <rect x="80" y="72" width="46" height="46" rx="11" fill="#23262e" stroke="#3a3f4b"/>
+  <rect x="90" y="83" width="26" height="18" rx="4" fill="#0e1013" stroke="url(#accent3)" stroke-width="2"/>
+  <path d="M99 88 L109 92.5 L99 97 Z" fill="url(#accent3)"/>
+  <text x="140" y="106" font-size="34" font-weight="800" fill="#f2f5f8">Deckback</text>
+  <text x="80" y="150" font-size="20" fill="#8a93a1">Native living-room video for Steam Deck &#8212; built for Game Mode, not the desktop.</text>
+
+  <!-- 2x2 feature grid -->
+  <g>
+    <!-- card: controller -->
+    <rect x="80" y="196" width="536" height="228" rx="16" fill="url(#tile3)" stroke="#2c333f"/>
+    <circle cx="140" cy="256" r="26" fill="#182a28"/>
+    <circle cx="132" cy="256" r="8" fill="none" stroke="url(#accent3)" stroke-width="2.5"/>
+    <circle cx="148" cy="256" r="8" fill="none" stroke="url(#accent3)" stroke-width="2.5"/>
+    <text x="188" y="248" font-size="24" font-weight="700" fill="#eef1f5">Controller-native</text>
+    <text x="188" y="286" font-size="17" fill="#9aa3b1">Every button mapped at the</text>
+    <text x="188" y="312" font-size="17" fill="#9aa3b1">launcher. D-pad focus, A/B, voice</text>
+    <text x="188" y="338" font-size="17" fill="#9aa3b1">search &#8212; no touchscreen required.</text>
+
+    <!-- card: hw decode -->
+    <rect x="664" y="196" width="536" height="228" rx="16" fill="url(#tile3)" stroke="#2c333f"/>
+    <circle cx="724" cy="256" r="26" fill="#182a28"/>
+    <rect x="712" y="246" width="24" height="20" rx="3" fill="none" stroke="url(#accent3)" stroke-width="2.5"/>
+    <path d="M720 252 L720 260 M726 252 L726 260 M732 252 L732 260" stroke="url(#accent3)" stroke-width="2"/>
+    <text x="772" y="248" font-size="24" font-weight="700" fill="#eef1f5">Hardware VP9 decode</text>
+    <text x="772" y="286" font-size="17" fill="#9aa3b1">GPU-accelerated playback keeps</text>
+    <text x="772" y="312" font-size="17" fill="#9aa3b1">the APU cool and the battery</text>
+    <text x="772" y="338" font-size="17" fill="#9aa3b1">going &#8212; 720p60, letterboxed.</text>
+
+    <!-- card: sleep/resume -->
+    <rect x="80" y="452" width="536" height="228" rx="16" fill="url(#tile3)" stroke="#2c333f"/>
+    <circle cx="140" cy="512" r="26" fill="#182a28"/>
+    <path d="M150 500 a13 13 0 1 1 -13 -9 a10 10 0 0 0 13 9 Z" fill="none" stroke="url(#accent3)" stroke-width="2.5"/>
+    <text x="188" y="504" font-size="24" font-weight="700" fill="#eef1f5">Sleep &amp; resume</text>
+    <text x="188" y="542" font-size="17" fill="#9aa3b1">Suspend with the power button and</text>
+    <text x="188" y="568" font-size="17" fill="#9aa3b1">pick up where you left off &#8212;</text>
+    <text x="188" y="594" font-size="17" fill="#9aa3b1">audio and video restored on wake.</text>
+
+    <!-- card: game mode -->
+    <rect x="664" y="452" width="536" height="228" rx="16" fill="url(#tile3)" stroke="#2c333f"/>
+    <circle cx="724" cy="512" r="26" fill="#182a28"/>
+    <path d="M714 512 h20 M724 502 v20" stroke="url(#accent3)" stroke-width="2.5"/>
+    <text x="772" y="504" font-size="24" font-weight="700" fill="#eef1f5">Launches in Game Mode</text>
+    <text x="772" y="542" font-size="17" fill="#9aa3b1">Add to Steam and open it from the</text>
+    <text x="772" y="568" font-size="17" fill="#9aa3b1">couch. Single-instance, watchdog</text>
+    <text x="772" y="594" font-size="17" fill="#9aa3b1">restart, persistent sign-in.</text>
+  </g>
+
+  <!-- footer disclaimer -->
+  <text x="640" y="742" font-size="15" fill="#5b6472" text-anchor="middle">Unofficial &#183; not affiliated with, endorsed by, or sponsored by any streaming provider.</text>
+</svg>

@@ -1,0 +1,106 @@
+# Flatpak manifest (doc §6 Phase 8). Chromium sandbox runs via zypak (Flathub-standard) — never
+# --no-sandbox. Chromium/Cobalt does not build inside flatpak-builder, so content_shell + its runtime
+# resources are staged as a prebuilt bundle (flatpak/cobalt-prebuilt/, produced by scripts/flatpak.sh
+# from out/deck); zypak and the small out-of-tree launcher DO build here against the SDK.
+app-id: io.github.properrr.deckback
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: deckback
+separate-locales: false
+
+# Every entry earns its place; the sandbox is not a formality. The arguments we deliberately do NOT
+# pass — --device=all, --no-sandbox, --filesystem=home, --socket=wayland — are argued in
+# .internal/findings/durable/packaging-toolchain.md so nobody adds them back thinking they were an
+# oversight.
+finish-args:
+  # flatpak 1.15.6 introduced --device=input, so 1.16.0 is the first stable release that understands
+  # this app's metadata. A 1.14 host now gets a clear refusal instead of an app whose gamepad is dead
+  # and whose touchscreen lock silently does nothing.
+  - --require-version=1.16.0
+  - --share=network
+  - --socket=x11                 # Game Mode = gamescope Xwayland; content_shell --ozone-platform=x11
+  # Chromium's X11 backend uses MIT-SHM. Without --share=ipc the shared-memory path fails and every
+  # frame goes over the socket instead. We render 720p60 on a handheld; this is not a rounding error.
+  - --share=ipc
+  - --socket=pulseaudio          # PipeWire via pulse compat — playback AND mic capture (P5 voice)
+  - --device=dri                 # GPU (VA-API decode, Phase 4)
+  # evdev. NOT --device=all: this is the only device class we need, and it buys three things — the
+  # gamepad reader, FF_RUMBLE haptics, and the touchscreen EVIOCGRAB. Until 2026-07-10 this lived in
+  # `just install` as a post-install `flatpak override`, because the Debian-12 pack image's flatpak
+  # could not express it. The pack image is now trixie and it can.
+  - --device=input
+  - --talk-name=org.freedesktop.ScreenSaver
+  - --system-talk-name=org.freedesktop.login1
+  - --filesystem=xdg-run/pipewire-0:ro
+  # content_shell is forked by the launcher, which finds it here (see the deckback wrapper).
+  - --env=DECKBACK_COBALT_BIN=/app/bin/cobalt-zypak
+
+modules:
+  # zypak: Chromium sandbox helper for Flatpak (no setuid / nested userns broker). Plain Makefile
+  # build (its ./configure is a no-op); installs into $FLATPAK_DEST. Provides /app/bin/zypak-wrapper.sh.
+  - name: zypak
+    buildsystem: simple
+    build-commands:
+      - make -j${FLATPAK_BUILDER_N_JOBS:-4}
+      - make install
+    sources:
+      - type: git
+        url: https://github.com/refi64/zypak
+        tag: v2025.09
+        commit: 693a71c5ffa80ec9c9ce2ae03b1ccc493c698e53
+
+  # Out-of-tree launcher (C++23). Builds against the SDK; installs /app/bin/deckback-launcher.
+  - name: deckback-launcher
+    buildsystem: cmake-ninja
+    config-opts:
+      - -DCMAKE_BUILD_TYPE=Release
+      - -DBUILD_TESTING=OFF      # don't build the ctest binaries inside the Flatpak
+      # flatpak-builder copies a module's sources FLAT into its build dir, so `../config/` — where
+      # this file lives in the repo — does not exist here. It is added as a second source below.
+      # config/av1_steering.js is the single source of truth for codec steering: the launcher embeds
+      # it and `just smoke` injects the same file.
+      - -DDECKBACK_AV1_JS=av1_steering.js
+      - -DDECKBACK_TOUCH_JS=no_pointer.js
+    sources:
+      - type: dir
+        path: ../launcher
+      - type: file
+        path: ../config/av1_steering.js
+        dest-filename: av1_steering.js
+      - type: file
+        path: ../config/no_pointer.js
+        dest-filename: no_pointer.js
+
+  # Prebuilt Cobalt/content_shell runtime bundle (binary + paks + ICU + V8 snapshots + locales +
+  # ANGLE/SwiftShader libs). Chromium resolves its resources relative to the executable, so the whole
+  # bundle lands in one dir (/app/cobalt) and the launcher points DECKBACK_COBALT_BIN at the zypak shim.
+  - name: cobalt
+    buildsystem: simple
+    build-commands:
+      - mkdir -p /app/cobalt
+      - cp -a . /app/cobalt/
+    sources:
+      - type: dir
+        path: cobalt-prebuilt
+
+  # App config, launch wrappers, desktop entry + icon + appstream. All files (including a staged copy
+  # of config/) are gathered into flatpak/assets/ by scripts/flatpak.sh so this is a single-source dir.
+  - name: deckback-assets
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 deckback.sh     /app/bin/deckback
+      - install -Dm755 cobalt-zypak.sh /app/bin/cobalt-zypak
+      - install -Dm644 app.json        /app/share/deckback/app.json
+      - install -Dm644 steam_input.vdf /app/share/deckback/steam_input.vdf
+      - install -Dm644 io.github.properrr.deckback.desktop      /app/share/applications/io.github.properrr.deckback.desktop
+      - install -Dm644 io.github.properrr.deckback.svg          /app/share/icons/hicolor/scalable/apps/io.github.properrr.deckback.svg
+      # flatpak-builder >=1.4 keeps this at share/metainfo/ and runs `appstreamcli compose` over it,
+      # producing share/app-info/. 1.2.3 renamed it to the retired share/appdata/ and shelled out to
+      # `appstream-compose`, which the 24.08+ SDK does not ship — which is why this line was commented
+      # out until the pack image moved to trixie. scripts/flatpak.sh validates the file before we get
+      # this far.
+      - install -Dm644 io.github.properrr.deckback.metainfo.xml /app/share/metainfo/io.github.properrr.deckback.metainfo.xml
+    sources:
+      - type: dir
+        path: assets

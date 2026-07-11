@@ -1,0 +1,7 @@
+# Extra GN args layered ON TOP OF Cobalt's `chromium_linux-x64x11` + `devel` config AND args/common.gn
+# (via gen.sh). NOT a standalone arg set — the platform config provides target_os/cpu, is_debug,
+# symbol_level, media_use_ffmpeg=true, use_vaapi=true, etc. (verified via `gn args --list`); note it
+# ships proprietary_codecs=FALSE / ffmpeg_branding="Chromium", which args/common.gn overrides.
+# Put only dev-preset-specific OVERRIDES here.
+#
+# Kept empty for now. Candidate: cc_wrapper = "sccache" (faster incremental) once proven.

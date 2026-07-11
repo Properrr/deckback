@@ -1,0 +1,36 @@
+# Extra GN args layered ON TOP OF Cobalt's `chromium_linux-x64x11` + `qa` config (the deployable
+# build_type). NOT a standalone arg set — see the note in args/dev.gn. Optimization / official-build
+# gating comes from the `qa`/`gold` build_type, not from flags here.
+#
+# Deck-specific overrides (Widevine enablement for Phase 7 etc.) get added here once validated.
+
+# ThinLTO OFF for the deployable qa build. The chromium_linux-x64x11 qa/official config turns it ON
+# by default, but the ThinLTO link loads all module bitcode and peaks ~30-60 GB — it OOM-kills our
+# swapless 62 GB workstation mid-build (observed: SIGKILL at ~57%). Per the plan ThinLTO is reserved
+# for tagged GOLD releases (scripts/release.sh sets use_thin_lto=true there), not qa/deploy. Keeping
+# it off here also makes deck builds much faster with negligible runtime cost for test/deploy.
+use_thin_lto = false
+# CFI (control-flow integrity) requires ThinLTO (`assert(!is_cfi || use_thin_lto)`), and the official
+# config turns is_cfi on. It's a release hardening, not needed for a qa test/deploy build — turn it
+# off so the LTO-off build configures. The tagged GOLD release (release.sh) keeps LTO+CFI.
+is_cfi = false
+# One heavy link at a time — extra OOM guard on a machine with no swap (final content_shell link is
+# still large even without LTO).
+concurrent_links = 1
+
+# Widevine L3 (Phase 7, best-effort). S0.3 confirmed the Chromium library-CDM code path is intact,
+# gated off by `enable_widevine` (default false). Turning it on compiles the support in but is NOT
+# sufficient to load a CDM: registration happens via ContentClient::AddContentDecryptionModules,
+# which neither content/shell nor cobalt/shell overrides — the CdmRegistry stays empty and Widevine
+# key-system requests are rejected regardless of what the launcher installs (m114.md "Widevine
+# registration gap"). P7 therefore needs a small patches/ entry registering the CDM from the profile
+# dir. The CDM binary itself is NEVER shipped by us — user-fetched (launcher CdmFetcher,
+# docs/legal.md); free YouTube is unaffected either way.
+#
+# `enable_library_cdms` is NOT needed here: it defaults to `toolkit_views && !is_castos`, which is
+# already true for this config (checked with `gn args out/deck --list`, 2026-07-09).
+#
+# The registration patch is `patches/0001-…-widevine-cdm-registration`. Verified 2026-07-09 that with
+# this arg set, `BUILDFLAG(ENABLE_WIDEVINE)` is 1 in the generated buildflags header and the patched
+# `shell_content_client.o` compiles with the override live.
+enable_widevine = true

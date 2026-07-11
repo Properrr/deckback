@@ -1,0 +1,4 @@
+# Extra GN args layered ON TOP OF Cobalt's `chromium_linux-x64x11` + `devel` config, adding
+# AddressSanitizer for workstation-side memory-bug repro. Not deployable to the Deck (perf/size).
+# NOT a standalone arg set — see the note in args/dev.gn.
+is_asan = true

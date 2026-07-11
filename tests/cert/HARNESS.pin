@@ -1,0 +1,33 @@
+# What `just cert` runs. One record per line: `<name> <url> <40-char sha> <subdir>`.
+#
+# `github.com/youtube/js_mse_eme` was archived read-only on 2026-04-19, so these pins are stable by
+# force rather than by discipline. Bump them the way `DEPS.pin` is bumped: a reviewed change that
+# re-runs the suite and updates `tests/cert/expectations/` in the same commit, because a baseline
+# recorded against a different harness is not a baseline.
+#
+# The public runners are gone (verified 2026-07-09): ytlr-cert.appspot.com and
+# yts.devicecertification.youtube serve a sunset stub, and the yt-dash-mse-test unit-test URLs 404.
+# The source and the media vectors are all that survive, which is why we self-host.
+#
+# THE HARNESS DOES NOT SHIP COMPLETE. `main.html` lists 86 script sources and 44 of them live under
+# `third_party/`: a Closure Library checkout and protobuf's JS runtime. Neither is a submodule, a
+# `.gitmodules`, or a fetch script — upstream simply expects you to already have them. Clone the repo,
+# open `main.html`, and you get a blank page and no `window.globalRunner`. That is exactly what the
+# first real run of `just cert` produced, and no amount of reading the source would have shown it.
+#
+# Upstream pins neither dependency, and "newest release before the harness's last commit" is the
+# wrong rule for Closure. `main.html` loads all 35 Closure files as plain `<script src>` tags with
+# `CLOSURE_NO_DEPS = true`, which only works while those files use `goog.provide`. Closure converted
+# `goog.array` and friends to `goog.module` in **v20200830**, and a `goog.module` file executed as a
+# plain script throws. The symptom is a page full of "goog.require could not find: goog.array" and no
+# `window.globalRunner` — it looks exactly like a broken engine. So Closure is pinned to
+# **v20200719**, the last `goog.provide` release, not to the last release before 2021-07-12.
+#
+# Every path `main.html` asks for is verified present in these trees after each sync
+# (`cert.py:missing_script_sources`), and `tests/harness/test_cert.py` checks the vendored checkout.
+#
+# Passing this suite is NOT YouTube certification and confers no status (docs/legal.md).
+
+harness   https://github.com/youtube/js_mse_eme        c1ef8579d4416e272cae4dc1e80e50bc9b8a2104  .
+closure   https://github.com/google/closure-library    fb4ff4371f9f8a62543af348397f8a97b5f4e4a9  third_party/closure-library/closure-library
+protobuf  https://github.com/protocolbuffers/protobuf  909a0f36a10075c4b4bc70fdee2c7e32dd612a72  third_party/protocolbuffers/protobuf

@@ -1,0 +1,6 @@
+# clangd config for the Cobalt-sized tree. The tiny launcher/ has its own .clangd
+# that keeps background indexing on.
+CompileFlags:
+  CompilationDatabase: out/dev
+Index:
+  Background: Skip   # flip to Build only on a >=64 GB machine for whole-tree xref

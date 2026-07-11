@@ -1,0 +1,212 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: properrr <properrr@gmail.com>
+Date: Fri, 10 Jul 2026 16:12:39 -0700
+Subject: [PATCH] Register a user-installed Widevine CDM in content_shell
+
+content_shell does not override ContentClient::AddContentDecryptionModules, so
+the CdmRegistry is empty and every com.widevine.alpha request is rejected no
+matter what enable_widevine was set to. This adds that missing override and
+nothing else.
+
+The CDM path arrives on the command line (--widevine-cdm-path). The binary is
+fetched by the user at first run and is never bundled or redistributed. With no
+switch, no CDM is registered and DRM content simply does not play; unencrypted
+YouTube is unaffected.
+
+The capability must be concrete at registration time. Upstream lazily
+initializes the software-secure capability from the CDM's manifest.json, and on
+Linux CdmRegistryImpl::LazyInitializeCapability() falls into the #else branch and
+hands back absl::nullopt -- the comment there reads "kSoftwareSecure should have
+been determined from the manifest". Register with an empty optional and the CDM
+loads, the registry accepts it, and requestMediaKeySystemAccess still rejects,
+with nothing in the log to say why. So the capability is spelled out here, and
+narrowly: AAC/Vorbis/Opus, H.264/VP8/VP9, cenc and cbcs, temporary sessions only.
+AV1 is omitted because this app steers YouTube away from it, and
+persistent-license is omitted because it is unverified -- claiming a session type
+we cannot honour turns a clean "unsupported" into a failure deep inside a licence
+exchange.
+
+The override is called from two places, and both are served by the same early
+return on a missing path: PreloadLibraryCdms() in the zygote before the sandbox
+closes, so the .so is mapped for later sandboxed CDM processes, and
+CdmRegistryImpl::Init() to populate the registry.
+
+An invalid --widevine-cdm-version is refused rather than registered. A CdmInfo
+carrying an invalid base::Version registers fine and fails somewhere further in,
+by which time the reason is gone.
+---
+ content/shell/BUILD.gn                       |   4 +
+ content/shell/common/shell_content_client.cc | 113 +++++++++++++++++++
+ content/shell/common/shell_content_client.h  |   6 +
+ 3 files changed, 123 insertions(+)
+
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index dbc05b9d13..864537710e 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -352,6 +352,10 @@ static_library("content_shell_lib") {
+     "//net",
+     "//net:net_resources",
+     "//ppapi/buildflags",
++    # deckback P7: ShellContentClient::AddContentDecryptionModules needs kWidevineKeySystem,
++    # kWidevineCdmType and the ENABLE_WIDEVINE buildflag. Header-only; the CDM itself is never
++    # bundled (bundle_widevine_cdm=false) and is fetched by the user at runtime.
++    "//third_party/widevine/cdm:headers",
+     "//services/device/public/cpp:test_support",
+     "//services/network/public/cpp",
+     "//services/test/echo:lib",
+diff --git a/content/shell/common/shell_content_client.cc b/content/shell/common/shell_content_client.cc
+index 2af9f0b1b5..3671d9c6d7 100644
+--- a/content/shell/common/shell_content_client.cc
++++ b/content/shell/common/shell_content_client.cc
+@@ -17,8 +17,68 @@
+ #include "ui/base/l10n/l10n_util.h"
+ #include "ui/base/resource/resource_bundle.h"
+ 
++#if BUILDFLAG(ENABLE_WIDEVINE)
++#include "base/files/file_path.h"
++#include "base/files/file_util.h"
++#include "base/logging.h"
++#include "base/version.h"
++#include "content/public/common/cdm_info.h"
++#include "media/base/audio_codecs.h"
++#include "media/base/content_decryption_module.h"
++#include "media/base/encryption_scheme.h"
++#include "media/base/video_codecs.h"
++#include "media/base/cdm_capability.h"
++#include "third_party/widevine/cdm/widevine_cdm_common.h"
++#endif
++
+ namespace content {
+ 
++#if BUILDFLAG(ENABLE_WIDEVINE)
++namespace {
++
++// Absolute path to `libwidevinecdm.so`. The launcher passes what CdmFetcher installed; we never
++// ship the CDM ourselves (see deckback docs/legal.md). Absent switch => no Widevine, which is the
++// correct and expected state for a build nobody has given a CDM to.
++const char kWidevineCdmPathSwitch[] = "widevine-cdm-path";
++
++// The CDM's own version, from Google's manifest.json. Used for per-CDM-type storage isolation; the
++// upstream code reads it out of that manifest, which we do not have. Wrong-but-valid is survivable
++// (it partitions CDM storage under a bogus name); absent-or-invalid is not, because CdmInfo requires
++// a valid base::Version.
++const char kWidevineCdmVersionSwitch[] = "widevine-cdm-version";
++const char kDefaultWidevineCdmVersion[] = "4.10.2891.0";
++
++// The capability MUST be concrete here. Upstream lazily initializes software-secure capability from
++// the CDM's manifest.json, and on Linux `CdmRegistryImpl::LazyInitializeCapability()` falls into the
++// `#else` branch and hands back `absl::nullopt` (content/browser/media/cdm_registry_impl.cc; the
++// comment there reads "kSoftwareSecure should have been determined from the manifest"). Register with
++// an empty optional and the CDM loads, the registry accepts it, and
++// `requestMediaKeySystemAccess('com.widevine.alpha')` still rejects — with nothing in the log to say
++// why. That silence is the whole reason this comment is here.
++//
++// These values are deliberately narrow: what a Widevine L3 CDM does on Linux x64, restricted to the
++// codecs this app actually plays. AV1 is omitted on purpose — we steer YouTube away from it.
++// `kTemporary` only: we have not verified persistent-license sessions, and claiming a session type
++// we cannot honour turns a clean "unsupported" into a failure deep inside a licence exchange.
++media::CdmCapability WidevineL3Capability() {
++  media::CdmCapability capability;
++  capability.audio_codecs = {media::AudioCodec::kAAC, media::AudioCodec::kVorbis,
++                             media::AudioCodec::kOpus};
++  capability.video_codecs = {
++      {media::VideoCodec::kH264, media::VideoCodecInfo()},
++      {media::VideoCodec::kVP8, media::VideoCodecInfo()},
++      {media::VideoCodec::kVP9,
++       media::VideoCodecInfo({media::VP9PROFILE_PROFILE0, media::VP9PROFILE_PROFILE2})},
++  };
++  capability.encryption_schemes = {media::EncryptionScheme::kCenc,
++                                   media::EncryptionScheme::kCbcs};
++  capability.session_types = {media::CdmSessionType::kTemporary};
++  return capability;
++}
++
++}  // namespace
++#endif  // BUILDFLAG(ENABLE_WIDEVINE)
++
+ ShellContentClient::ShellContentClient() {}
+ 
+ ShellContentClient::~ShellContentClient() {}
+@@ -84,4 +144,57 @@ void ShellContentClient::AddAdditionalSchemes(Schemes* schemes) {
+   }
+ }
+ 
++#if BUILDFLAG(ENABLE_WIDEVINE)
++// Register the user-installed Widevine CDM. content_shell overrides nothing here upstream, so the
++// CdmRegistry stays empty and every `com.widevine.alpha` request is rejected no matter what
++// `enable_widevine` was set to. This is that missing override, and nothing more.
++//
++// Called twice, from two very different places:
++//   * content/app/content_main_runner_impl.cc:PreloadLibraryCdms(), in the zygote BEFORE the sandbox
++//     closes, so the .so is already mapped when a sandboxed CDM process needs it;
++//   * content/browser/media/cdm_registry_impl.cc:Init(), to populate the registry.
++// Both call the same method, so returning early on a missing path is safe in both.
++void ShellContentClient::AddContentDecryptionModules(
++    std::vector<CdmInfo>* cdms,
++    std::vector<media::CdmHostFilePath>* cdm_host_file_paths) {
++  // `cdm_host_file_paths` is for CDM host verification, which is a Chrome-branded feature
++  // (enable_cdm_host_verification=false here). Nothing to add.
++  if (!cdms)
++    return;
++
++  const base::CommandLine& cmd = *base::CommandLine::ForCurrentProcess();
++  const base::FilePath cdm_path = cmd.GetSwitchValuePath(kWidevineCdmPathSwitch);
++  if (cdm_path.empty())
++    return;  // No CDM offered. Free YouTube is unaffected; DRM content will not play.
++
++  if (!cdm_path.IsAbsolute() || cdm_path.ReferencesParent()) {
++    LOG(ERROR) << "--" << kWidevineCdmPathSwitch
++               << " must be an absolute path with no parent references: " << cdm_path;
++    return;
++  }
++  if (!base::PathExists(cdm_path)) {
++    LOG(ERROR) << "Widevine CDM not found at " << cdm_path
++               << "; com.widevine.alpha will be unavailable.";
++    return;
++  }
++
++  std::string version_str = cmd.GetSwitchValueASCII(kWidevineCdmVersionSwitch);
++  if (version_str.empty())
++    version_str = kDefaultWidevineCdmVersion;
++  base::Version version(version_str);
++  if (!version.IsValid()) {
++    // A CdmInfo with an invalid version is worse than no CdmInfo: it registers, and then fails
++    // somewhere further in. Refuse it here, where the reason is still visible.
++    LOG(ERROR) << "Invalid --" << kWidevineCdmVersionSwitch << ": " << version_str;
++    return;
++  }
++
++  LOG(INFO) << "Registering Widevine CDM " << version_str << " from " << cdm_path;
++  cdms->emplace_back(kWidevineKeySystem, CdmInfo::Robustness::kSoftwareSecure,
++                     WidevineL3Capability(),
++                     /*supports_sub_key_systems=*/false, kWidevineCdmDisplayName,
++                     kWidevineCdmType, version, cdm_path);
++}
++#endif  // BUILDFLAG(ENABLE_WIDEVINE)
++
+ }  // namespace content
+diff --git a/content/shell/common/shell_content_client.h b/content/shell/common/shell_content_client.h
+index 954c922b4c..d7de011726 100644
+--- a/content/shell/common/shell_content_client.h
++++ b/content/shell/common/shell_content_client.h
+@@ -11,6 +11,7 @@
+ 
+ #include "content/public/common/content_client.h"
+ #include "content/shell/common/shell_origin_trial_policy.h"
++#include "third_party/widevine/cdm/buildflags.h"
+ 
+ namespace content {
+ 
+@@ -28,6 +29,11 @@ class ShellContentClient : public ContentClient {
+   gfx::Image& GetNativeImageNamed(int resource_id) override;
+   blink::OriginTrialPolicy* GetOriginTrialPolicy() override;
+   void AddAdditionalSchemes(Schemes* schemes) override;
++#if BUILDFLAG(ENABLE_WIDEVINE)
++  void AddContentDecryptionModules(
++      std::vector<CdmInfo>* cdms,
++      std::vector<media::CdmHostFilePath>* cdm_host_file_paths) override;
++#endif
+ 
+  private:
+   ShellOriginTrialPolicy origin_trial_policy_;

@@ -1,0 +1,27 @@
+# SHA-256 of every media/cert vector `just cert` has served, one per line.
+# Recorded by `scripts/cert.py --freeze-vectors`. A mismatch on a later run exits 3
+# (the upstream bucket changed), never 2 (our decoder broke).
+#
+# We fetch and verify these; we never redistribute them. Same posture as CdmFetcher.
+
+4d0ae12fcd30b13fb36102e5a2ef79a5afc8090fcf5e75a70e58d5782a347c73  media/big-buck-bunny-av1-144p-30fps.mp4
+47521db4b45e6b2734a81dbf139b54073caa053f048ce702267110aa6502c162  media/big-buck-bunny-h264-720p-30fps.mp4
+f057dc4524a2cbcfb9a48278c7cfbdc1ac1e76a5ca1a5d6211b30cf7592744cf  media/big-buck-bunny-h264-720p-60fps.mp4
+fc4e9c2d7254c81a33e7a9076cd0bbf4d714e19ff037a8ec555f52aab2bbda12  media/big-buck-bunny-vp9-360p-30fps.webm
+1e7015c559657b067b7ca813dbabac2edcfe2ffd4bd7302394ed370aee856a53  media/big-buck-bunny-vp9-720p-30fps.webm
+ac247afacfdde89dabe8a025901991444aa6c3adf47a51b4f649dfcac95434ee  media/big-buck-bunny-vp9-720p-60fps.webm
+cbf4aa1c8f29df85a7d342353fbaeba951bf62306c428451cdd6877c891a87b2  media/car-20120827-85.mp4
+fe159ddf404f218811d2fc8159ade9bec21cba2df7946e02e7116c54739779e9  media/car-20120827-86.mp4
+3593b0872d669021c938d2cf54cd154bc682ceb76c9183390b568ca5db88505e  media/car-20120827-8b.mp4
+b3404dce28d15b8f2353e50572146a961a9b68a3d0d100d78e5bf83918851f3d  media/car-20120827-8c.mp4
+61884378696b9dd9f6db499e5e380d804a7558b2ff33defd9a9b6dc858de4b00  media/car-20120827-8d.mp4
+b5a293032a6863932d9092e16c6db82af1d6717cdf022544f7a833efb48ba2a4  media/car-audio-1MB-trunc.mp4
+ae8e2737f326d0e22fc53f3941ffc54366566026ce5cec2a8cbdf5029f7ff540  media/car_opus_low.webm
+a590f0b732b5cd1384ef9faf9e03c27a1c3a4b1f1f61049d8a534f3f0dcbee20  media/feelings_vp9-20130806-242.webm
+c5c3087ad6c4acddd9e053bad3b6a66d0c4e5a561d5ef65fba229197e2b9a715  media/feelings_vp9-20130806-247.webm
+fecf44cfa86cde6f5c36a421a8d90a91a7e8a99d61b2a93f119c13f942253093  media/nq-frames23-tfdt24.mp4
+b6e5867b1a2f11fb0cfc9c02806eee53412d0f5e4eddf8902650c918e9308d9e  media/nq-frames24-tfdt23.mp4
+8535131246fd109cf3daf60021a13ec851804b5f64913b872fef32ca38641018  media/spotlight-tr-heaac-explicit.mp4
+968b11d3aad067a47e8b4eaf5ab90b07ae0a7c2093876365de9ee44a6ac5070d  media/spotlight-tr-heaac-implicit.mp4
+6a03d629820db8032bd6e3213eb37d0839206fc6f9c3c66f91ffec43a9ad660d  media/test_stream_H264-HE-AAC.mp4
+5ed46f3b369c5be875746fe1c34be6d4b3e81b4083ff97f8a6792c0c664a5ee6  media/vp9-video-1mb.webm

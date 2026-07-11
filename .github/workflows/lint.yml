@@ -1,0 +1,55 @@
+# Free-runner-safe checks only. Chromium-scale builds run on the self-hosted runner (doc §14.3).
+name: lint
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  shell:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh tests/harness/*.sh
+      # L0 tests for the harness's own logic (power-gate adjudication, exit-code taxonomy). These
+      # need no Deck and no Chromium tree, so they belong on the free runner next to shellcheck.
+      - name: harness tests
+        run: ./tests/harness/run.sh
+
+  launcher:
+    # The launcher builds anywhere — no Chromium checkout needed (doc §14.3).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install toolchain
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format
+      - name: clang-format check
+        run: |
+          find launcher/src launcher/tests \( -name '*.cpp' -o -name '*.hpp' \) \
+            | xargs clang-format --style=file --dry-run --Werror
+      - name: build + test (gcc)
+        run: |
+          cmake -S launcher -B launcher/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake --build launcher/build
+          ctest --test-dir launcher/build --output-on-failure
+      - name: build (clang)
+        run: |
+          CXX=clang++ cmake -S launcher -B launcher/build-clang -G Ninja
+          cmake --build launcher/build-clang
+
+  gn-format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: gn args sanity
+        run: |
+          # args/*.gn are EXTRAS layered on Cobalt's chromium_linux-x64x11 config (gen.sh), not
+          # standalone arg sets. Codec overrides (proprietary_codecs/ffmpeg_branding) legitimately
+          # live in args/common.gn. Guard only against re-introducing platform/build_type base args,
+          # which come from gn.py -p/-c and must not be hand-set here.
+          for f in args/*.gn; do
+            if grep -qE '^\s*(target_os|target_cpu|is_debug|is_official_build)\b' "$f"; then
+              echo "$f sets a platform/build_type base arg; args/*.gn must contain only overrides"; exit 1
+            fi
+          done

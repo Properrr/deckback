@@ -1,0 +1,59 @@
+# Cobalt/Chromium checkout — gclient-managed, pinned via DEPS.pin (never committed)
+/cobalt/
+/.cipd/
+/.gclient
+/.gclient_entries
+
+# Build outputs
+/out/
+/launcher/build/
+compile_commands.json
+
+# Local environment / secrets
+/.env
+/.steamdeck_auth
+*.local
+
+# Widevine CDM — NEVER redistributed or committed (docs/legal.md R5). The binary is
+# user-fetched into ~/.var/app/<id> at runtime; these rules foreclose any accidental
+# commit of the .so should one ever land inside the tree.
+libwidevinecdm.so
+WidevineCdm/
+manifest.json.widevine
+*.so
+
+# Flatpak build artifacts
+/.flatpak-builder/
+/repo/
+/build-dir/
+/flatpak/.flatpak-builder/
+/flatpak/repo/
+/flatpak/build-dir/
+/flatpak/cobalt-prebuilt/
+/.flatpak-cache/
+*.flatpak
+*.flatpakref
+# Staged copies of config/ pulled into the assets module by scripts/flatpak.sh
+/flatpak/assets/app.json
+/flatpak/assets/steam_input.vdf
+
+# Editor / OS cruft
+.cache/
+.DS_Store
+*.swp
+tags
+
+# Deployed symbol copies pulled back from the Deck
+/out/**/symbols/
+
+# Python bytecode (scripts/cdp.py compile checks)
+__pycache__/
+*.pyc
+/.sccache/
+
+# L2 failure artifacts (screenshots, journal, app logs)
+artifacts/
+
+# P4/P6 measurement outputs (just power / just soak write these to the repo root)
+power-*.csv
+soak-*.csv

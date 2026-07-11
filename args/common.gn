@@ -1,0 +1,22 @@
+# GN args layered ON TOP OF Cobalt's `chromium_linux-x64x11` config for EVERY preset (see gen.sh).
+# Only deckback-wide OVERRIDES belong here; per-preset extras live in args/{dev,deck,asan}.gn.
+#
+# Codec steering (doc hard constraint): the chromium_linux-x64x11 config ships proprietary_codecs=false
+# + ffmpeg_branding="Chromium", which makes YouTube's H.264/AAC fallback formats fail with
+# "DEMUXER_ERROR_NO_SUPPORTED_STREAMS". YT Leanback needs H.264/AAC, so force the Chrome-branded ffmpeg
+# + proprietary codecs on here. (AV1 -> VP9/H.264 steering is done at runtime by the launcher over CDP
+# — see launcher/src/navigator.cpp, gated by quality.steer_av1_unsupported — NOT via a GN arg / patch.)
+proprietary_codecs = true
+ffmpeg_branding = "Chrome"
+
+# Compiler cache (sccache): the image ships sccache on PATH + a named /cache/sccache volume
+# (SCCACHE_DIR), shared between local and CI. cc_wrapper routes every compile through it, so
+# post-patch/incremental rebuilds go from ~1h cold to minutes. Takes effect on the next `just gen`
+# (does not retro-apply to an in-flight build). enable_precompiled_headers=false is REQUIRED for
+# real hit rates — PCH bakes a per-build blob into every TU and defeats sccache's hashing; turning
+# it off slows only the very first cold build and makes all subsequent TUs cacheable.
+# NOTE: CPU micro-arch tuning (-march=znver2 for the Deck's Zen 2 APU) is deliberately NOT set here —
+# decode is VA-API/GPU-offloaded so the power budget is decode-bound, not codegen-bound; revisit only
+# if the on-Deck power gate comes up short (see m114 open issues).
+cc_wrapper = "sccache"
+enable_precompiled_headers = false

@@ -1,0 +1,113 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Neutral synthetic screenshot for the AppStream catalogue. Deliberately shows NO third-party
+     (YouTube/Leanback) UI or trademark: it depicts Deckback's own shell chrome around generic,
+     abstract media tiles. 1280x800 = Steam Deck native panel resolution. Source of truth; render
+     to screenshots/01-home.png via render-assets.sh. -->
+<svg width="1280" height="800" viewBox="0 0 1280 800" xmlns="http://www.w3.org/2000/svg" font-family="'DejaVu Sans','Noto Sans',sans-serif">
+  <defs>
+    <linearGradient id="room" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#1b1e25"/>
+      <stop offset="1" stop-color="#0e1013"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#4fd1c5"/>
+      <stop offset="1" stop-color="#38b2ac"/>
+    </linearGradient>
+    <linearGradient id="hero" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2b3350"/>
+      <stop offset="1" stop-color="#16202e"/>
+    </linearGradient>
+    <linearGradient id="tileA" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#37414f"/><stop offset="1" stop-color="#232a34"/>
+    </linearGradient>
+    <linearGradient id="tileB" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#3c3550"/><stop offset="1" stop-color="#241f31"/>
+    </linearGradient>
+    <linearGradient id="tileC" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f4a45"/><stop offset="1" stop-color="#1a2b28"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="1280" height="800" fill="url(#room)"/>
+
+  <!-- top bar -->
+  <g>
+    <!-- mini logo -->
+    <rect x="48" y="40" width="34" height="34" rx="8" fill="#23262e" stroke="#3a3f4b"/>
+    <rect x="55" y="48" width="20" height="14" rx="3" fill="#0e1013" stroke="url(#accent)" stroke-width="1.5"/>
+    <path d="M62 52 L69 55.5 L62 59 Z" fill="url(#accent)"/>
+    <text x="94" y="65" font-size="26" font-weight="700" fill="#eef1f5" letter-spacing="0.5">Deckback</text>
+
+    <!-- search pill -->
+    <rect x="470" y="40" width="340" height="36" rx="18" fill="#191c22" stroke="#31404a"/>
+    <circle cx="494" cy="58" r="7" fill="none" stroke="#6b7787" stroke-width="2"/>
+    <line x1="499" y1="63" x2="505" y2="69" stroke="#6b7787" stroke-width="2"/>
+    <text x="516" y="63" font-size="16" fill="#7b8798">Search</text>
+
+    <!-- clock -->
+    <text x="1232" y="63" font-size="18" fill="#aeb7c4" text-anchor="end">9:41</text>
+    <rect x="1150" y="46" width="24" height="24" rx="4" fill="none" stroke="#4a505e" stroke-width="1.5"/>
+    <rect x="1155" y="51" width="14" height="9" rx="1.5" fill="url(#accent)"/>
+  </g>
+
+  <!-- hero band -->
+  <g>
+    <rect x="48" y="104" width="1184" height="300" rx="18" fill="url(#hero)" stroke="#2c3a52"/>
+    <rect x="48" y="104" width="6" height="300" rx="3" fill="url(#accent)"/>
+    <text x="96" y="176" font-size="20" fill="#7fd8cf" letter-spacing="3">FEATURED</text>
+    <text x="94" y="236" font-size="52" font-weight="800" fill="#f4f7fa">Living-room video,</text>
+    <text x="94" y="296" font-size="52" font-weight="800" fill="#f4f7fa">on your Steam Deck</text>
+    <rect x="94" y="330" width="196" height="46" rx="23" fill="url(#accent)"/>
+    <path d="M124 344 L140 353 L124 362 Z" fill="#0e1013"/>
+    <text x="150" y="359" font-size="19" font-weight="700" fill="#0e1013">Play</text>
+    <rect x="306" y="330" width="150" height="46" rx="23" fill="none" stroke="#4a5568"/>
+    <text x="381" y="359" font-size="18" fill="#c7cfda" text-anchor="middle">More info</text>
+
+    <!-- abstract preview thumbnail in hero -->
+    <rect x="812" y="140" width="376" height="228" rx="12" fill="#0c0e11" stroke="#2c3a52"/>
+    <circle cx="1000" cy="254" r="40" fill="none" stroke="url(#accent)" stroke-width="3" opacity="0.85"/>
+    <path d="M990 236 L1020 254 L990 272 Z" fill="url(#accent)"/>
+  </g>
+
+  <!-- row label -->
+  <text x="48" y="466" font-size="22" font-weight="700" fill="#dfe4ea">Continue watching</text>
+
+  <!-- media card row -->
+  <g>
+    <!-- card 1 (focused) -->
+    <rect x="44" y="486" width="272" height="180" rx="12" fill="url(#tileA)" stroke="url(#accent)" stroke-width="3"/>
+    <rect x="60" y="636" width="150" height="10" rx="5" fill="#59636f"/>
+    <rect x="60" y="652" width="90" height="8" rx="4" fill="#3f4753"/>
+    <path d="M158 556 L188 574 L158 592 Z" fill="#8b95a3" opacity="0.7"/>
+
+    <rect x="336" y="490" width="272" height="172" rx="12" fill="url(#tileB)" stroke="#333b47"/>
+    <rect x="352" y="632" width="140" height="9" rx="4.5" fill="#4a5361"/>
+    <rect x="352" y="647" width="80" height="7" rx="3.5" fill="#363d49"/>
+
+    <rect x="628" y="490" width="272" height="172" rx="12" fill="url(#tileC)" stroke="#333b47"/>
+    <rect x="644" y="632" width="150" height="9" rx="4.5" fill="#4a5361"/>
+    <rect x="644" y="647" width="70" height="7" rx="3.5" fill="#363d49"/>
+
+    <rect x="920" y="490" width="272" height="172" rx="12" fill="url(#tileA)" stroke="#333b47"/>
+    <rect x="936" y="632" width="130" height="9" rx="4.5" fill="#4a5361"/>
+    <rect x="936" y="647" width="95" height="7" rx="3.5" fill="#363d49"/>
+  </g>
+
+  <!-- controller hint footer -->
+  <g opacity="0.92">
+    <rect x="0" y="726" width="1280" height="74" fill="#0b0d10"/>
+    <line x1="0" y1="726" x2="1280" y2="726" stroke="#20252d"/>
+    <g transform="translate(48,752)">
+      <circle cx="0" cy="10" r="13" fill="none" stroke="#4fd1c5" stroke-width="2"/>
+      <text x="-0.5" y="15" font-size="14" font-weight="700" fill="#4fd1c5" text-anchor="middle">A</text>
+      <text x="24" y="15" font-size="16" fill="#c7cfda">Select</text>
+      <circle cx="150" cy="10" r="13" fill="none" stroke="#f0857d" stroke-width="2"/>
+      <text x="149.5" y="15" font-size="14" font-weight="700" fill="#f0857d" text-anchor="middle">B</text>
+      <text x="174" y="15" font-size="16" fill="#c7cfda">Back</text>
+      <circle cx="300" cy="10" r="13" fill="none" stroke="#e8c15a" stroke-width="2"/>
+      <text x="299.5" y="15" font-size="14" font-weight="700" fill="#e8c15a" text-anchor="middle">Y</text>
+      <text x="324" y="15" font-size="16" fill="#c7cfda">Search</text>
+    </g>
+    <text x="1232" y="767" font-size="15" fill="#5b6472" text-anchor="end">Game Mode &#183; controller-native</text>
+  </g>
+</svg>

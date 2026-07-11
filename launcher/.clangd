@@ -1,0 +1,5 @@
+# The launcher is tiny — keep full background indexing on (unlike the Cobalt tree's .clangd).
+CompileFlags:
+  CompilationDatabase: build
+Index:
+  Background: Build

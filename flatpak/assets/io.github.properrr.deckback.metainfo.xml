@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.properrr.deckback</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Deckback</name>
+  <summary>Living-room video client for Steam Deck, Game Mode native</summary>
+  <description>
+    <p>
+      Deckback is an unofficial native TV-interface video client for the Steam Deck. It runs the
+      living-room ("Leanback") web app in a Chromium-based Cobalt shell tuned for Game Mode: controller
+      input, hardware video decode, and sleep/resume are handled at the embedder layer.
+    </p>
+    <p>Built for the couch, not the desktop:</p>
+    <ul>
+      <li>Controller-native — every button is mapped at the launcher, no touchscreen required</li>
+      <li>Hardware VP9 decode for cool, battery-friendly 720p60 playback</li>
+      <li>Suspend and resume with the power button; audio and video restored on wake</li>
+      <li>Launches straight into Game Mode with a persistent sign-in</li>
+    </ul>
+    <p>
+      This is an independent project and is not affiliated with, endorsed by, or sponsored by Google
+      or YouTube.
+    </p>
+  </description>
+  <launchable type="desktop-id">io.github.properrr.deckback.desktop</launchable>
+  <developer id="io.github.properrr">
+    <name>properrr</name>
+  </developer>
+  <url type="homepage">https://github.com/properrr/deckback</url>
+  <url type="bugtracker">https://github.com/properrr/deckback/issues</url>
+  <url type="help">https://github.com/properrr/deckback/blob/main/docs/SUPPORT.md</url>
+  <url type="vcs-browser">https://github.com/properrr/deckback</url>
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+  </categories>
+  <keywords>
+    <keyword>tv</keyword>
+    <keyword>video</keyword>
+    <keyword>leanback</keyword>
+    <keyword>couch</keyword>
+    <keyword>living room</keyword>
+    <keyword>steam deck</keyword>
+    <keyword>game mode</keyword>
+  </keywords>
+  <branding>
+    <color type="primary" scheme_preference="light">#38b2ac</color>
+    <color type="primary" scheme_preference="dark">#15171c</color>
+  </branding>
+  <screenshots>
+    <screenshot type="default">
+      <caption>The living-room home screen, driven entirely by the controller</caption>
+      <image>https://raw.githubusercontent.com/properrr/deckback/main/flatpak/assets/screenshots/01-home.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>On-screen controller map — every button remapped at the launcher</caption>
+      <image>https://raw.githubusercontent.com/properrr/deckback/main/flatpak/assets/screenshots/02-controls.png</image>
+    </screenshot>
+    <screenshot>
+      <caption>Built for Game Mode: hardware decode, sleep and resume, controller input</caption>
+      <image>https://raw.githubusercontent.com/properrr/deckback/main/flatpak/assets/screenshots/03-features.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="0.0.1" date="2026-07-08">
+      <description><p>First Game Mode packaging: launches to the interactive TV app on the Deck.</p></description>
+    </release>
+  </releases>
+</component>

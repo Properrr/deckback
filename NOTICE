@@ -1,0 +1,15 @@
+Deckback
+Copyright 2026 The Deckback Authors
+
+This product is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+Deckback is an independent, unofficial project. It is not affiliated with,
+authorized, endorsed by, or sponsored by Google LLC or YouTube. "YouTube",
+"Steam Deck", "SteamOS", and other names are trademarks of their respective
+owners and are used only nominatively to describe interoperability. See
+docs/legal.md and the Disclaimer in README.md.
+
+This repository does not bundle or redistribute the Chromium/Cobalt engine
+(fetched at build time via gclient), Google's Widevine CDM (never redistributed;
+optionally fetched by the user at their own choice), or any third-party media
+test vectors. Those components are governed by their own licenses.

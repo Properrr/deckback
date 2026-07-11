@@ -1,0 +1,5 @@
+# scripts/*.sh source lib.sh (and lib.sh sources .env / .steamdeck_auth) at runtime; shellcheck
+# can't follow those statically, and lib.sh defines shared vars consumed only by sourcing scripts.
+# (Severity is gated to warning+ via the `-S warning` flag in .github/workflows/lint.yml — the
+# .shellcheckrc format has no `severity` key.)
+disable=SC2034

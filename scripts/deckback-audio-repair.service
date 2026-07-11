@@ -1,0 +1,12 @@
+[Unit]
+Description=Keep Deckback audio sink unmuted
+After=pipewire-pulse.service
+Wants=pipewire-pulse.service
+
+[Service]
+ExecStart=%h/.local/bin/deckback-audio-repair
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

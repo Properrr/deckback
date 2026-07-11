@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Steam LANDSCAPE capsule / header. 920x430 (2x of 460x215 for crispness). Rendered to
+     steam/header.png and installed as grid/<appid>.png. -->
+<svg width="920" height="430" viewBox="0 0 920 430" xmlns="http://www.w3.org/2000/svg" font-family="'DejaVu Sans','Noto Sans',sans-serif">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#232734"/><stop offset="1" stop-color="#0d0f14"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5fe0d4"/><stop offset="1" stop-color="#38b2ac"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.28" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#2f6d68" stop-opacity="0.5"/><stop offset="1" stop-color="#2f6d68" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="920" height="430" fill="url(#bg)"/>
+  <rect width="920" height="430" fill="url(#glow)"/>
+
+  <!-- logo mark -->
+  <g transform="translate(170,215)">
+    <rect x="-104" y="-104" width="208" height="208" rx="46" fill="#23262e" stroke="#3a3f4b" stroke-width="2"/>
+    <rect x="-66" y="-54" width="132" height="86" rx="13" fill="#0e1013"/>
+    <rect x="-65.5" y="-53.5" width="131" height="85" rx="12.5" fill="none" stroke="url(#accent)" stroke-width="3.2" opacity="0.92"/>
+    <path d="M-33 -28 L30 -11 L-33 6 Z" fill="url(#accent)"/>
+    <rect x="-7" y="32" width="14" height="16" fill="#3a3f4b"/>
+    <rect x="-30" y="48" width="60" height="11" rx="5.5" fill="#4a505e"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="330" y="228" font-size="72" font-weight="800" fill="#f4f7fa" letter-spacing="1">Deckback</text>
+  <rect x="332" y="256" width="120" height="5" rx="2.5" fill="url(#accent)"/>
+  <text x="334" y="304" font-size="26" fill="#9aa3b1">Living-room video</text>
+</svg>

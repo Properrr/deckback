@@ -1,0 +1,146 @@
+"controller_mappings"
+{
+	"version"		"3"
+	"revision"		"2"
+	"title"			"Deckback"
+	"description"		"Default Deckback layout. Standard controls pass through to the gamepad so Deckback's in-app input layer (launcher/) reads them via evdev and injects Leanback keys over CDP. Rear grips duplicate face buttons for reachability; the right trackpad is an optional pointer; gyro is off. Non-Steam apps cannot ship official layouts — apply via import or the community layout. Import + tuning instructions: docs/SUPPORT.md. NOTE: the byte-authoritative version should be exported from Steam's controller configurator on-device (Phase 3 gate); this file is the reviewed starting template."
+	"creator"		"deckback"
+	"controller_type"		"controller_neptune"
+	"Timestamp"		"0"
+
+	"group"
+	{
+		"id"		"0"
+		"mode"		"four_buttons"
+		"name"		"Face Buttons"
+		"inputs"
+		{
+			"button_a"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button A" } } } }
+			"button_b"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button B" } } } }
+			"button_x"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button X" } } } }
+			"button_y"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button Y" } } } }
+		}
+	}
+	"group"
+	{
+		"id"		"1"
+		"mode"		"dpad"
+		"name"		"D-Pad"
+		"inputs"
+		{
+			"dpad_north"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button DPAD_UP" } } } }
+			"dpad_south"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button DPAD_DOWN" } } } }
+			"dpad_west"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button DPAD_LEFT" } } } }
+			"dpad_east"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button DPAD_RIGHT" } } } }
+		}
+	}
+	"group"
+	{
+		"id"		"2"
+		"mode"		"joystick_move"
+		"name"		"Left Stick"
+		"inputs"
+		{
+			"click"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button JOYSTICK_LEFT" } } } }
+		}
+	}
+	"group"
+	{
+		"id"		"3"
+		"mode"		"joystick_move"
+		"name"		"Right Stick"
+		"inputs"
+		{
+			"click"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button JOYSTICK_RIGHT" } } } }
+		}
+	}
+	"group"
+	{
+		"id"		"4"
+		"mode"		"trigger"
+		"name"		"Left Trigger"
+		"inputs"
+		{
+			"click"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button TRIGGER_LEFT" } } } }
+		}
+		"settings"		{ "output_trigger" "1" }
+	}
+	"group"
+	{
+		"id"		"5"
+		"mode"		"trigger"
+		"name"		"Right Trigger"
+		"inputs"
+		{
+			"click"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button TRIGGER_RIGHT" } } } }
+		}
+		"settings"		{ "output_trigger" "2" }
+	}
+	"group"
+	{
+		"id"		"6"
+		"mode"		"switches"
+		"name"		"Buttons & Grips"
+		"inputs"
+		{
+			"button_menu"			{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button START" } } } }
+			"button_back_left"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button SELECT" } } } }
+			"left_bumper"			{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button SHOULDER_LEFT" } } } }
+			"right_bumper"			{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button SHOULDER_RIGHT" } } } }
+			"button_capture"		{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button SELECT" } } } }
+			"button_back_left_upper"	{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button X" } } } }
+			"button_back_right_upper"	{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button Y" } } } }
+			"button_back_left_lower"	{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button A" } } } }
+			"button_back_right_lower"	{ "activators" { "Full_Press" { "bindings" { "binding" "xinput_button B" } } } }
+		}
+	}
+	"group"
+	{
+		"id"		"7"
+		"mode"		"absolute_mouse"
+		"name"		"Right Trackpad (optional pointer)"
+		"inputs"
+		{
+			"click"		{ "activators" { "Full_Press" { "bindings" { "binding" "mouse_button LEFT" } } } }
+		}
+		"settings"		{ "requires_click" "1" }
+	}
+	"group"
+	{
+		"id"		"8"
+		"mode"		"scrollwheel"
+		"name"		"Left Trackpad (unused)"
+	}
+	"group"
+	{
+		"id"		"9"
+		"mode"		"joystick_mouse"
+		"name"		"Gyro (off by default)"
+		"settings"		{ "gyro_enable_button" "0" }
+	}
+
+	"preset"
+	{
+		"id"		"0"
+		"name"		"Default"
+		"group_source_bindings"
+		{
+			"0"		"button_diamond active"
+			"1"		"dpad active"
+			"2"		"joystick active"
+			"3"		"right_joystick active"
+			"4"		"left_trigger active"
+			"5"		"right_trigger active"
+			"6"		"switch active"
+			"7"		"right_trackpad inactive"
+			"8"		"left_trackpad inactive"
+			"9"		"gyro inactive"
+		}
+	}
+
+	"settings"
+	{
+		"left_trackpad_mode"		"1"
+		"right_trackpad_mode"		"0"
+	}
+}

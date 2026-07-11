@@ -1,0 +1,5 @@
+# Out-of-tree code (launcher/, tools). Google base at 100 cols — matches .clangd and the launcher's
+# existing style. In-tree Cobalt code is formatted with the tree's own buildtools clang-format
+# instead (doc §13.1), so this file only governs the standalone C++.
+BasedOnStyle: Google
+ColumnLimit: 100
