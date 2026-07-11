@@ -18,8 +18,12 @@ file_ver="$(tr -d '[:space:]' < VERSION 2>/dev/null)"
 
 info "Release build (gold + ThinLTO) ..."
 in_container bash -c "cd $CTR_TREE && python3 cobalt/build/gn.py --no-rbe -p $COBALT_PLATFORM -c gold out/release"
-# Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO for the tagged build.
-{ cat args/common.gn args/deck.gn 2>/dev/null | grep -vE '^\s*#|^\s*$'; echo 'use_thin_lto = true'; } \
+# Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO for the tagged build. Strip
+# concurrent_links (ThinLTO manages its own link concurrency and GN asserts against an explicit
+# value: "can't explicitly set concurrent_links with thinlto") and deck.gn's use_thin_lto=false,
+# which the appended `use_thin_lto = true` below replaces.
+{ cat args/common.gn args/deck.gn 2>/dev/null \
+    | grep -vE '^\s*#|^\s*$|^\s*concurrent_links\b|^\s*use_thin_lto\b'; echo 'use_thin_lto = true'; } \
   >> "$COBALT_TREE/out/release/args.gn"
 in_container bash -c "cd $CTR_TREE && gn gen out/release && autoninja -C out/release $COBALT_TARGET"
 

@@ -26,6 +26,12 @@ build preset="dev":
 launcher *args:
     ./scripts/launcher.sh "$@"
 
+# Enable the repo's git hooks (pre-push mirrors CI lint: clang-format-18 + shellcheck + gn-args).
+# Run once per clone. Bypass a single push with `git push --no-verify`.
+hooks:
+    git config core.hooksPath .githooks
+    @echo "git hooks enabled — .githooks/pre-push will lint before every push."
+
 # L0 tests for the harness itself (shell/awk logic + the tests/deck pure helpers).
 # No Deck, no container, no Chromium tree. CI runs this on every push.
 test-harness:

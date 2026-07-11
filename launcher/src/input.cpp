@@ -70,9 +70,10 @@ constexpr ActionAlias kActionAliases[] = {
 // Deck control name -> evdev EV_KEY code. Use the LABELLED codes BTN_X/BTN_Y, not the positional
 // BTN_NORTH/BTN_WEST: on the Deck's Steam Input virtual xpad the face buttons report by their label
 // (physical X -> BTN_X = 0x133, physical Y -> BTN_Y = 0x134), and in <linux/input-event-codes.h>
-// BTN_NORTH *is* BTN_X (0x133) while BTN_WEST *is* BTN_Y (0x134). The old {"x",BTN_WEST},{"y",BTN_NORTH}
-// therefore SWAPPED them — physical Y hit the "x" action (play/pause), voice bound to physical X.
-// Confirmed on-Deck 2026-07-10: log showed `btn 308 -> MediaPlayPause` while the user pressed Y.
+// BTN_NORTH *is* BTN_X (0x133) while BTN_WEST *is* BTN_Y (0x134). The old
+// {"x",BTN_WEST},{"y",BTN_NORTH} therefore SWAPPED them — physical Y hit the "x" action
+// (play/pause), voice bound to physical X. Confirmed on-Deck 2026-07-10: log showed `btn 308 ->
+// MediaPlayPause` while the user pressed Y.
 struct ControlCode {
   std::string_view name;
   int code;

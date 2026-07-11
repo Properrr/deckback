@@ -145,11 +145,11 @@ class SdBusPlatform final : public Platform {
   //
   // We deliberately do NOT hold a "sleep" block. Preventing Steam Game Mode's auto-suspend is the
   // idle-nudge helper's job: it resets gamescope's input-idle timer with a *real* synthetic input,
-  // which also keeps the screen on AND leaves a deliberate power-button sleep working. A launcher-side
-  // "sleep" block only ever blocked suspend indiscriminately — including the power button mid-playback
-  // — for no benefit the helper doesn't cover better. (History: a sleep-block shipped briefly on
-  // 2026-07-11, then was retired once the on-Deck test showed gamescope ignores sandbox-emulated input
-  // for idle, forcing the host helper anyway — see docs/SUPPORT.md.)
+  // which also keeps the screen on AND leaves a deliberate power-button sleep working. A
+  // launcher-side "sleep" block only ever blocked suspend indiscriminately — including the power
+  // button mid-playback — for no benefit the helper doesn't cover better. (History: a sleep-block
+  // shipped briefly on 2026-07-11, then was retired once the on-Deck test showed gamescope ignores
+  // sandbox-emulated input for idle, forcing the host helper anyway — see docs/SUPPORT.md.)
   void reconcile_idle() {
     const bool want = want_idle_.load();
     if (want && idle_fd_ < 0) {

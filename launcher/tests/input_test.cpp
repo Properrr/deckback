@@ -136,10 +136,10 @@ void test_button_map_from_shipped_keymap() {
   std::string k;
   assert(find_key(m, BTN_SOUTH, &k) && k == "Enter");
   assert(find_key(m, BTN_EAST, &k) && k == "Escape");
-  assert(find_key(m, BTN_X, &k) && k == "MediaPlayPause");     // X (BTN_X == BTN_NORTH)
-  assert(find_key(m, BTN_TL, &k) && k == "ArrowLeft");         // LB
-  assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");        // RB
-  assert(find_key(m, BTN_SELECT, &k) && k == "c");             // captions
+  assert(find_key(m, BTN_X, &k) && k == "MediaPlayPause");  // X (BTN_X == BTN_NORTH)
+  assert(find_key(m, BTN_TL, &k) && k == "ArrowLeft");      // LB
+  assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");     // RB
+  assert(find_key(m, BTN_SELECT, &k) && k == "c");          // captions
 
   // Y and Start dispatch no DOM key -> not bound, and reported. Both are *launcher* actions
   // (voice_search, show_controls); build_button_map does not know that, so it honestly reports them
