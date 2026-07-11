@@ -34,8 +34,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install flatpak
-        run: sudo apt-get update && sudo apt-get install -y flatpak
+      - name: Install flatpak + ostree
+        run: sudo apt-get update && sudo apt-get install -y flatpak ostree
 
       - name: Pick the tag
         id: pick

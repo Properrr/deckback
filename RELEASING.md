@@ -71,6 +71,9 @@ picks it up.
 
 ## Test the repo locally (no CI, no Pages)
 
+Needs `flatpak` and the `ostree` CLI (`sudo apt install flatpak ostree` on Debian/Ubuntu — flatpak
+alone pulls only the library, not the `ostree` binary the repo init needs).
+
 ```sh
 just publish-repo                       # imports ./io.github.properrr.deckback.flatpak into
                                         #   flatpak/pages-site/ (repo + index.html + refs)

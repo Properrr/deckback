@@ -20,10 +20,15 @@ bundle="${1:-${app}.flatpak}"
 site="${2:-flatpak/pages-site}"
 
 command -v flatpak >/dev/null 2>&1 || die_env "flatpak not found (needed for build-import-bundle)"
+# flatpak pulls in libostree but NOT the ostree CLI, which we need to init the repo. On Debian/Ubuntu:
+# 'sudo apt install ostree'.
+command -v ostree >/dev/null 2>&1 || die_env "ostree not found (Debian/Ubuntu: 'sudo apt install ostree')"
 [ -f "$bundle" ] || die_env "bundle not found: $bundle (build with 'just flatpak' or 'just release')"
 
 repo="$site/repo"
 rm -rf "$site"; mkdir -p "$repo"
+# build-import-bundle requires an already-initialised archive-z2 repo; an empty dir errors.
+ostree init --repo="$repo" --mode=archive-z2
 
 gpgargs=()
 if [ -n "${DECKBACK_GPG_KEY:-}" ]; then
