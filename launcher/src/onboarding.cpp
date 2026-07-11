@@ -131,10 +131,9 @@ std::string overlay_js(const std::vector<ControlRow>& rows, std::string_view tit
   // innerHTML-replaced) because unlike the error page, Leanback is still alive underneath.
   // The HTML goes through js_trusted_html: youtube.com/tv's Trusted Types CSP rejects a bare
   // innerHTML assignment, which is why this card rendered in every test and nothing on the Deck.
-  const std::string html =
-      std::format("\"{}<h2>{}</h2><table>{}</table><div class='f'>{}</div>\"",
-                  js_string_escape(kOverlayStyle), js_string_escape(title), body,
-                  js_string_escape(footer));
+  const std::string html = std::format("\"{}<h2>{}</h2><table>{}</table><div class='f'>{}</div>\"",
+                                       js_string_escape(kOverlayStyle), js_string_escape(title),
+                                       body, js_string_escape(footer));
   return std::format(
       "(function(){{var id='__deckback_help';"
       "var old=document.getElementById(id);if(old)old.remove();"

@@ -37,8 +37,8 @@ int main() {
   assert(js.find("capture") != std::string::npos);
   // The events a tap/drag produces under gamescope (mouse, not touch) must all be listed, plus the
   // touch events for completeness.
-  for (const char* ev : {"pointerdown", "mousedown", "mouseup", "click", "mousemove",
-                         "touchstart", "contextmenu"}) {
+  for (const char* ev :
+       {"pointerdown", "mousedown", "mouseup", "click", "mousemove", "touchstart", "contextmenu"}) {
     assert(js.find(ev) != std::string::npos);
   }
   // ...and it hides the cursor (gamescope draws our X cursor, so cursor:none makes it disappear).

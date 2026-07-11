@@ -18,11 +18,11 @@
 #include "input.hpp"
 #include "log.hpp"
 #include "navigator.hpp"
-#include "touchmode.hpp"
 #include "onboarding.hpp"
 #include "platform.hpp"
 #include "player.hpp"
 #include "profile.hpp"
+#include "touchmode.hpp"
 #include "voice.hpp"
 #include "watchdog.hpp"
 
@@ -188,7 +188,7 @@ int main(int argc, char** argv) {
     warn("startup: user_agent unset — Leanback will not serve the TV app until S0.2 seeds it");
   }
 
-  struct sigaction sa{};
+  struct sigaction sa {};
   sa.sa_handler = on_signal;
   sigaction(SIGINT, &sa, nullptr);
   sigaction(SIGTERM, &sa, nullptr);
@@ -335,9 +335,9 @@ int main(int argc, char** argv) {
         "will load with its default UA (desktop redirect likely)");
   }
 
-  // Option B of disable_touch: hold gamescope's touch mode at hover while our window is focused, so a
-  // stray finger cannot even generate a click at the compositor. Independent of CDP — the page-side
-  // swallow (Option A, in the Navigator) needs remote debugging; this does not.
+  // Option B of disable_touch: hold gamescope's touch mode at hover while our window is focused, so
+  // a stray finger cannot even generate a click at the compositor. Independent of CDP — the
+  // page-side swallow (Option A, in the Navigator) needs remote debugging; this does not.
   std::optional<TouchModeGuard> touch_mode;
   if (cfg->disable_touch) {
     touch_mode.emplace();

@@ -36,15 +36,15 @@ struct Config {
   // events (a finger moves the cursor and taps click — accidental navigation), and the app cannot
   // grab the panel from inside (findings durable/touch-lock.md). `disable_touch` makes touch inert
   // two ways: the Navigator injects `no_pointer.js` to swallow every pointer/mouse/touch event in
-  // the page (Option A), and `TouchModeGuard` holds gamescope's global touch mode at hover while our
-  // window is focused (Option B). Default on. This SUPERSEDES the touch_lock_* fields below, whose
-  // EVIOCGRAB lock is proven non-functional on SteamOS — they ship disabled and remain only so a
-  // remote config cannot resurrect a dead lock by accident.
+  // the page (Option A), and `TouchModeGuard` holds gamescope's global touch mode at hover while
+  // our window is focused (Option B). Default on. This SUPERSEDES the touch_lock_* fields below,
+  // whose EVIOCGRAB lock is proven non-functional on SteamOS — they ship disabled and remain only
+  // so a remote config cannot resurrect a dead lock by accident.
   bool disable_touch = true;
 
   // DEAD — retained disabled. `block_touchscreen` was the initial EVIOCGRAB lock state; while
-  // `touch_lock_enabled`, the `touch_lock_chord` combo toggled it. Proven not to block touch on this
-  // platform (durable/touch-lock.md); replaced by `disable_touch`. Do not re-enable without a
+  // `touch_lock_enabled`, the `touch_lock_chord` combo toggled it. Proven not to block touch on
+  // this platform (durable/touch-lock.md); replaced by `disable_touch`. Do not re-enable without a
   // hardware retest of the grab.
   bool block_touchscreen = false;
   bool touch_lock_enabled = false;
@@ -66,11 +66,12 @@ struct Config {
   int right_stick_slow_ms = 200;
   int right_stick_fast_ms = 45;
 
-  // Phase 5 voice search (findings input-ux §13). Ships DISABLED: `kSbKeyMicrophone` does nothing on
-  // this build, so voice must click Leanback's own soft-mic button — and whether that button even
-  // exists under our Cobalt UA is the unverified V0 spike. A dead button is worse than a missing one.
+  // Phase 5 voice search (findings input-ux §13). Ships DISABLED: `kSbKeyMicrophone` does nothing
+  // on this build, so voice must click Leanback's own soft-mic button — and whether that button
+  // even exists under our Cobalt UA is the unverified V0 spike. A dead button is worse than a
+  // missing one.
   bool voice_enabled = false;
-  int voice_hold_ms = 250;          // hold this long before the mic opens (debounces a stray tap)
+  int voice_hold_ms = 250;           // hold this long before the mic opens (debounces a stray tap)
   std::string voice_duck = "pause";  // none | mute | pause — speakers sit ~15 cm from the mic array
   bool voice_click_toggles = false;  // true when the page's mic control is tap-to-toggle, not hold
   std::vector<std::string> voice_mic_selectors;

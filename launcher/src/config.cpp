@@ -90,10 +90,10 @@ std::vector<std::string> read_string_array(const std::string& s, std::string_vie
   return out;
 }
 
-// Reads a flat top-level object of "key": "value" string pairs (app.json's `keymap`). Keys beginning
-// with '$' are treated as documentation (`$comment`) and skipped. Order is preserved so warnings and
-// logs list bindings the way the user wrote them. Nested objects/arrays inside the value are not
-// supported — the keymap is deliberately flat.
+// Reads a flat top-level object of "key": "value" string pairs (app.json's `keymap`). Keys
+// beginning with '$' are treated as documentation (`$comment`) and skipped. Order is preserved so
+// warnings and logs list bindings the way the user wrote them. Nested objects/arrays inside the
+// value are not supported — the keymap is deliberately flat.
 std::vector<std::pair<std::string, std::string>> read_string_object(const std::string& s,
                                                                     std::string_view key) {
   std::vector<std::pair<std::string, std::string>> out;
@@ -104,8 +104,12 @@ std::vector<std::pair<std::string, std::string>> read_string_object(const std::s
   int depth = 0;
   size_t end = std::string::npos;
   for (size_t i = *p; i < s.size(); ++i) {
-    if (s[i] == '{') ++depth;
-    else if (s[i] == '}' && --depth == 0) { end = i; break; }
+    if (s[i] == '{')
+      ++depth;
+    else if (s[i] == '}' && --depth == 0) {
+      end = i;
+      break;
+    }
   }
   if (end == std::string::npos) return out;
 
@@ -116,9 +120,12 @@ std::vector<std::pair<std::string, std::string>> read_string_object(const std::s
     std::string tok;
     size_t j = i + 1;
     for (; j < end; ++j) {
-      if (s[j] == '\\' && j + 1 < end) tok.push_back(s[++j]);
-      else if (s[j] == '"') break;
-      else tok.push_back(s[j]);
+      if (s[j] == '\\' && j + 1 < end)
+        tok.push_back(s[++j]);
+      else if (s[j] == '"')
+        break;
+      else
+        tok.push_back(s[j]);
     }
     i = j;
     tokens.push_back(std::move(tok));

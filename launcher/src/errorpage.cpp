@@ -81,9 +81,9 @@ std::string error_page_js(const ErrorPageInfo& info) {
   //
   // Enter and Space retry; nothing else does. Escape is deliberately NOT bound: the only thing it
   // could do is quit, and quitting the app because the Wi-Fi blinked is not a kindness.
-  // about:blank has no Trusted Types, so js_trusted_html returns the raw string here and the page is
-  // unchanged. It is wrapped anyway so this never becomes the next controls-card surprise if we ever
-  // render the error surface over a page that does carry the CSP.
+  // about:blank has no Trusted Types, so js_trusted_html returns the raw string here and the page
+  // is unchanged. It is wrapped anyway so this never becomes the next controls-card surprise if we
+  // ever render the error surface over a page that does carry the CSP.
   const std::string html = std::format(
       "\"{}<body><div id='__deckback_error'>"
       "<h1>{}</h1><p>{}</p>"

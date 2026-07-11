@@ -32,9 +32,9 @@ std::string js_string_escape(std::string_view s) {
 }
 
 std::string js_trusted_html(std::string_view raw_expr) {
-  // Memoise the policy on window; create it lazily and defensively. `createHTML` is identity: we are
-  // not sanitising, only satisfying the type gate for HTML we generated ourselves. The whole thing
-  // is one expression so it can drop straight into `d.innerHTML=<here>`.
+  // Memoise the policy on window; create it lazily and defensively. `createHTML` is identity: we
+  // are not sanitising, only satisfying the type gate for HTML we generated ourselves. The whole
+  // thing is one expression so it can drop straight into `d.innerHTML=<here>`.
   return std::format(
       "(function(_h){{try{{var T=window.trustedTypes;if(!T)return _h;"
       "if(!window.__dbTTP)window.__dbTTP=T.createPolicy('deckback',"

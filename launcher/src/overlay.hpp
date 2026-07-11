@@ -21,15 +21,16 @@ namespace deckback {
 // injected document the same way.
 std::string js_string_escape(std::string_view s);
 
-// A JS *expression* that turns `raw_expr` (itself a JS expression evaluating to an HTML string) into
-// a value assignable to `.innerHTML` under a Trusted Types CSP, falling back to the raw string where
-// Trusted Types is absent.
+// A JS *expression* that turns `raw_expr` (itself a JS expression evaluating to an HTML string)
+// into a value assignable to `.innerHTML` under a Trusted Types CSP, falling back to the raw string
+// where Trusted Types is absent.
 //
-// youtube.com/tv enforces `require-trusted-types-for 'script'`, so `el.innerHTML = "<h2>..."` throws
-// `This document requires 'TrustedHTML' assignment` and the assignment silently does nothing. That
-// is why the controls card rendered in every host-side test and NOTHING on the real page (verified
-// on-Deck 2026-07-10): the account gate had been masking Leanback the whole time, so no earlier run
-// ever met the CSP. `textContent` is unaffected — the toast, which uses it, was always fine.
+// youtube.com/tv enforces `require-trusted-types-for 'script'`, so `el.innerHTML = "<h2>..."`
+// throws `This document requires 'TrustedHTML' assignment` and the assignment silently does
+// nothing. That is why the controls card rendered in every host-side test and NOTHING on the real
+// page (verified on-Deck 2026-07-10): the account gate had been masking Leanback the whole time, so
+// no earlier run ever met the CSP. `textContent` is unaffected — the toast, which uses it, was
+// always fine.
 //
 // The policy is memoised on `window` and its creation is wrapped in try/catch: a page whose CSP
 // pins a `trusted-types` allowlist without our name would otherwise throw on createPolicy, and the

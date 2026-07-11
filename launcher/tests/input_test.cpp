@@ -294,7 +294,7 @@ void test_config_touch_defaults() {
   std::fclose(f);
   auto cfg = Config::load(path);
   assert(cfg.has_value());
-  assert(cfg->disable_touch == true);       // touch is inert by default
+  assert(cfg->disable_touch == true);  // touch is inert by default
   assert(cfg->block_touchscreen == false);
   assert(cfg->touch_lock_enabled == false);  // dead lock retired
   assert(cfg->touch_lock_chord == "l3+r3");

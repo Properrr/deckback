@@ -22,10 +22,10 @@ bool focus_class_is_ours(std::string_view wm_class) {
 
 #if defined(DECKBACK_HAVE_XCB)
 
+#include <xcb/xcb.h>
+
 #include <cstdint>
 #include <cstdlib>
-
-#include <xcb/xcb.h>
 
 namespace deckback {
 namespace {
@@ -35,7 +35,8 @@ namespace {
 constexpr xcb_window_t kNoWindow = XCB_NONE;
 constexpr xcb_atom_t kNoAtom = XCB_ATOM_NONE;
 
-constexpr uint32_t kHoverMode = 0;  // gamescope --default-touch-mode: 0=hover (cursor moves, no click)
+constexpr uint32_t kHoverMode =
+    0;  // gamescope --default-touch-mode: 0=hover (cursor moves, no click)
 
 // Read a 32-bit CARDINAL property, or -1 if absent/short.
 long read_cardinal(xcb_connection_t* c, xcb_window_t w, xcb_atom_t prop) {
@@ -55,7 +56,8 @@ std::string window_class(xcb_connection_t* c, xcb_window_t w) {
   std::string out;
   if (r) {
     int len = xcb_get_property_value_length(r);
-    if (len > 0) out.assign(static_cast<char*>(xcb_get_property_value(r)), static_cast<size_t>(len));
+    if (len > 0)
+      out.assign(static_cast<char*>(xcb_get_property_value(r)), static_cast<size_t>(len));
   }
   free(r);
   return out;
@@ -87,7 +89,8 @@ void TouchModeGuard::loop() {
   int screen_num = 0;
   xcb_connection_t* c = xcb_connect(nullptr, &screen_num);
   if (!c || xcb_connection_has_error(c)) {
-    warn("touch: gamescope hover guard: cannot reach X (no DISPLAY?); relying on page swallow only");
+    warn(
+        "touch: gamescope hover guard: cannot reach X (no DISPLAY?); relying on page swallow only");
     if (c) xcb_disconnect(c);
     return;
   }
@@ -115,7 +118,8 @@ void TouchModeGuard::loop() {
       xcb_change_property(c, XCB_PROP_MODE_REPLACE, root, mode_atom, XCB_ATOM_CARDINAL, 32, 1, &v);
       xcb_flush(c);
       if (!announced) {
-        info("touch: gamescope touch mode held at hover while focused (taps move cursor, no click)");
+        info(
+            "touch: gamescope touch mode held at hover while focused (taps move cursor, no click)");
         announced = true;
       }
     }
@@ -130,8 +134,9 @@ void TouchModeGuard::loop() {
 
 namespace deckback {
 void TouchModeGuard::loop() {
-  warn("touch: built without libxcb — gamescope hover guard unavailable; page pointer swallow "
-       "(Option A) still makes taps inert");
+  warn(
+      "touch: built without libxcb — gamescope hover guard unavailable; page pointer swallow "
+      "(Option A) still makes taps inert");
 }
 }  // namespace deckback
 

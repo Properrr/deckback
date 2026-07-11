@@ -37,9 +37,23 @@ void process_block(const unsigned char* p, std::array<uint32_t, 8>& h) {
     uint32_t S0 = rotr(a, 2) ^ rotr(a, 13) ^ rotr(a, 22);
     uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
     uint32_t t2 = S0 + maj;
-    hh = g; g = f; f = e; e = d + t1; d = c; c = b; b = a; a = t1 + t2;
+    hh = g;
+    g = f;
+    f = e;
+    e = d + t1;
+    d = c;
+    c = b;
+    b = a;
+    a = t1 + t2;
   }
-  h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e; h[5] += f; h[6] += g; h[7] += hh;
+  h[0] += a;
+  h[1] += b;
+  h[2] += c;
+  h[3] += d;
+  h[4] += e;
+  h[5] += f;
+  h[6] += g;
+  h[7] += hh;
 }
 
 }  // namespace

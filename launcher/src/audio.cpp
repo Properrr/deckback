@@ -63,8 +63,8 @@ void sink_input_info_cb(pa_context* context, const pa_sink_input_info* info, int
   }
   if (!info || !info->mute || !is_deckback_stream(*info)) return;
   ++repair.attempted;
-  if (pa_operation* operation = pa_context_set_sink_input_mute(
-          context, info->index, 0, mute_operation_cb, userdata)) {
+  if (pa_operation* operation =
+          pa_context_set_sink_input_mute(context, info->index, 0, mute_operation_cb, userdata)) {
     repair.mute_operations.push_back(operation);
   }
 }
@@ -74,7 +74,8 @@ void mute_operation_cb(pa_context*, int success, void* userdata) {
   if (success) {
     ++repair.repaired;
   } else if (repair.context) {
-    warn(std::format("audio: mute repair failed: {}", pa_strerror(pa_context_errno(repair.context))));
+    warn(std::format("audio: mute repair failed: {}",
+                     pa_strerror(pa_context_errno(repair.context))));
   }
 }
 

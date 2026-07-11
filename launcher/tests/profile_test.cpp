@@ -15,8 +15,8 @@ int main() {
 
   setenv("HOME", (root / "home").c_str(), 1);
   const fs::path target = root / "home/.local/share/deckback/profile";
-  const std::string migrated = deckback::migrate_legacy_profile(
-      target.string(), (root / "runtime").string());
+  const std::string migrated =
+      deckback::migrate_legacy_profile(target.string(), (root / "runtime").string());
   assert(migrated == (root / "runtime/deckback-profile").string());
   assert(fs::exists(target / "Cookies"));
 

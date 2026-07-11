@@ -5,9 +5,9 @@
 #include <format>
 
 #include "av1_steering_js.hpp"  // GENERATED from config/av1_steering.js
-#include "no_pointer_js.hpp"    // GENERATED from config/no_pointer.js
 #include "errorpage.hpp"
 #include "log.hpp"
+#include "no_pointer_js.hpp"  // GENERATED from config/no_pointer.js
 
 namespace deckback {
 namespace {
@@ -90,8 +90,9 @@ void Navigator::loop() {
   }
   if (policy_.disable_pointer) {
     // Option A of disable_touch: swallow every pointer/mouse/touch event in the page so a finger
-    // (delivered as synthetic mouse events under gamescope) cannot navigate. Sticky across Leanback's
-    // target teardown, same as the steering script. Option B (gamescope hover) is in main.cpp.
+    // (delivered as synthetic mouse events under gamescope) cannot navigate. Sticky across
+    // Leanback's target teardown, same as the steering script. Option B (gamescope hover) is in
+    // main.cpp.
     if (client_.add_script_on_new_document(kNoPointerScript))
       info("navigator: touch disabled — page pointer/mouse/touch events swallowed");
   }

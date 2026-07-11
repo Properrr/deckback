@@ -42,7 +42,8 @@ bool is_touchscreen(int fd, std::string& name_out) {
   std::string lower = name_out;
   for (char& ch : lower)
     if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
-  return lower.find("fts3528") != std::string::npos || lower.find("touchscreen") != std::string::npos;
+  return lower.find("fts3528") != std::string::npos ||
+         lower.find("touchscreen") != std::string::npos;
 }
 
 }  // namespace

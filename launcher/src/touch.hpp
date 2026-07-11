@@ -12,8 +12,8 @@ namespace deckback {
 // gamescope flags. The controller is never touched — only the touchscreen is grabbed.
 //
 // The node is resolved by identity (Focaltech FTS3528, USB id 2808:1015, multitouch-capable), never
-// by a fixed eventN — the number changes across boots/resume. We only hold the fd open while blocked,
-// so each block() re-resolves the node, which also covers the post-resume renumbering.
+// by a fixed eventN — the number changes across boots/resume. We only hold the fd open while
+// blocked, so each block() re-resolves the node, which also covers the post-resume renumbering.
 class TouchGuard {
  public:
   TouchGuard();

@@ -19,7 +19,7 @@ namespace deckback {
 namespace {
 
 bool file_exists(const std::string& path) {
-  struct stat st{};
+  struct stat st {};
   return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 

@@ -1,10 +1,11 @@
 #include "profile.hpp"
 
+#include <unistd.h>
+
+#include <cstdlib>
 #include <filesystem>
 #include <format>
-#include <cstdlib>
 #include <system_error>
-#include <unistd.h>
 #include <vector>
 
 #include "log.hpp"
@@ -26,8 +27,8 @@ bool contains_symlink(const fs::path& root) {
   if (error || fs::is_symlink(root_status)) return true;
   if (!fs::is_directory(root_status)) return false;
 
-  for (fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied,
-                                            error),
+  for (fs::recursive_directory_iterator
+           it(root, fs::directory_options::skip_permission_denied, error),
        end;
        it != end && !error; it.increment(error)) {
     if (fs::is_symlink(it->symlink_status(error))) return true;
@@ -57,7 +58,8 @@ std::string migrate_legacy_profile(const std::string& durable_profile,
   std::error_code error;
   const bool target_exists = fs::exists(target, error);
   if (error) {
-    warn(std::format("profile: cannot inspect durable path {}: {}", target.string(), error.message()));
+    warn(std::format("profile: cannot inspect durable path {}: {}", target.string(),
+                     error.message()));
     return {};
   }
   if (target_exists && !is_empty_directory(target)) {
@@ -87,7 +89,8 @@ std::string migrate_legacy_profile(const std::string& durable_profile,
   if (source.empty()) return {};
 
   const fs::path parent = target.parent_path();
-  const fs::path staging = parent / std::format(".profile-migration-{}", static_cast<long>(getpid()));
+  const fs::path staging =
+      parent / std::format(".profile-migration-{}", static_cast<long>(getpid()));
   fs::remove_all(staging, error);
   fs::create_directories(parent, error);
   if (error || !copy_profile(source, staging)) {

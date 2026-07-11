@@ -23,11 +23,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: install toolchain
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format
+        # Pin clang-format to a major version: an unpinned `clang-format` tracks the runner image's
+        # default, so a future ubuntu-latest bump would silently reformat the tree and turn this job
+        # red on unchanged code. The tree is formatted with clang-format 18.
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format-18
       - name: clang-format check
         run: |
           find launcher/src launcher/tests \( -name '*.cpp' -o -name '*.hpp' \) \
-            | xargs clang-format --style=file --dry-run --Werror
+            | xargs clang-format-18 --style=file --dry-run --Werror
       - name: build + test (gcc)
         run: |
           cmake -S launcher -B launcher/build -G Ninja -DCMAKE_BUILD_TYPE=Release

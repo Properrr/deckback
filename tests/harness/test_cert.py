@@ -306,7 +306,10 @@ class EchoRoute(unittest.TestCase):
 
     def test_the_route_the_harness_hardcodes_is_the_route_we_serve(self):
         # If someone "tidies" ECHO_ROUTE, this is the tripwire: the harness's URL is a literal.
-        src = (cert.HARNESS_DIR / "media" / "conformanceTest.js").read_text()
+        conformance = cert.HARNESS_DIR / "media" / "conformanceTest.js"
+        if not conformance.exists():
+            self.skipTest("harness not synced (scripts/cert.py --sync-only)")
+        src = conformance.read_text()
         self.assertIn(f"createPostRequest('{ch.ECHO_ROUTE}'", src)
 
     def test_eight_bytes_come_back_unchanged(self):
