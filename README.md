@@ -66,14 +66,19 @@ parity on a handheld.
 > **Pre-alpha.** You install this yourself, at your own risk (see the disclaimer above). Deckback
 > never bundles or downloads any DRM module; free content needs nothing extra.
 
-### 1 · Get the bundle
+### 1 · Install (Desktop Mode)
 
-Download the latest **`io.github.properrr.deckback.flatpak`** from the
-[**Releases**](https://github.com/properrr/deckback/releases) page onto your Deck.
+Switch to **Desktop Mode** and open **Konsole**. The **recommended** way adds our repo so you get
+**automatic updates** — or use the one-click installer at **<https://properrr.github.io/deckback/>**:
 
-### 2 · Install it (Desktop Mode)
+```sh
+flatpak remote-add --if-not-exists deckback \
+  https://properrr.github.io/deckback/deckback.flatpakrepo
+flatpak install deckback io.github.properrr.deckback
+```
 
-Switch to **Desktop Mode**, open **Konsole**, and run:
+Prefer a single file with no auto-update? Grab the bundle from the
+[**Releases**](https://github.com/properrr/deckback/releases) page instead:
 
 ```sh
 flatpak install --user -y io.github.properrr.deckback.flatpak
@@ -85,7 +90,7 @@ flatpak install --user -y io.github.properrr.deckback.flatpak
 - Sanity check: `flatpak info --show-permissions io.github.properrr.deckback | grep devices` should
   list `input` (the gamepad) and `dri` (the GPU).
 
-### 3 · Add it to the Steam library
+### 2 · Add it to the Steam library
 
 ```sh
 steamos-add-to-steam \
@@ -95,7 +100,7 @@ steamos-add-to-steam \
 …or, in the Steam client: **Games → Add a Non-Steam Game to My Library → Deckback**. The app icon
 comes across automatically from the Flatpak.
 
-### 4 · Controller layout (Game Mode)
+### 3 · Controller layout (Game Mode)
 
 Back in **Game Mode**, open the **Deckback** shortcut → the gamepad (controller) settings → and apply
 the community **Deckback** layout (mirrors [`config/steam_input.vdf`](config/steam_input.vdf)) so the
@@ -108,7 +113,7 @@ standard buttons reach the in-app input layer:
 | **X** | Details | **Y** | Voice / search |
 | **View** | Toggle controls card | **Menu** | Home |
 
-### 5 · Fancy library artwork (optional)
+### 4 · Fancy library artwork (optional)
 
 The repo ships capsule / hero / logo / header / icon art under
 [`flatpak/assets/steam/`](flatpak/assets/steam/) (catalogue art lives in Steam's per-user `grid/`
@@ -129,7 +134,7 @@ How you get updates depends on how you installed Deckback:
 | You installed from… | How updates reach you |
 |---|---|
 | A **`.flatpak` bundle** (a single Releases file) | **Manual.** A bundle has no remote to poll — download the newer `.flatpak` and `flatpak install` it again to upgrade. |
-| A **hosted Flatpak repo** (add our `.flatpakref`/remote once) | **Automatic** via `flatpak update`, and via Discover's background updates on the Deck. |
+| Our **Flatpak repo** at [properrr.github.io/deckback](https://properrr.github.io/deckback/) (added once, above) | **Automatic** — `flatpak update`, and Discover's background updates on the Deck. |
 | **Flathub** *(planned — see below)* | **Automatic.** Every Deck already trusts the `flathub` remote, so updates just arrive. |
 
 ## 📦 Official store
