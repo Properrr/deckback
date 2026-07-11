@@ -33,6 +33,8 @@ manifest.json.widevine
 /.flatpak-cache/
 *.flatpak
 *.flatpakref
+# ...but the committed repo-install template IS tracked (it's copied into the Pages site).
+!/flatpak/io.github.properrr.deckback.flatpakref
 # Staged copies of config/ pulled into the assets module by scripts/flatpak.sh
 /flatpak/assets/app.json
 /flatpak/assets/steam_input.vdf
@@ -59,3 +61,8 @@ power-*.csv
 soak-*.csv
 # Flathub PR build output (filled manifest + engine tarball)
 /flathub/build/
+# Local GitHub-Pages staging (just publish-repo)
+/flatpak/pages-site/
+# Release artifacts (built, not committed)
+SHA256SUMS-*.txt
+cobalt-prebuilt-*.tar.gz

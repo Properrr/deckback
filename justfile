@@ -126,9 +126,17 @@ install:
 flathub-prep tag:
     ./scripts/flathub-prep.sh "{{tag}}"
 
-# deck.gn (+ThinLTO) build, flatpak bundle, checksums, GitHub release draft.
+# Prepare a release branch: bump VERSION, roll CHANGELOG, add the AppStream <release>. See RELEASING.md.
+release-prep version:
+    ./scripts/release-prep.sh "{{version}}"
+
+# deck.gn (+ThinLTO) build, flatpak bundle + engine tarball, checksums, GitHub release draft.
 release tag:
     ./scripts/release.sh "{{tag}}"
+
+# Build the hostable ostree repo from the .flatpak bundle + stage the GitHub-Pages site locally.
+publish-repo bundle="io.github.properrr.deckback.flatpak" site="flatpak/pages-site":
+    ./scripts/publish-repo.sh "{{bundle}}" "{{site}}"
 
 # Install the host-side audio-repair user service. Runs ON the Deck, not from the workstation.
 audio-repair:

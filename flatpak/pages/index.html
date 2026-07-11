@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deckback — living-room video for the Steam Deck</title>
+<meta name="description" content="Unofficial native YouTube-TV-interface client for the Steam Deck, Game Mode. Install via Flatpak.">
+<style>
+  :root{--bg:#0e1013;--bg2:#161a22;--card:#1b1f27;--line:#2b323d;--fg:#eef1f5;--mut:#9aa3b1;--acc:#4fd1c5;--acc2:#38b2ac}
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#12151c,#0a0c11);color:var(--fg);
+    font:16px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Noto Sans",sans-serif}
+  a{color:var(--acc)}
+  .wrap{max-width:860px;margin:0 auto;padding:0 20px}
+  header{text-align:center;padding:56px 20px 12px}
+  header img{max-width:100%;width:720px;height:auto}
+  .badges{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin:14px 0 4px}
+  .badge{font-size:13px;color:var(--mut);border:1px solid var(--line);border-radius:999px;padding:4px 12px}
+  .shot{display:block;width:100%;border-radius:14px;border:1px solid var(--line);margin:22px 0}
+  h2{font-size:22px;margin:40px 0 12px;border-left:4px solid var(--acc);padding-left:12px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px;margin:14px 0}
+  .cta{display:inline-flex;align-items:center;gap:10px;background:linear-gradient(135deg,var(--acc),var(--acc2));
+    color:#0e1013;font-weight:700;text-decoration:none;border-radius:12px;padding:13px 22px;margin:6px 0}
+  .cta.secondary{background:transparent;color:var(--fg);border:1px solid #4a5568}
+  code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  pre{background:#0c0e11;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow-x:auto;font-size:14px}
+  ol{padding-left:22px} ol li{margin:6px 0}
+  .mut{color:var(--mut)}
+  footer{color:#5b6472;font-size:13px;text-align:center;padding:40px 20px 60px;line-height:1.7}
+  .note{border-left:3px solid var(--acc2);background:#111b1a;border-radius:0 10px 10px 0;padding:10px 16px;color:#bfe7e2}
+</style>
+</head>
+<body>
+<header>
+  <img src="banner.png" alt="Deckback — living-room video for the Steam Deck">
+  <div class="badges">
+    <span class="badge">Steam Deck · Game Mode</span>
+    <span class="badge">Flatpak</span>
+    <span class="badge">Apache-2.0</span>
+    <span class="badge">pre-alpha</span>
+  </div>
+</header>
+
+<div class="wrap">
+  <p class="mut" style="text-align:center;font-size:18px">
+    An unofficial native client for YouTube's TV interface, built on Chromium-based Cobalt —
+    controller-native, hardware-decoded, with clean sleep/resume.
+  </p>
+
+  <img class="shot" src="screenshots/01-home.png" alt="Deckback home screen">
+
+  <h2>Install on your Steam Deck</h2>
+
+  <div class="card">
+    <p><strong>One-click (Desktop Mode)</strong> — installs the app and adds our repo so you get
+      automatic updates:</p>
+    <p><a class="cta" href="io.github.properrr.deckback.flatpakref">⬇ Install Deckback</a></p>
+    <p class="mut">Opens in your software installer. Needs flatpak ≥ 1.16 (SteamOS 3.5+).</p>
+  </div>
+
+  <div class="card">
+    <p><strong>From a terminal (Konsole)</strong> — add the repo once, then install:</p>
+    <pre>flatpak remote-add --if-not-exists deckback \
+  https://properrr.github.io/deckback/deckback.flatpakrepo
+flatpak install deckback io.github.properrr.deckback</pre>
+    <p class="mut">Update anytime with <code>flatpak update io.github.properrr.deckback</code> — or let
+      the Deck's background updater handle it.</p>
+  </div>
+
+  <div class="card">
+    <p><strong>Or a single bundle</strong> (no auto-update) from the
+      <a href="https://github.com/properrr/deckback/releases">GitHub Releases</a> page:</p>
+    <pre>flatpak install --user -y io.github.properrr.deckback.flatpak</pre>
+  </div>
+
+  <h2>Add it to your library</h2>
+  <ol>
+    <li>Back in <strong>Game Mode</strong>: <em>Add a Non-Steam Game → Deckback</em>, or run
+      <code>steamos-add-to-steam</code> (see the <a href="https://github.com/properrr/deckback#-install--play-on-steam-deck">README</a>).</li>
+    <li>Open the shortcut's controller settings and apply the community <strong>Deckback</strong> layout.</li>
+    <li>Controls: <strong>A</strong> select · <strong>B</strong> back · <strong>X</strong> details ·
+      <strong>Y</strong> search · <strong>LB/RB</strong> seek ∓10s.</li>
+  </ol>
+
+  <p class="note">Free content needs nothing extra. Deckback never bundles or downloads any DRM
+    module; it is not affiliated with, endorsed by, or sponsored by Google or YouTube.</p>
+</div>
+
+<footer>
+  Deckback is an independent, unofficial project provided “as is”, with no warranty.<br>
+  “YouTube”, “Steam Deck”, and “SteamOS” are trademarks of their respective owners, used nominatively.<br>
+  <a href="https://github.com/properrr/deckback">Source</a> ·
+  <a href="https://github.com/properrr/deckback/blob/main/docs/SUPPORT.md">Support</a> ·
+  <a href="https://github.com/properrr/deckback/blob/main/CHANGELOG.md">Changelog</a>
+</footer>
+</body>
+</html>

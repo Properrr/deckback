@@ -1,0 +1,9 @@
+[Flatpak Repo]
+Title=Deckback
+Url=https://properrr.github.io/deckback/repo/
+Homepage=https://github.com/properrr/deckback
+Comment=Unofficial living-room video client for the Steam Deck (Game Mode)
+Description=Deckback — native YouTube-TV-interface client for the Steam Deck, built on Cobalt.
+Icon=https://properrr.github.io/deckback/icon.png
+# When the repo is GPG-signed, `just publish-repo` fills in the base64 public key below:
+# GPGKey=

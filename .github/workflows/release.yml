@@ -1,0 +1,79 @@
+# Publish the self-hosted Flatpak repo to GitHub Pages from a GitHub Release's .flatpak bundle.
+# The engine is NOT built here (Chromium-scale builds run on the self-hosted runner via `just
+# release`); this only imports the already-built bundle into an ostree repo and deploys the static
+# site — so it runs fine on the free runner.
+name: release-pages
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to publish (e.g. v0.0.1)
+        required: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two Pages deploys clobber each other.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-site:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+    env:
+      # Job-level so the step `if:` can see it (secrets aren't visible in `if` directly). Empty when
+      # the repo has no signing key configured — the site is then published unsigned.
+      FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install flatpak
+        run: sudo apt-get update && sudo apt-get install -y flatpak
+
+      - name: Pick the tag
+        id: pick
+        run: echo "tag=${{ github.event.release.tag_name || inputs.tag }}" >> "$GITHUB_OUTPUT"
+
+      - name: Download the bundle from the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "${{ steps.pick.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --pattern '*.flatpak' --dir .
+          ls -la ./*.flatpak
+
+      # Optional GPG signing: set the repo secret FLATPAK_GPG_KEY to an ASCII-armored PRIVATE key.
+      - name: Import signing key
+        id: gpg
+        if: ${{ env.FLATPAK_GPG_KEY != '' }}
+        run: |
+          echo "$FLATPAK_GPG_KEY" | gpg --batch --import
+          keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
+          echo "keyid=$keyid" >> "$GITHUB_OUTPUT"
+
+      - name: Build repo + stage site
+        env:
+          DECKBACK_GPG_KEY: ${{ steps.gpg.outputs.keyid }}
+        run: ./scripts/publish-repo.sh "$(ls ./*.flatpak | head -1)" _site
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build-site
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

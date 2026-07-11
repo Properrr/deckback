@@ -1,0 +1,13 @@
+[Flatpak Ref]
+Name=io.github.properrr.deckback
+Branch=master
+Title=Deckback
+Url=https://properrr.github.io/deckback/repo/
+Homepage=https://github.com/properrr/deckback
+Comment=Unofficial living-room video client for the Steam Deck (Game Mode)
+IsRuntime=false
+# So a Deck that has never seen the Freedesktop runtime can pull it from Flathub during install.
+RuntimeRepo=https://flathub.org/repo/flathub.flatpakrepo
+# When the repo is GPG-signed, `just publish-repo` fills in the base64 public key below (until then
+# the remote is added without gpg verification):
+# GPGKey=
