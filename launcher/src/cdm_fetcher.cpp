@@ -56,7 +56,10 @@ bool http_download(const std::string& url, std::string& out) {
 }
 #endif
 
-bool write_file(const std::string& path, const std::string& bytes) {
+// Only referenced from the DECKBACK_HAVE_CURL download path below; a build without libcurl (the
+// optional-dep configuration CMake explicitly supports) compiles the sole caller out, so mark it
+// maybe_unused to keep that build -Werror-clean.
+[[maybe_unused]] bool write_file(const std::string& path, const std::string& bytes) {
   make_parent_dirs(path);
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f) return false;

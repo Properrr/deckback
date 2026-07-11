@@ -10,6 +10,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: install deps
+        # test_video_corruption.py exercises the green-band pixel verdict and needs Pillow; without it
+        # the test ERRORs on import instead of running.
+        run: sudo apt-get update && sudo apt-get install -y shellcheck python3-pil
       - name: shellcheck
         run: shellcheck -S warning scripts/*.sh tests/harness/*.sh
       # L0 tests for the harness's own logic (power-gate adjudication, exit-code taxonomy). These
@@ -26,7 +30,11 @@ jobs:
         # Pin clang-format to a major version: an unpinned `clang-format` tracks the runner image's
         # default, so a future ubuntu-latest bump would silently reformat the tree and turn this job
         # red on unchanged code. The tree is formatted with clang-format 18.
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format-18
+        # The launcher's system deps are optional (pkg_check_modules, not REQUIRED), but install them
+        # so CI builds the real, fully-featured configuration — otherwise DECKBACK_HAVE_CURL=0 and the
+        # CDM download path (plus its tests) never compile.
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format-18 clang
+          libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev
       - name: clang-format check
         run: |
           find launcher/src launcher/tests \( -name '*.cpp' -o -name '*.hpp' \) \
