@@ -195,32 +195,22 @@ Builds run on a **workstation/CI, never on the Deck** — the Deck is a deploy/t
 - **In-tree (`patches/`):** C++17, Chromium's hermetic Clang + in-tree libc++. See `patches/README.md`.
 - **Out-of-tree (`launcher/`):** C++23, must build clean on Clang ≥18 **and** GCC 14, `-Werror`.
 
-## Contributing / next steps
+## Contributing
 
-The **Phase 0 spikes are done** — `DEPS.pin` is pinned to a working Chrobalt commit, the Leanback UA
-is found, and the on-Deck build path is proven (`.internal/findings/milestones/m114.md`).
+Contributions are welcome — bug reports, fixes, controller layouts, and on-hardware test results all
+help. **LCD (Van Gogh) owners especially:** Deckback is developed on an OLED unit, so results from an
+LCD are some of the most valuable things you can send.
 
-The on-Deck automated test tier (**L2**, `tests/deck/`) ran against a Deck for the first time on
-2026-07-10, but most of its checks are still blocked by Leanback's "watch as guest" account gate.
-The two highest-value next steps:
+- **Build & test** — see [Quick start](#quick-start) above. The launcher builds standalone with no
+  Chromium checkout, so most launcher and config work needs only `just launcher`.
+- **Report a bug or request a feature** — open an issue with your SteamOS version, Deck model
+  (LCD/OLED), and a log (see *Collecting logs* in [`docs/SUPPORT.md`](docs/SUPPORT.md)).
+- **Two house rules** that keep the app honest:
+  1. **Never bind a key we haven't verified against the TV interface** — YouTube publishes no key
+     contract for it, so a guessed binding silently does nothing.
+  2. **Never claim a behavior is verified without a dated on-hardware result.**
 
-1. **An L2 account-gate fixture** (a `conftest.py` that dismisses the guest gate) so the ~23 on-Deck
-   tests actually verify the many features that are implemented-but-unrun (see the honest matrix in
-   `.internal/TEST-PLAN.md` §2).
-2. **Verify on an LCD (Van Gogh) unit.** VP9 VA-API decode ships and passed the pixel gate on M138 (a
-   composited-screenshot check, never a decoder-name check — that lesson stands from the m114
-   corruption, `.internal/findings/milestones/m114.md`); the P4 power draw is now measured (5.6 W avg,
-   `just power`) and suspend/resume passed (`just soak`). But **every** hardware result so far is from
-   an **OLED** unit — the LCD shares the code path and has run nothing. Voice search and mic capture
-   are also still unverified on either unit.
-
-Read `.internal/TEST-PLAN.md` first; it defines the test tiers and the hardware-TDD loop (write the
-paranoid test, make it fail on the device, implement, prove, register).
-
-Findings are registered in `.internal/findings/` (durable vs. per-milestone; see its README and
-`.internal/MIGRATION.md` for the yearly Cobalt-bump playbook). Two house rules worth knowing before
-you contribute: **never bind a key we have not verified against the TV interface** (it publishes no
-key contract), and **never claim a behavior is verified without a dated on-hardware result**.
+Deeper design notes and the Cobalt-bump playbook live under `.internal/`.
 
 ## License
 
