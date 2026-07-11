@@ -14,13 +14,17 @@ if Steam is NOT running. `remove` refuses to run while Steam is up. `art` only *
 grid dir (Steam never rewrites those), so it is safe any time and simply appears on the next Steam
 restart.
 
-The grid-image appid convention is the widely-used one (SteamGridDB / boilr / steamgrid):
-    legacy_id = crc32( (exe + appname).encode('utf-8') ) | 0x80000000
-    grid/<legacy_id>.png        landscape / header capsule
-    grid/<legacy_id>p.png       portrait library capsule
-    grid/<legacy_id>_hero.png   hero background
-    grid/<legacy_id>_logo.png   transparent logo overlay
-    grid/<legacy_id>_icon.png   icon
+The grid-image filenames are keyed by the shortcut's appid:
+    grid/<appid>.png        landscape / header capsule
+    grid/<appid>p.png       portrait library capsule
+    grid/<appid>_hero.png   hero background
+    grid/<appid>_logo.png   transparent logo overlay
+    grid/<appid>_icon.png   icon
+The <appid> is whatever value Steam stored in the shortcut's own `appid` field (see art_id()).
+For shortcuts Steam or `steamos-add-to-steam` created, that appid is NOT reproducible from
+crc32(exe+appname) — so we read it from the entry and only fall back to the widely-used
+crc convention (SteamGridDB / boilr / steamgrid: crc32(exe+appname) | 0x80000000) when the
+entry carries no appid, i.e. a shortcut we authored ourselves.
 """
 import argparse
 import glob
@@ -130,6 +134,21 @@ def _matches(entry, appname):
             or q in (_entry_field(entry, "Exe") or "").lower())
 
 
+def art_id(entry, exe, appname):
+    """The appid grid artwork must be named after.
+
+    Steam looks up a non-Steam shortcut's art by the `appid` it stored in that shortcut's own
+    entry — and modern Steam (and `steamos-add-to-steam`) assigns that appid by a scheme our
+    crc32(exe+appname) formula does NOT reproduce. So when the entry carries an `appid` field, that
+    value wins; the crc fallback is only for shortcuts we authored ourselves and wrote no appid for.
+    Read unsigned: Steam names the grid files with the unsigned 32-bit value.
+    """
+    aid = _entry_field(entry, "appid")
+    if isinstance(aid, int):
+        return aid & 0xFFFFFFFF
+    return grid_id(exe, appname)
+
+
 def grid_id(exe, appname):
     """Legacy 32-bit grid appid used for custom-artwork filenames."""
     crc = zlib.crc32((exe + appname).encode("utf-8")) & 0xFFFFFFFF
@@ -174,8 +193,8 @@ def cmd_remove(args):
         kept, removed_ids = [], []
         for i, (tag, key, entry) in enumerate(items):   # each entry: (0x00, "0", [fields])
             if _matches(entry, args.appname) and i != keep:
-                removed_ids.append(grid_id(_entry_field(entry, "Exe") or "",
-                                           _entry_field(entry, "AppName") or ""))
+                removed_ids.append(art_id(entry, _entry_field(entry, "Exe") or "",
+                                          _entry_field(entry, "AppName") or ""))
             else:
                 kept.append((tag, key, entry))
         if len(kept) == len(items):
@@ -224,7 +243,7 @@ def cmd_art(args):
             exe = _entry_field(entry, "Exe") or ""
             if not _matches(entry, args.appname):
                 continue
-            gid = grid_id(exe, name)
+            gid = art_id(entry, exe, name)
             print(f"{vdf}: '{name}' exe={exe!r} -> grid id {gid}")
             for suf, src in art.items():
                 if not os.path.isfile(src):
