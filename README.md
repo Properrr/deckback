@@ -90,15 +90,17 @@ flatpak install --user -y io.github.properrr.deckback.flatpak
 - Sanity check: `flatpak info --show-permissions io.github.properrr.deckback | grep devices` should
   list `input` (the gamepad) and `dri` (the GPU).
 
-### 2 · Add it to the Steam library
+### 2 · Add it to the Steam library (still in Desktop Mode)
 
 ```sh
 steamos-add-to-steam \
   "$(flatpak info --show-location io.github.properrr.deckback)/export/share/applications/io.github.properrr.deckback.desktop"
 ```
 
-…or, in the Steam client: **Games → Add a Non-Steam Game to My Library → Deckback**. The app icon
-comes across automatically from the Flatpak.
+…or do it by hand in the **desktop Steam client** — **Games → Add a Non-Steam Game to My Library →
+Deckback**. Note this menu exists **only in Desktop Mode**; there is no "Add a Non-Steam Game" option
+in Game Mode, so add the shortcut here (either command above or this menu) *before* switching back.
+The app icon comes across automatically from the Flatpak.
 
 ### 3 · Controller layout (Game Mode)
 
