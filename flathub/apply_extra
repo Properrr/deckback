@@ -1,0 +1,8 @@
+#!/bin/sh
+# Runs ONCE at install time, inside a minimal sandbox with the extra-data dir (/app/extra) as cwd and
+# writable. flatpak has just downloaded the engine tarball here (pinned by sha256 in the manifest);
+# unpack it in place so the content_shell runtime ends up at /app/extra/content_shell, then drop the
+# archive. This is how a Flatpak ships a large prebuilt payload it cannot build from source in CI.
+set -e
+tar -xzf cobalt-prebuilt.tar.gz
+rm -f cobalt-prebuilt.tar.gz

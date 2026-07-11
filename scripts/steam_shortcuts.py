@@ -105,6 +105,31 @@ def _entry_field(entry_items, name):
     return None
 
 
+def _steam_running():
+    """True if a live process named exactly 'steam' exists (Linux /proc scan, no deps)."""
+    try:
+        pids = os.listdir("/proc")
+    except OSError:
+        return False
+    for pid in pids:
+        if not pid.isdigit():
+            continue
+        try:
+            with open(f"/proc/{pid}/comm") as f:
+                if f.read().strip() == "steam":
+                    return True
+        except OSError:
+            continue
+    return False
+
+
+def _matches(entry, appname):
+    """A shortcut matches if the query appears in its AppName or its Exe (case-insensitive)."""
+    q = appname.lower()
+    return (q in (_entry_field(entry, "AppName") or "").lower()
+            or q in (_entry_field(entry, "Exe") or "").lower())
+
+
 def grid_id(exe, appname):
     """Legacy 32-bit grid appid used for custom-artwork filenames."""
     crc = zlib.crc32((exe + appname).encode("utf-8")) & 0xFFFFFFFF
@@ -130,6 +155,13 @@ def _find_shortcuts_vdf(explicit):
 
 
 def cmd_remove(args):
+    # Steam rewrites shortcuts.vdf from memory when it exits, so editing the file while Steam is up
+    # silently loses the edit (and this is the destructive path over ALL non-Steam games). Refuse,
+    # as the docstring and README promise, unless the caller insists with --force.
+    if _steam_running() and not args.force:
+        print("Steam is running — close it first (edits are lost when Steam exits), or pass --force",
+              file=sys.stderr)
+        return 3
     vdfs = _find_shortcuts_vdf(args.vdf)
     if not vdfs:
         print("no shortcuts.vdf found", file=sys.stderr); return 3
@@ -137,24 +169,24 @@ def cmd_remove(args):
     for vdf in vdfs:
         root_key, items = load_shortcuts(vdf)
         # index of the last matching entry, so --keep-last can retain exactly one (the newest add)
-        match_idx = [i for i, (_t, _k, e) in enumerate(items)
-                     if args.appname.lower() in ((_entry_field(e, "AppName") or "")
-                                                  + (_entry_field(e, "Exe") or "")).lower()]
+        match_idx = [i for i, (_t, _k, e) in enumerate(items) if _matches(e, args.appname)]
         keep = match_idx[-1] if (args.keep_last and match_idx) else None
         kept, removed_ids = [], []
         for i, (tag, key, entry) in enumerate(items):   # each entry: (0x00, "0", [fields])
-            name = _entry_field(entry, "AppName") or ""
-            exe = _entry_field(entry, "Exe") or ""
-            is_match = args.appname.lower() in name.lower() or args.appname.lower() in exe.lower()
-            if is_match and i != keep:
-                removed_ids.append(grid_id(exe, name))
+            if _matches(entry, args.appname) and i != keep:
+                removed_ids.append(grid_id(_entry_field(entry, "Exe") or "",
+                                           _entry_field(entry, "AppName") or ""))
             else:
                 kept.append((tag, key, entry))
         if len(kept) == len(items):
             print(f"{vdf}: no '{args.appname}' entries"); continue
         # re-index the surviving entries 0..n-1 (Steam keys them by ordinal)
         reindexed = [(t, str(i), e) for i, (t, _k, e) in enumerate(kept)]
-        shutil.copy2(vdf, vdf + ".deckback.bak")
+        # Back up ONCE: never overwrite an existing backup, or a second run would replace the pristine
+        # original with the already-edited file and there would be nothing to restore.
+        bak = vdf + ".deckback.bak"
+        if not os.path.exists(bak):
+            shutil.copy2(vdf, bak)
         dump_shortcuts(vdf, root_key, reindexed)
         removed = len(items) - len(kept)
         total += removed
@@ -190,7 +222,7 @@ def cmd_art(args):
         for tag, key, entry in items:
             name = _entry_field(entry, "AppName") or ""
             exe = _entry_field(entry, "Exe") or ""
-            if args.appname.lower() not in name.lower():
+            if not _matches(entry, args.appname):
                 continue
             gid = grid_id(exe, name)
             print(f"{vdf}: '{name}' exe={exe!r} -> grid id {gid}")
@@ -214,6 +246,8 @@ def main():
     r.add_argument("--appname", default="Deckback")
     r.add_argument("--keep-last", action="store_true",
                    help="retain the last matching entry (dedup instead of full removal)")
+    r.add_argument("--force", action="store_true",
+                   help="edit even if Steam is running (the edit will be lost when Steam exits)")
     r.add_argument("--vdf", default="")
     r.set_defaults(func=cmd_remove)
     a = sub.add_parser("art", help="install library artwork for the matching shortcut")

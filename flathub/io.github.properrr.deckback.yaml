@@ -1,0 +1,89 @@
+# Flathub submission manifest for Deckback.  READ flathub/SUBMISSION.md FIRST — this manifest takes
+# the "extra-data engine" path (Path B) because Cobalt (a Chromium fork) cannot be built from source
+# inside Flathub CI. zypak, the launcher, and the assets ARE built from source here; only the engine
+# runtime is fetched at install time, pinned by sha256.
+#
+# The <COMMIT>/<TAG>/<SHA256>/<SIZE> placeholders are filled by `just flathub-prep <tag>`.  Do not
+# hand-edit them. This file differs from flatpak/io.github.properrr.deckback.yml in three ways only:
+# remote (git/extra-data) sources instead of local dirs, the engine as extra-data, and license files
+# installed per Flathub policy.
+app-id: io.github.properrr.deckback
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: deckback
+separate-locales: false
+
+finish-args:
+  # --device=input landed in flatpak 1.15.6; 1.16.0 is the first stable release that understands it.
+  - --require-version=1.16.0
+  - --share=network                 # it is a streaming client (justify in the PR)
+  - --socket=x11                    # Game Mode = gamescope Xwayland; no Wayland-portal path (justify)
+  - --share=ipc                     # Chromium X11 MIT-SHM; without it every frame goes over the socket
+  - --socket=pulseaudio             # PipeWire via pulse compat — playback AND mic capture
+  - --device=dri                    # GPU (VA-API hardware decode)
+  - --device=input                  # evdev gamepad + FF_RUMBLE haptics (no portal exists for raw evdev)
+  - --talk-name=org.freedesktop.ScreenSaver
+  - --system-talk-name=org.freedesktop.login1
+  - --filesystem=xdg-run/pipewire-0:ro
+  # The launcher forks the engine named here; the Flathub cobalt-zypak points it at /app/extra.
+  - --env=DECKBACK_COBALT_BIN=/app/bin/cobalt-zypak
+
+modules:
+  # 1. zypak — Chromium sandbox helper for Flatpak (built from source).
+  - name: zypak
+    buildsystem: simple
+    build-commands:
+      - make -j${FLATPAK_BUILDER_N_JOBS:-4}
+      - make install
+    sources:
+      - type: git
+        url: https://github.com/refi64/zypak
+        tag: v2025.09
+        commit: 693a71c5ffa80ec9c9ce2ae03b1ccc493c698e53
+
+  # 2. deckback-launcher — the out-of-tree C++23 shim, built from source. The JS embed paths default
+  #    to ../config/*.js relative to launcher/, which resolves correctly inside the full-repo clone.
+  - name: deckback-launcher
+    buildsystem: simple
+    build-commands:
+      - cmake -G Ninja -S launcher -B _build -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/app -DBUILD_TESTING=OFF
+      - ninja -C _build install
+    sources:
+      - type: git
+        url: https://github.com/properrr/deckback.git
+        commit: <COMMIT>
+
+  # 3. cobalt engine — the ONE piece not built from source. Downloaded at install time and unpacked by
+  #    apply_extra into /app/extra/. See SUBMISSION.md for why (and the review risk this carries).
+  - name: cobalt-engine
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 apply_extra /app/bin/apply_extra
+    sources:
+      - type: file
+        path: apply_extra
+      - type: extra-data
+        filename: cobalt-prebuilt.tar.gz
+        url: https://github.com/properrr/deckback/releases/download/<TAG>/cobalt-prebuilt-<PIN>.tar.gz
+        sha256: <SHA256>
+        size: <SIZE>
+
+  # 4. assets — config, wrappers, desktop entry, icon, appstream, licenses. From the same repo clone.
+  - name: deckback-assets
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 flathub/cobalt-zypak.sh                           /app/bin/cobalt-zypak
+      - install -Dm755 flatpak/assets/deckback.sh                        /app/bin/deckback
+      - install -Dm644 config/app.json                                   /app/share/deckback/app.json
+      - install -Dm644 config/steam_input.vdf                            /app/share/deckback/steam_input.vdf
+      - install -Dm644 flatpak/assets/io.github.properrr.deckback.desktop      /app/share/applications/io.github.properrr.deckback.desktop
+      - install -Dm644 flatpak/assets/io.github.properrr.deckback.svg          /app/share/icons/hicolor/scalable/apps/io.github.properrr.deckback.svg
+      - install -Dm644 flatpak/assets/io.github.properrr.deckback.metainfo.xml /app/share/metainfo/io.github.properrr.deckback.metainfo.xml
+      # Flathub policy: install project licenses under share/licenses/$FLATPAK_ID/.
+      - install -Dm644 LICENSE /app/share/licenses/io.github.properrr.deckback/LICENSE
+      - install -Dm644 NOTICE  /app/share/licenses/io.github.properrr.deckback/NOTICE
+    sources:
+      - type: git
+        url: https://github.com/properrr/deckback.git
+        commit: <COMMIT>

@@ -121,6 +121,11 @@ flatpak preset="deck":
 install:
     ./scripts/install.sh
 
+# Assemble a Flathub-PR-ready manifest set (extra-data engine tarball + checksums + pinned commit).
+# Needs a staged engine (run `just flatpak` first). See flathub/SUBMISSION.md.
+flathub-prep tag:
+    ./scripts/flathub-prep.sh "{{tag}}"
+
 # deck.gn (+ThinLTO) build, flatpak bundle, checksums, GitHub release draft.
 release tag:
     ./scripts/release.sh "{{tag}}"

@@ -109,9 +109,10 @@ standard buttons reach the in-app input layer:
 
 ### 5 · Fancy library artwork (optional)
 
-The bundle ships capsule / hero / logo art under [`flatpak/assets/steam/`](flatpak/assets/steam/).
-To skin the Steam tile with it (custom artwork lives in Steam's per-user `grid/` folder, not in the
-Flatpak), copy that folder to the Deck and, **with Steam closed**, run:
+The repo ships capsule / hero / logo / header / icon art under
+[`flatpak/assets/steam/`](flatpak/assets/steam/) (catalogue art lives in Steam's per-user `grid/`
+folder, not inside the Flatpak). To skin the Steam tile with it, copy that folder and
+`scripts/steam_shortcuts.py` to the Deck and, **with Steam closed**, run:
 
 ```sh
 python3 scripts/steam_shortcuts.py art --appname Deckback --assets flatpak/assets/steam

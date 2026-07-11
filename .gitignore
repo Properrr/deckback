@@ -57,3 +57,5 @@ artifacts/
 # P4/P6 measurement outputs (just power / just soak write these to the repo root)
 power-*.csv
 soak-*.csv
+# Flathub PR build output (filled manifest + engine tarball)
+/flathub/build/

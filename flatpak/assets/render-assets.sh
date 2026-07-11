@@ -57,7 +57,10 @@ if [ -d "$steam" ]; then
   render "$steam/hero.svg"    "$steam/hero.png"    1920 620    # hero background banner
   render "$steam/logo.svg"    "$steam/logo.png"    900 400     # transparent logo overlay
   render "$steam/header.svg"  "$steam/header.png"  920 430     # landscape capsule / header
-  echo "steam art -> steam/{capsule,hero,logo,header}.png"
+  # A square icon alongside the capsules so `steam_shortcuts.py art --assets .../steam` has all five
+  # files it looks for (it expects icon.png here); rendered straight from the app icon.
+  [ -f "$icon_svg" ] && render "$icon_svg" "$steam/icon.png" 256 256
+  echo "steam art -> steam/{capsule,hero,logo,header,icon}.png"
 fi
 
 # --- README banner (self-contained dark bg; theme-safe on GitHub) -----------------------------
