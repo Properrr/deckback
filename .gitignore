@@ -66,3 +66,5 @@ soak-*.csv
 # Release artifacts (built, not committed)
 SHA256SUMS-*.txt
 cobalt-prebuilt-*.tar.gz
+# Private working memory — lives in ~/.claude/... , never in the public repo
+/.internal/memory/
