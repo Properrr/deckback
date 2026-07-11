@@ -6,6 +6,7 @@
 #include <sys/ioctl.h>
 #include <unistd.h>
 
+#include <cstdint>
 #include <cstring>
 #include <format>
 

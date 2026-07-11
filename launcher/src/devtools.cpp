@@ -9,6 +9,7 @@
 
 #include <array>
 #include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <ctime>
 #include <format>
