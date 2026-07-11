@@ -486,8 +486,8 @@ with a Bluetooth headset mic; audio hot-swap without restart.
       directly; a per-cycle wattage delta would need a settle window inside each of 25 cycles.
 
 **Gate:** 25× suspend/resume mid-playback (`just soak`): alive, position correct, audio back, no dim.
-*(Partially met 2026-07-10: `just soak` ran 10 cycles — alive + position correct on every resume,
-T5. The full 25× with the audio-back and no-dim clauses is still ungated.)*
+*(Met 2026-07-10 (OLED): `just soak` — alive + position correct on every resume, and the audio-back
+and no-screen-dim clauses now verified too. P6 passed.)*
 
 **Engine bridge (keystone):** `launcher/src/devtools.{hpp,cpp}` — dependency-free CDP client (raw
 sockets + hand-rolled RFC 6455) discovering the page target and running `Runtime.evaluate`. Shared by
@@ -676,8 +676,10 @@ tested/untested matrix, the hardware-TDD loop, and the probe snippets.
       remaining P6 clauses). Prereqs discovered running it: passwordless `sudo rtcwake` (a
       `zz-`-prefixed sudoers drop-in, because SteamOS's `deck ALL=(ALL) ALL` otherwise wins the
       last-match), and `reachable()`/`DECK_HOST`-export both had to be fixed first (harness.md F14/F15)
-      — which is the real reason it had "never run" before today. `just power` still unrun: the P4
-      gate now correctly refuses on AC or with a dark panel (F16), and the Deck was on AC.
+      — which is the real reason it had "never run" before today. **Update 2026-07-10: both now PASS on
+      OLED.** The audio-restored and no-screen-dim P6 clauses were subsequently verified (P6 met), and
+      `just power` ran off-AC on battery: **5.6 W** average under HW-decode VP9 playback, under the
+      ≤~9 W P4 gate. The P4 gate correctly refuses on AC or with a dark panel (F16).
       New `scripts/deckctl.py` (workstation-side, opens its own `ssh -L` tunnel) answers three
       questions with an exit code: is a video actually advancing, what is `currentTime`, which
       decoder is the engine using, and what is EPP on every core.

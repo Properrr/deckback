@@ -48,7 +48,8 @@ parity on a handheld.
   Game Mode; controller navigation, persistent sign-in, sleep/resume (verified 2026-07-10) and audio
   work. It **ships hardware VP9 decode** (VA-API): blocked on m114 by green-band corruption, it was
   re-tested and came back **clean on M138/cobalt-27** (the current pin) and verified on-Deck
-  2026-07-10 — though the battery/power number under HW decode is still unmeasured. The touchscreen is
+  2026-07-10 — at **5.6 W** average under HW-decode playback (`just power`, OLED), under the ≤~9 W
+  target. Suspend/resume (`just soak`) also passed on 2026-07-10. The touchscreen is
   made **inert by default** (`disable_touch`, verified 2026-07-10); the earlier touch-*lock* is proven
   dead and disabled. Voice search, Widevine, and text entry are unverified or unbuilt. Every result so
   far is from an **OLED** unit — the LCD has run nothing.
@@ -201,10 +202,12 @@ The two highest-value next steps:
 1. **An L2 account-gate fixture** (a `conftest.py` that dismisses the guest gate) so the ~23 on-Deck
    tests actually verify the many features that are implemented-but-unrun (see the honest matrix in
    `.internal/TEST-PLAN.md` §2).
-2. **The power number under hardware decode.** VP9 VA-API decode now ships and passed the pixel gate
-   on M138 (a composited-screenshot check, never a decoder-name check — that lesson stands from the
-   m114 corruption, `.internal/findings/milestones/m114.md`). What remains unmeasured is the P4
-   battery draw with HW decode engaged (`just power`), and the LCD unit has run nothing.
+2. **Verify on an LCD (Van Gogh) unit.** VP9 VA-API decode ships and passed the pixel gate on M138 (a
+   composited-screenshot check, never a decoder-name check — that lesson stands from the m114
+   corruption, `.internal/findings/milestones/m114.md`); the P4 power draw is now measured (5.6 W avg,
+   `just power`) and suspend/resume passed (`just soak`). But **every** hardware result so far is from
+   an **OLED** unit — the LCD shares the code path and has run nothing. Voice search and mic capture
+   are also still unverified on either unit.
 
 Read `.internal/TEST-PLAN.md` first; it defines the test tiers and the hardware-TDD loop (write the
 paranoid test, make it fail on the device, implement, prove, register).

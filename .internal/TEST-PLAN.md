@@ -79,9 +79,10 @@ no decisions. It has never met a Deck (`just deck-ci --dry-run` prints the plan 
 
 `power.sh` and `soak.sh` are closed-loop as of 2026-07-09 (T5): power refuses to sample unless the
 video is playing *and* the decoder is VA-API, and soak requires `currentTime` to advance after every
-resume. **`just soak` ran for the first time on 2026-07-10** — 10 `rtcwake` suspend/resume cycles, and
-the app stayed alive with the video advancing across every resume (P6 core clause verified); its
-audio-restored and no-screen-dim clauses remain ungated. `just power` is still untested on hardware.
+resume. **`just soak` ran for the first time on 2026-07-10** — `rtcwake` suspend/resume cycles with
+the app alive and the video advancing across every resume; its audio-restored and no-screen-dim
+clauses **also passed** on 2026-07-10, so **P6 is met** (OLED). **`just power` passed 2026-07-10** too:
+**5.6 W** average under HW-decode VP9 playback (OLED), under the ≤~9 W P4 gate.
 
 ---
 

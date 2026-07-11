@@ -13,8 +13,9 @@ it. **On M138 (2026-07-10, OLED) the SAME two flags were re-tested on-Deck throu
 Mode, real Leanback VP9 playback) under the DUAL gate — `VaapiVideoDecoder`+`kIsPlatformVideoDecoder`
 AND a composited screenshot through `video_corruption_verdict` — and came back clean: 0.0% green-band
 rows across 5 frames, visually confirmed.** M138's newer ANGLE fixes the import, so `config/app.json`
-now **ships hardware decode** (the two flags are in `cobalt_flags`). STILL OPEN on M138: the P4
-power/battery number (`just power`) under HW decode is unmeasured, and the LCD unit is unknowable. Do
+now **ships hardware decode** (the two flags are in `cobalt_flags`). The P4 power number is now
+**measured**: `just power` on-Deck (OLED, 2026-07-10) averaged **5.6 W** under HW-decode VP9 playback,
+well under the ≤~9 W gate. STILL OPEN on M138: only the LCD unit (unknowable). Do
 NOT trust these flags after a future Cobalt bump without re-running the PIXEL check. See
 durable/hardware.md (★ RESOLVED note) and m114.md §"VA-API decode is VISUALLY CORRUPT" for the history.
 "Implemented" is not "verified" — say which you mean. Verified *on hardware* (all OLED): gamepad input,
@@ -34,11 +35,11 @@ L2 harness cannot even fake a panel gamescope will route. **Superseded 2026-07-1
 window is focused (Option B). Verified on-Deck: at hover a tap produced 45 mousemoves and 0 clicks and
 did not navigate. The dead `touch_lock_*`/EVIOCGRAB machinery ships disabled. **Still** not verified on
 hardware:
-auto-repeat acceleration, mic capture, voice search, and the real `just power` battery number (the P4
-gate now correctly refuses to sample on AC or with the panel dark). **P6 suspend/resume: verified
-2026-07-10** — `just soak` ran for the first time (10 `rtcwake` cycles) and the app stayed alive with
-the video advancing across every resume; its two remaining clauses (audio restored, no screen dim)
-are still ungated. `just soak` needs passwordless `sudo rtcwake` (a `zz-`-prefixed sudoers drop-in;
+auto-repeat acceleration, mic capture, and voice search. **P4 power: PASSED 2026-07-10** — `just
+power` averaged **5.6 W** under HW-decode VP9 playback (OLED), under the ≤~9 W gate. **P6
+suspend/resume: PASSED 2026-07-10** — `just soak` ran `rtcwake` cycles with the app alive and the
+video advancing across every resume, and its audio-restored and no-screen-dim clauses are now
+verified too. `just soak` needs passwordless `sudo rtcwake` (a `zz-`-prefixed sudoers drop-in;
 see the script's own error text). All OLED-only; the LCD unit has run nothing. See
 `.internal/TEST-PLAN.md` §2 before repeating any status claim.
 
