@@ -1,0 +1,14 @@
+[Unit]
+Description=Deckback: keep the screen on / prevent auto-suspend while a video is playing
+Documentation=https://github.com/properrr/deckback
+
+[Service]
+# Injects a tiny synthetic pointer motion via /dev/uinput every ~25s WHILE Deckback holds its
+# "playback active" logind inhibitor, so gamescope/Steam's input-idle timer never fires. Runs on the
+# host because the Flatpak sandbox has no /dev/uinput and gamescope ignores sandbox-emulated input.
+ExecStart=%h/.local/bin/deckback-idle-nudge
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

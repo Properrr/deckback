@@ -141,3 +141,8 @@ publish-repo bundle="io.github.properrr.deckback.flatpak" site="flatpak/pages-si
 # Install the host-side audio-repair user service. Runs ON the Deck, not from the workstation.
 audio-repair:
     ./scripts/install-audio-repair.sh
+
+# Install the host-side idle-nudge user service (keeps the screen on / no auto-suspend while a video
+# plays). Runs ON the Deck in Desktop Mode, not from the workstation. See docs/SUPPORT.md.
+idle-nudge:
+    ./scripts/install-idle-nudge.sh

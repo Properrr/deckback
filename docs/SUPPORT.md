@@ -213,12 +213,38 @@ Attach that archive to a GitHub issue along with:
 - Whether you were in Game Mode or Desktop Mode.
 - What you did and what happened.
 
+## Sleep & battery
+
+SteamOS Game Mode dims the screen and auto-suspends after a few minutes with no **controller** input,
+and it does **not** count video playback as activity — so by default it will black out the screen
+(audio keeps playing) and eventually suspend in the middle of a video. Deckback can't stop this from
+*inside* the Flatpak sandbox: SteamOS exposes no screensaver-inhibit service there, and gamescope
+ignores sandbox-emulated input for its idle timer (only a real input device counts).
+
+**The fix — the idle-nudge helper (recommended).** A small host-side service that keeps the screen on
+and prevents auto-suspend by gently nudging a real input device every ~25 s **while a video is
+playing** (SteamOS ignores anything the sandbox can do, so it has to run on the host — same as the
+audio helper). It only nudges during playback, so the Deck still sleeps normally in menus, and the
+power button works normally. Install it once, in **Desktop Mode**:
+
+    just idle-nudge      # or: ./scripts/install-idle-nudge.sh
+
+It self-uninstalls if you later remove Deckback (Flatpak can't run host commands on uninstall, so the
+helper watches for that and cleans itself up). Uninstall manually with:
+
+    systemctl --user disable --now deckback-idle-nudge.service
+    rm ~/.local/bin/deckback-idle-nudge ~/.config/systemd/user/deckback-idle-nudge.service
+
+Without the helper, the Deck simply auto-suspends during long idle playback and **resumes where you
+left off** on wake — normal Deck behavior, just not TV-like.
+
 ## Known limitations
 
 - DRM'd content (rentals, some originals) is resolution-capped by design (L3 software CDM). Free
   YouTube content is unaffected.
-- **Video is decoded in software.** Hardware (VA-API) decode was tried but renders corrupted
-  (green-banded) video on current SteamOS, so it is disabled; Deckback ships clean software decode.
+- **Video is hardware-decoded (VA-API, VP9)**, verified clean on the Steam Deck OLED. (Earlier builds
+  fell back to software because an older engine corrupted the hardware path; the current engine fixes
+  it. Not yet verified on the LCD — see the OLED-only note below.)
 - AV1 is steered off in favour of VP9/H.264: hardware AV1 decode on the Deck is unproven.
 - The app depends on Google continuing to serve the TV interface to this client; server-side
   changes can break it until a config hotfix ships.
