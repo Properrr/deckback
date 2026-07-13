@@ -711,3 +711,51 @@ Chromium profile, which is Chromium's to manage.
 layer really does keep focus still behind the card — the CDP-injected keys are the only ones we
 suppress, but Steam Input could in principle deliver a second path we do not see. That is an L2
 test: show the card, press D-pad, assert `document.activeElement` did not move.
+
+## 18. ★ Seek spike (§8.4 #3 / §12): `player.seekBy` works, chapter data does NOT (on-Deck, 2026-07-13)
+
+The seek spike §12 deferred ("bind a real seek only after spike §8.4 #3") ran on-Deck against the
+running app over CDP (`scripts/cdp.py` through an `ssh -L 9222` tunnel; five `Runtime.evaluate`
+passes). It answers §12's blocker in **both** directions, and kills a feature idea before it cost
+any code.
+
+**Verified positive — the first real TV seek primitive.** Under the TVHTML5 UA
+(`navigator.userAgent = …Cobalt/26.lts.0`), `document.querySelector('#movie_player')` **exists** and
+carries a live player API: `getPlayerResponse()`, **`seekTo(sec, allowSeekAhead)`**, and
+**`seekBy(deltaSec, allowSeekAhead)`** are all present (method probe returned
+`seekTo, seekBy, seekToLiveHead, requestSeekToWallTimeSeconds, seekToStreamTime`). So §12's claim
+that *"no input mechanism can deliver seek today"* is now **false for a fixed-interval skip**:
+`#movie_player.seekBy(±10, true)` is a verified, TV-native jump. This is the mechanism to bind to the
+dead L2/R2 triggers (§12 corollary) — **but it is a JS eval, not a DOM key**, so it needs a new
+binding kind in `keymap.cpp` (an action that calls `client_.eval_void(...)` rather than
+`dispatch_key`), not another `kActionAliases` row.
+
+**Verified negative — chapters are unreachable on this client, so chapter-aware seek is out.** The
+idea was L2/R2 jump to the prev/next YouTube *chapter*. The data is not obtainable on TVHTML5 without
+adopting yt-dlp-grade extraction fragility:
+
+| Source probed (video `aircAruvnKk`, has chapters) | Result |
+|---|---|
+| `getPlayerResponse().playerOverlays…multiMarkersPlayerBarRenderer` (desktop chapter path) | **absent** — `playerOverlays` is undefined on TVHTML5 |
+| recursive walk (depth 9) of the whole player response for `/chapter|marker/i` | **zero hits**; no chapter method on the player object either |
+| `videoDetails.shortDescription` (description-timestamp fallback) | **empty string** — TVHTML5 strips the description too |
+| out-of-band `POST /youtubei/v1/player` forced to a **WEB** client context (same-origin, page's `INNERTUBE_API_KEY`, `status 200`) | **`playabilityStatus: UNPLAYABLE`, no `playerOverlays`** — for `aircAruvnKk`, `dQw4w9WgXcQ` (Rick Astley — unquestionably playable), and `QpBTM0GO6xI` alike |
+
+The InnerTube client is `TVHTML5` (`ytcfg` `INNERTUBE_CONTEXT.client.clientName`), whose player
+response is a minimal variant (`responseContext, playabilityStatus, streamingData, captions,
+videoDetails, playerConfig, storyboards, endscreen, …` — no overlays, no description). Spoofing a
+WEB context from the app is rejected: **every** id came back UNPLAYABLE, including a guaranteed-good
+one, which means the *request context* is refused, not the videos — 2026-era YouTube gates the WEB
+client behind fresh client-versions + `visitorData`/proof-of-origin tokens. Getting chapters would
+mean tracking YouTube's client versions and tokens the way yt-dlp does: an arms race squarely
+against our minimal-fragility / R1 posture. **Do not build chapter-aware seek.** Build fixed-interval
+`seekBy` skip instead, and if you want "chapter-ish" navigation later, revisit only if the TVHTML5
+`/next` engagement-panel path (unprobed) turns out to carry `macroMarkersListEntity`.
+
+*Milestone-scoped values* (exact keys/versions, keyed to cobalt-27/M138) belong in `m138.md`; the
+strategic conclusions above are durable. *Still unverified:* the §12 hazard — whether Steam's virtual
+pad emits the **analog axis** (`ABS_Z`/`ABS_RZ`, which `input.cpp` reads) or a **digital button**
+under `steam_input.vdf`'s `TRIGGER_LEFT/RIGHT` click binding. If it emits a digital button, the
+`seekBy` binding still needs an evdev path that fires, so verify the axis reaches the launcher before
+relying on L2/R2 at all. (The reported "L2/R2 do nothing" is already fully explained without it:
+`lt`/`rt` → `scan_rewind`/`scan_forward` → unmapped, so they dispatch nothing regardless.)
