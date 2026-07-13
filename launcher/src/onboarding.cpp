@@ -6,8 +6,7 @@
 
 #include "keymap.hpp"  // resolve_binding, parse_chord
 #include "log.hpp"
-#include "overlay.hpp"  // js_trusted_html
-#include "util.hpp"     // js_string_escape
+#include "scripts.hpp"
 
 namespace deckback {
 namespace {
@@ -40,18 +39,6 @@ constexpr Label kActionLabels[] = {
     {"voice_search", "Hold to speak"},
     {"show_controls", "These controls"},
 };
-
-constexpr const char* kOverlayStyle =
-    "<style>#__deckback_help{position:fixed;inset:0;z-index:2147483646;"
-    "background:rgba(8,8,8,0.93);color:#fff;display:flex;flex-direction:column;"
-    "align-items:center;justify-content:center;gap:22px;"
-    "font:400 24px/1.35 system-ui,Roboto,Arial,sans-serif;}"
-    "#__deckback_help h2{margin:0;font-size:40px;font-weight:600;}"
-    "#__deckback_help table{border-collapse:collapse;font-size:26px;}"
-    "#__deckback_help td{padding:9px 26px;}"
-    "#__deckback_help td.k{text-align:right;color:#9fd0ff;font-weight:600;white-space:nowrap;}"
-    "#__deckback_help td.v{text-align:left;color:#eee;}"
-    "#__deckback_help .f{color:#9a9a9a;font-size:20px;}</style>";
 
 // The `voice_search` and `show_controls` actions have no DOM key by design — the launcher performs
 // them itself (input-ux §13, §7). `resolve_binding` correctly reports them as unmapped, so they
@@ -123,32 +110,19 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx) {
 
 std::string overlay_js(const std::vector<ControlRow>& rows, std::string_view title,
                        std::string_view footer) {
-  std::string body;
-  for (const ControlRow& r : rows)
-    body += std::format("<tr><td class='k'>{}</td><td class='v'>{}</td></tr>",
-                        js_string_escape(r.control), js_string_escape(r.action));
-
-  // documentElement, not body: Leanback replaces body content on navigation. Appended (not
-  // innerHTML-replaced) because unlike the error page, Leanback is still alive underneath.
-  // The HTML goes through js_trusted_html: youtube.com/tv's Trusted Types CSP rejects a bare
-  // innerHTML assignment, which is why this card rendered in every test and nothing on the Deck.
-  const std::string html = std::format("\"{}<h2>{}</h2><table>{}</table><div class='f'>{}</div>\"",
-                                       js_string_escape(kOverlayStyle), js_string_escape(title),
-                                       body, js_string_escape(footer));
-  return std::format(
-      "(function(){{var id='__deckback_help';"
-      "var old=document.getElementById(id);if(old)old.remove();"
-      "var d=document.createElement('div');d.id=id;"
-      "d.innerHTML={};"
-      "document.documentElement.appendChild(d);"
-      "return true;}})()",
-      js_trusted_html(html));
+  // The card markup, style, and Trusted Types policy live in config/scripts/overlay.js
+  // (ScriptLibrary). Rows are passed as structured [control, action] pairs, escaped ONCE by
+  // ScriptParams — the page builds the <td>s. Trusted Types is required: youtube.com/tv's CSP
+  // rejects a bare innerHTML, which is why the card rendered in tests but nothing on the Deck until
+  // the policy was added (input-ux §17). Appended (not innerHTML-replaced): Leanback is alive under it.
+  std::vector<std::pair<std::string, std::string>> pairs;
+  pairs.reserve(rows.size());
+  for (const ControlRow& r : rows) pairs.emplace_back(r.control, r.action);
+  return ScriptLibrary::instance().render(
+      "overlay", ScriptParams().set("title", title).set("footer", footer).set("rows", pairs));
 }
 
-std::string overlay_hide_js() {
-  return "(function(){var n=document.getElementById('__deckback_help');"
-         "if(n)n.remove();return true;})()";
-}
+std::string overlay_hide_js() { return ScriptLibrary::instance().render("overlay_hide"); }
 
 std::string first_run_marker_path(std::string_view state_dir) {
   // Versioned: when the controls change materially, bump the suffix and every existing user sees

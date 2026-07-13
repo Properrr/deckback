@@ -22,6 +22,7 @@
 #include "platform.hpp"
 #include "player.hpp"
 #include "profile.hpp"
+#include "scripts.hpp"
 #include "touchmode.hpp"
 #include "util.hpp"
 #include "voice.hpp"
@@ -180,6 +181,20 @@ int main(int argc, char** argv) {
   const std::string log_dir = resolve_log_dir(cfg->log_dir, runtime_dir);
   log_init(log_dir + "/deckback.log", cfg->log_max_bytes, cfg->log_max_files, cfg->log_to_stderr);
   info(std::string(kVersion));
+
+  // Page-script runtime overrides (findings durable/page-scripts.md). Same ship-a-fix-without-a-
+  // rebuild surface as app.json: a same-named .js in the scripts dir shadows the embedded default.
+  // Loaded here — before any worker thread starts — so the registry is read-only once shared. The
+  // dir defaults to <config dir>/scripts, co-located with app.json, and DECKBACK_SCRIPTS_DIR overrides.
+  {
+    std::string scripts_dir = env_or("DECKBACK_SCRIPTS_DIR", "");
+    if (scripts_dir.empty()) {
+      const auto slash = config_path.find_last_of('/');
+      const std::string cfg_dir = slash == std::string::npos ? "." : config_path.substr(0, slash);
+      scripts_dir = cfg_dir + "/scripts";
+    }
+    ScriptLibrary::instance().load_overrides(scripts_dir);
+  }
 
   if (cfg->user_agent.empty() || cfg->user_agent.starts_with("SET_FROM_SPIKE")) {
     warn("startup: user_agent unset — Leanback will not serve the TV app until S0.2 seeds it");

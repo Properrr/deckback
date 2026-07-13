@@ -234,16 +234,18 @@ void test_overlay_js_renders_rows_and_escapes() {
   const std::string js = overlay_js(rows, "Controls", "Press any button");
   assert(has(js, "__deckback_help"));
   assert(has(js, "document.documentElement.appendChild"));  // Leanback replaces body on navigation
-  assert(has(js, ">A<") && has(js, ">Select<"));
-  assert(has(js, "Press any button"));
-  // A quote in a hot-swapped label would close the JS string literal; the card would then silently
+  // Rows are passed as structured [control, action] data; the page builds the <td>s at runtime.
+  assert(has(js, "[\"A\",\"Select\"]"));
+  assert(has(js, "Controls"));            // the title param
+  assert(has(js, "Press any button"));    // the footer param
+  // A quote in a hot-swapped label would close the object literal; the card would then silently
   // never render, because a failed injection looks exactly like no injection. BOTH columns are
   // hot-swappable text: `control` comes from control_label() today, but the chord row's control is
-  // built straight from `touch_lock_chord`.
+  // built straight from `touch_lock_chord`. ScriptParams escapes each once.
   assert(has(js, "say \\\"hi\\\""));
   assert(has(js, "quote\\\" in control"));
   assert(has(js, "back\\\\slash"));
-  // Re-showing must replace, not stack a second card forever.
+  // The card body still removes any prior instance rather than stacking a second one forever.
   assert(has(js, "old.remove()"));
 }
 

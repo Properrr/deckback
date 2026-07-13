@@ -143,14 +143,16 @@ class Manifest(unittest.TestCase):
         self.assertIn('<url type="homepage">', xml, "url-homepage-missing")
         self.assertIn("<developer", xml, "developer-info-missing")
 
-    def test_the_launcher_module_can_find_the_steering_script(self):
-        """flatpak-builder copies a module's sources FLAT, so `../config/av1_steering.js` — the path
-        `launcher/CMakeLists.txt` uses in-repo — does not exist inside the module build dir. The
-        manifest must add the file as a source AND point CMake at it. Getting this wrong failed the
-        build loudly; getting it *half* right (source added, flag missing) would embed nothing."""
+    def test_the_launcher_module_can_find_the_page_scripts(self):
+        """flatpak-builder copies a module's sources FLAT, so `../config/scripts/` — the path
+        `launcher/CMakeLists.txt` globs in-repo — does not exist inside the module build dir. The
+        manifest must add the whole scripts dir as a source AND point CMake at it. Getting this wrong
+        failed the build loudly; getting it *half* right (source added, flag missing) would embed
+        nothing. The dir is the single source of truth for every injected page script (ScriptLibrary)."""
         text = MANIFEST.read_text()
-        self.assertIn("-DDECKBACK_AV1_JS=av1_steering.js", text)
-        self.assertIn("dest-filename: av1_steering.js", text)
+        self.assertIn("-DDECKBACK_SCRIPTS_DIR=scripts", text)
+        self.assertIn("dest: scripts", text)
+        self.assertIn("path: ../config/scripts", text)
 
     def test_runtime_and_sdk_branches_agree(self):
         text = MANIFEST.read_text()

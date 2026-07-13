@@ -6,6 +6,7 @@
 #include "log.hpp"
 #include "netprobe.hpp"
 #include "platform.hpp"
+#include "scripts.hpp"
 
 namespace deckback {
 namespace {
@@ -18,34 +19,14 @@ long boottime_ms() {
   return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
 }
 
-// One round trip, three signals, packed into a bitmask (see decode_play_state):
-//   bit 0  playing            — a <video> is actively presenting frames (drives the idle inhibitor)
-//   bit 1  player_open        — the watch view is up
-//   bit 2  text_input_focused — a text field has focus
-//
-// `player_open` keys off Leanback's hash route. That route shape is *verified*, not guessed: the
-// deep-link test observed `#/watch?v=<id>` with readyState=4 on-Deck (m114.md, 2026-07-08). It is
-// still a Leanback implementation detail, so it is a layer-selection signal only — nothing about
-// the keys we dispatch depends on it, and if the route changes we fall back to Browse, i.e. today's
-// context-free behavior.
-constexpr const char* kPlayStateExpr =
-    "(function(){"
-    "var v=document.querySelector('video');"
-    "var playing=!!(v&&!v.paused&&!v.ended&&v.readyState>2);"
-    "var open=!!v&&location.hash.indexOf('/watch')>=0;"
-    "var a=document.activeElement;"
-    "var t=!!(a&&(a.isContentEditable||/^(input|textarea)$/i.test(a.tagName||'')));"
-    "return (playing?1:0)|(open?2:0)|(t?4:0);})()";
-
-// Pause and return the current position so we can log a checkpoint; -1 when there is no video.
-constexpr const char* kPauseExpr =
-    "(function(){var v=document.querySelector('video');"
-    "if(!v)return -1;v.pause();return v.currentTime;})()";
-
-// Resume if paused; returns whether a video element was present.
-constexpr const char* kPlayExpr =
-    "(function(){var v=document.querySelector('video');"
-    "if(v&&v.paused){v.play();}return !!v;})()";
+// The play-state poll, suspend checkpoint, and resume nudge now live in config/scripts/player_*.js
+// (ScriptLibrary). player_state.js packs three signals into a bitmask (see decode_play_state); its
+// `player_open` bit keys off Leanback's `#/watch` hash route — verified, not guessed (m114.md
+// deep-link test, readyState=4) — but a Leanback detail, so it is a layer-selection signal only and
+// falls back to Browse if the route changes.
+std::string play_state_js() { return ScriptLibrary::instance().render("player_state"); }
+std::string pause_js() { return ScriptLibrary::instance().render("player_pause"); }
+std::string play_js() { return ScriptLibrary::instance().render("player_play"); }
 
 }  // namespace
 
@@ -84,7 +65,7 @@ void PlayerController::stop() { worker_.stop(); }
 
 bool PlayerController::poll_once() {
   // value_or(-1): an unreachable engine must decode to all-false, not to a stale or lucky value.
-  const double raw = client_.eval_number(kPlayStateExpr).value_or(-1);
+  const double raw = client_.eval_number(play_state_js()).value_or(-1);
   const int bits = raw >= 0 ? (static_cast<int>(raw) & 7) : 0;  // NaN fails the comparison too
   state_bits_.store(bits, std::memory_order_relaxed);
   const PlayState s = decode_play_state(bits);
@@ -111,7 +92,7 @@ void PlayerController::poll_loop() {
 
 std::optional<double> PlayerController::on_suspend() {
   suspend_boottime_ms_ = boottime_ms();
-  auto pos = client_.eval_number(kPauseExpr);
+  auto pos = client_.eval_number(pause_js());
   if (pos && *pos >= 0) {
     info(std::format("player: paused + checkpointed at {:.1f}s before suspend", *pos));
     return pos;
@@ -144,7 +125,7 @@ bool PlayerController::on_resume() {
     }
   }
 
-  const bool ok = client_.eval_void(kPlayExpr);
+  const bool ok = client_.eval_void(play_js());
   info(ok ? "player: resume nudge sent" : "player: resume nudge failed (engine unreachable?)");
   return ok;
 }

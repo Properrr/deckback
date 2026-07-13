@@ -57,20 +57,16 @@ modules:
       - -DCMAKE_BUILD_TYPE=Release
       - -DBUILD_TESTING=OFF      # don't build the ctest binaries inside the Flatpak
       # flatpak-builder copies a module's sources FLAT into its build dir, so `../config/` — where
-      # this file lives in the repo — does not exist here. It is added as a second source below.
-      # config/av1_steering.js is the single source of truth for codec steering: the launcher embeds
-      # it and `just smoke` injects the same file.
-      - -DDECKBACK_AV1_JS=av1_steering.js
-      - -DDECKBACK_TOUCH_JS=no_pointer.js
+      # these files live in the repo — does not exist here. config/scripts/ is added as a `dir` source
+      # at ./scripts below, and CMake globs it there. config/scripts/*.js is the single source of
+      # truth for every injected page script (ScriptLibrary); `just smoke` injects the same files.
+      - -DDECKBACK_SCRIPTS_DIR=scripts
     sources:
       - type: dir
         path: ../launcher
-      - type: file
-        path: ../config/av1_steering.js
-        dest-filename: av1_steering.js
-      - type: file
-        path: ../config/no_pointer.js
-        dest-filename: no_pointer.js
+      - type: dir
+        path: ../config/scripts
+        dest: scripts
 
   # Prebuilt Cobalt/content_shell runtime bundle (binary + paks + ICU + V8 snapshots + locales +
   # ANGLE/SwiftShader libs). Chromium resolves its resources relative to the executable, so the whole

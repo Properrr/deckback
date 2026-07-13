@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "scripts.hpp"
 
 using namespace deckback;
 
@@ -208,17 +209,19 @@ void test_skip_action_sign() {
   assert(skip_action_sign("") == 0);
 }
 
-void test_build_skip_js_carries_the_signed_delta() {
-  // The delta appears verbatim (with sign) and the seek prefers the player's own seekBy().
-  const std::string fwd = build_skip_js(10);
-  assert(fwd.find("var d=10;") != std::string::npos);
-  assert(fwd.find("p.seekBy(d,true)") != std::string::npos);
+void test_skip_script_renders_with_the_signed_delta() {
+  // The seek is now config/scripts/skip.js rendered with the signed delta as a param (input-ux §18).
+  const std::string fwd =
+      ScriptLibrary::instance().render("skip", ScriptParams().set("delta", 10));
+  assert(fwd.find(R"(({"delta":10}))") != std::string::npos);  // invoked with the param
+  assert(fwd.find("seekBy") != std::string::npos);             // the real body (public player API)
   assert(fwd.find("#movie_player") != std::string::npos);
 
-  const std::string back = build_skip_js(-10);
-  assert(back.find("var d=-10;") != std::string::npos);
+  const std::string back =
+      ScriptLibrary::instance().render("skip", ScriptParams().set("delta", -10));
+  assert(back.find(R"(({"delta":-10}))") != std::string::npos);
   // A negative jump must not run off the front of the media: the <video> fallback clamps at 0.
-  assert(back.find("Math.max(0,v.currentTime+d)") != std::string::npos);
+  assert(back.find("Math.max(0,") != std::string::npos);
 }
 
 // ---- parse_chord --------------------------------------------------------------------------------
@@ -837,7 +840,7 @@ int main() {
   test_trigger_hysteresis();
 
   test_skip_action_sign();
-  test_build_skip_js_carries_the_signed_delta();
+  test_skip_script_renders_with_the_signed_delta();
 
   test_parse_chord_valid();
   test_parse_chord_rejects_bad_input();

@@ -4,41 +4,19 @@
 #include <format>
 
 #include "log.hpp"
+#include "scripts.hpp"
 
 namespace deckback {
 namespace {
 
-// Duck/restore expressions. `pause` is the default because it is the only one that removes speaker
-// bleed entirely; `mute` keeps the timeline moving, which some users prefer.
-// The `/*voice*/` marker is not decoration: PlayerController's suspend checkpoint also contains
-// `pause()`, and the test double keys its replies off the expression text. An explicit marker keeps
-// the two apart instead of relying on substring luck.
-constexpr const char* kPauseExpr =
-    "/*voice*/(function(){var v=document.querySelector('video');"
-    "if(v&&!v.paused){v.pause();return true;}return false;})()";
-constexpr const char* kPlayExpr =
-    "/*voice*/(function(){var v=document.querySelector('video');"
-    "if(v&&v.paused){v.play();return true;}return false;})()";
-constexpr const char* kMuteExpr =
-    "/*voice*/(function(){var v=document.querySelector('video');"
-    "if(v&&!v.muted){v.muted=true;return true;}return false;})()";
-constexpr const char* kUnmuteExpr =
-    "/*voice*/(function(){var v=document.querySelector('video');"
-    "if(v&&v.muted){v.muted=false;return true;}return false;})()";
-
-// Escape a selector for embedding in a DOUBLE-quoted JS string literal. Double quotes are the right
-// choice here: CSS attribute selectors overwhelmingly use single quotes ([aria-label*='voice' i]),
-// so this leaves the common case verbatim and readable in the generated source. The surrounding CDP
-// JSON escaping is applied separately by devtools.cpp.
-std::string js_quote(std::string_view s) {
-  std::string out;
-  out.reserve(s.size() + 2);
-  for (char c : s) {
-    if (c == '"' || c == '\\') out.push_back('\\');
-    out.push_back(c);
-  }
-  return out;
-}
+// Duck/restore now live in config/scripts/voice_*.js (ScriptLibrary). `pause` is the default because
+// it is the only one that removes speaker bleed entirely; `mute` keeps the timeline moving, which
+// some users prefer. Each script carries a `/*voice*/` marker so the test double can tell it apart
+// from player_pause.js (both call pause()).
+std::string voice_duck_pause_js() { return ScriptLibrary::instance().render("voice_pause"); }
+std::string voice_duck_play_js() { return ScriptLibrary::instance().render("voice_play"); }
+std::string voice_duck_mute_js() { return ScriptLibrary::instance().render("voice_mute"); }
+std::string voice_duck_unmute_js() { return ScriptLibrary::instance().render("voice_unmute"); }
 
 }  // namespace
 
@@ -77,23 +55,11 @@ std::optional<std::pair<double, double>> parse_point(std::string_view s) {
 }
 
 std::string mic_probe_js(const std::vector<std::string>& selectors) {
-  std::string arr;
-  for (const std::string& s : selectors) {
-    if (!arr.empty()) arr += ",";
-    arr += "\"" + js_quote(s) + "\"";
-  }
-  // Returns "x,y" for the first visible candidate, "" when nothing matches. A zero-area rect means
-  // the element exists but is not laid out — clicking it would do nothing, so treat it as absent.
-  return std::format(
-      "(function(){{var sels=[{}];"
-      "for(var i=0;i<sels.length;i++){{"
-      "var e=null;try{{e=document.querySelector(sels[i]);}}catch(err){{}}"
-      "if(!e)continue;"
-      "var r=e.getBoundingClientRect();"
-      "if(!r.width||!r.height)continue;"
-      "return (r.left+r.width/2)+','+(r.top+r.height/2);}}"
-      "return '';}})()",
-      arr);
+  // config/scripts/mic_probe.js, rendered with the selector list as a JSON string[] param (one
+  // central escaper — no more per-call js_quote). Returns "x,y" for the first visible candidate, ""
+  // when nothing matches.
+  return ScriptLibrary::instance().render("mic_probe",
+                                          ScriptParams().set("selectors", selectors));
 }
 
 HoldToTalk::Action HoldToTalk::on_press(long now_ms) {
@@ -147,10 +113,10 @@ void VoiceController::duck() {
     case DuckMode::None:
       return;
     case DuckMode::Pause:
-      ducked_ = client_.eval_bool(kPauseExpr).value_or(false);
+      ducked_ = client_.eval_bool(voice_duck_pause_js()).value_or(false);
       return;
     case DuckMode::Mute:
-      ducked_ = client_.eval_bool(kMuteExpr).value_or(false);
+      ducked_ = client_.eval_bool(voice_duck_mute_js()).value_or(false);
       return;
   }
 }
@@ -162,10 +128,10 @@ void VoiceController::unduck() {
     case DuckMode::None:
       return;
     case DuckMode::Pause:
-      client_.eval_void(kPlayExpr);
+      client_.eval_void(voice_duck_play_js());
       return;
     case DuckMode::Mute:
-      client_.eval_void(kUnmuteExpr);
+      client_.eval_void(voice_duck_unmute_js());
       return;
   }
 }

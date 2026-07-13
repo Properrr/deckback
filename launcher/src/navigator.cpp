@@ -2,10 +2,9 @@
 
 #include <format>
 
-#include "av1_steering_js.hpp"  // GENERATED from config/av1_steering.js
 #include "errorpage.hpp"
 #include "log.hpp"
-#include "no_pointer_js.hpp"  // GENERATED from config/no_pointer.js
+#include "scripts.hpp"
 #include "util.hpp"
 
 namespace deckback {
@@ -59,7 +58,7 @@ void Navigator::loop() {
   // Startup CDP policy, installed before the first navigation so it takes effect on the initial
   // load. Both are sticky in DevToolsClient (re-armed across Leanback's target teardown).
   if (policy_.steer_av1) {
-    if (client_.add_script_on_new_document(kAv1SteeringScript))
+    if (ScriptLibrary::instance().install_sticky(client_, "av1_steering"))
       info("navigator: AV1 codec steering installed (AV1 -> unsupported; VP9/H.264 unaffected)");
   }
   if (policy_.disable_pointer) {
@@ -67,7 +66,7 @@ void Navigator::loop() {
     // (delivered as synthetic mouse events under gamescope) cannot navigate. Sticky across
     // Leanback's target teardown, same as the steering script. Option B (gamescope hover) is in
     // main.cpp.
-    if (client_.add_script_on_new_document(kNoPointerScript))
+    if (ScriptLibrary::instance().install_sticky(client_, "no_pointer"))
       info("navigator: touch disabled — page pointer/mouse/touch events swallowed");
   }
   if (policy_.mic_autogrant) {

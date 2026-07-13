@@ -5,7 +5,7 @@
 #include <cstring>
 #include <string>
 
-#include "no_pointer_js.hpp"  // GENERATED — the embedded pointer-swallow script
+#include "scripts.hpp"  // the pointer-swallow script now lives in the ScriptLibrary registry
 
 using deckback::focus_class_is_ours;
 
@@ -30,7 +30,7 @@ int main() {
   assert(!focus_class_is_ours("gamescope"));
 
   // --- Option A embedded script: present, and covers the events that navigate. ---
-  std::string js = deckback::kNoPointerScript ? deckback::kNoPointerScript : "";
+  std::string js(deckback::ScriptLibrary::instance().body("no_pointer"));
   assert(!js.empty());
   // The kill is only real if it stops propagation before Leanback's handlers run.
   assert(js.find("stopImmediatePropagation") != std::string::npos);

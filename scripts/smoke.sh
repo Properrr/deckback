@@ -45,7 +45,7 @@ in_container bash -lc "
     --window-size=1280,720 --data-path=/tmp/deckback-smoke about:blank >/tmp/cobalt-smoke.log 2>&1 &
   cobalt_pid=\$! ;
   python3 /work/scripts/cdp.py --port ${port} --ua \"\$UA\" --navigate \"\$URL\" \
-    --add-script /work/config/av1_steering.js \
+    --add-script /work/config/scripts/av1_steering.js \
     --expect \"!!document.querySelector('ytlr-app') && !location.href.includes('app=desktop') && !/ready to cast/i.test(document.body.innerText)\" \
     --assert-ua --assert-av1-steering \
     --ready-timeout 60 --out out/${preset}/smoke.png ;

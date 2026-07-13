@@ -1,10 +1,7 @@
 #include "errorpage.hpp"
 
-#include <format>
-
 #include "log.hpp"
-#include "overlay.hpp"  // js_trusted_html
-#include "util.hpp"     // js_string_escape
+#include "scripts.hpp"
 
 namespace deckback {
 
@@ -12,27 +9,6 @@ const char* kRetryFlagExpr =
     "(function(){var r=!!window.__deckbackRetry;window.__deckbackRetry=false;return r;})()";
 
 const char* kIsErrorPageExpr = "!!document.getElementById('__deckback_error')";
-
-namespace {
-
-// Sized for a 1280x720 buffer letterboxed onto the 800p panel, viewed at arm's length on a 7"
-// screen — the same reasoning as the toast. The button carries a visible focus ring because on a
-// controller there is no cursor to tell you what "Enter" will hit.
-constexpr const char* kErrorPageStyle =
-    "<style>"
-    "html,body{margin:0;height:100%;background:#0f0f0f;color:#fff;"
-    "font:400 24px/1.45 system-ui,Roboto,Arial,sans-serif;}"
-    "#__deckback_error{box-sizing:border-box;height:100%;display:flex;flex-direction:column;"
-    "align-items:center;justify-content:center;text-align:center;padding:6vh 8vw;gap:14px;}"
-    "h1{margin:0;font-size:44px;font-weight:600;letter-spacing:-.01em;}"
-    "p{margin:0;max-width:26em;color:#c9c9c9;}"
-    "#__deckback_retry{margin-top:22px;font:600 26px/1 system-ui,sans-serif;color:#0f0f0f;"
-    "background:#fff;border:0;border-radius:999px;padding:18px 44px;cursor:pointer;}"
-    "#__deckback_retry:focus{outline:4px solid #3ea6ff;outline-offset:4px;}"
-    "small{color:#7a7a7a;font-size:15px;word-break:break-all;max-width:34em;}"
-    "</style>";
-
-}  // namespace
 
 std::string classify_net_error(std::string_view error_text) {
   if (error_text.empty()) return {};
@@ -77,32 +53,15 @@ long retry_backoff_ms(int attempt, long min_ms, long max_ms) {
 }
 
 std::string error_page_js(const ErrorPageInfo& info) {
-  // documentElement.innerHTML, not document.write: we own about:blank here, and a <script> inserted
-  // via innerHTML would never execute — so the key handler is attached from this same evaluate.
-  //
-  // Enter and Space retry; nothing else does. Escape is deliberately NOT bound: the only thing it
-  // could do is quit, and quitting the app because the Wi-Fi blinked is not a kindness.
-  // about:blank has no Trusted Types, so js_trusted_html returns the raw string here and the page
-  // is unchanged. It is wrapped anyway so this never becomes the next controls-card surprise if we
-  // ever render the error surface over a page that does carry the CSP.
-  const std::string html = std::format(
-      "\"{}<body><div id='__deckback_error'>"
-      "<h1>{}</h1><p>{}</p>"
-      "<button id='__deckback_retry'>Try again</button>"
-      "<small>{}</small><small>{}</small>"
-      "</div></body>\"",
-      js_string_escape(kErrorPageStyle), js_string_escape(info.title), js_string_escape(info.hint),
-      js_string_escape(info.url), js_string_escape(info.detail));
-  return std::format(
-      "(function(){{"
-      "document.documentElement.innerHTML={};"
-      "window.__deckbackRetry=false;"
-      "var b=document.getElementById('__deckback_retry');"
-      "if(b){{b.focus();b.addEventListener('click',function(){{window.__deckbackRetry=true;}});}}"
-      "document.addEventListener('keydown',function(e){{"
-      "if(e.key==='Enter'||e.key===' '||e.key==='Spacebar')window.__deckbackRetry=true;}});"
-      "return true;}})()",
-      js_trusted_html(html));
+  // The page markup, style, and Trusted Types policy now live in config/scripts/error_page.js
+  // (ScriptLibrary); title/hint/url/detail are JSON string params, escaped once by ScriptParams —
+  // this call site no longer hand-escapes JS. Enter/Space retry; Escape is deliberately unbound. The
+  // script's policy falls back to the raw string on about:blank, which has no Trusted Types.
+  return ScriptLibrary::instance().render("error_page", ScriptParams()
+                                                            .set("title", info.title)
+                                                            .set("hint", info.hint)
+                                                            .set("url", info.url)
+                                                            .set("detail", info.detail));
 }
 
 bool show_error_page(DevToolsClient& client, const ErrorPageInfo& info) {

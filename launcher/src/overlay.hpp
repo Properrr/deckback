@@ -16,31 +16,14 @@ namespace deckback {
 // glyph/toast on engage, and today a user who trips the chord sees a screen that has simply stopped
 // responding to touch. That is the bug report this exists to prevent.
 
-// `js_string_escape` (util.hpp) escapes for embedding inside a **double-quoted JS string
-// literal**. This is NOT the CDP JSON escaping — devtools.cpp applies that on top, and the two must
-// not be confused: a `\"` produced here becomes `\\\"` on the wire, which is correct.
+// The Trusted Types policy that youtube.com/tv's CSP (`require-trusted-types-for 'script'`) requires
+// for any `.innerHTML` assignment used to live here as `js_trusted_html`. It is now folded into the
+// two scripts that inject HTML — config/scripts/{error_page,overlay}.js — so each is self-contained;
+// the toast uses `textContent` and needs no policy.
 
-// A JS *expression* that turns `raw_expr` (itself a JS expression evaluating to an HTML string)
-// into a value assignable to `.innerHTML` under a Trusted Types CSP, falling back to the raw string
-// where Trusted Types is absent.
-//
-// youtube.com/tv enforces `require-trusted-types-for 'script'`, so `el.innerHTML = "<h2>..."`
-// throws `This document requires 'TrustedHTML' assignment` and the assignment silently does
-// nothing. That is why the controls card rendered in every host-side test and NOTHING on the real
-// page (verified on-Deck 2026-07-10): the account gate had been masking Leanback the whole time, so
-// no earlier run ever met the CSP. `textContent` is unaffected — the toast, which uses it, was
-// always fine.
-//
-// The policy is memoised on `window` and its creation is wrapped in try/catch: a page whose CSP
-// pins a `trusted-types` allowlist without our name would otherwise throw on createPolicy, and the
-// correct degraded behaviour is a plain string (which throws visibly on the real page, never a
-// silent success). about:blank has no Trusted Types, so the error page keeps working there too.
-std::string js_trusted_html(std::string_view raw_expr);
-
-// Build the JS for one toast. Pure, so the escaping is testable: `text` lands inside a JS string
-// literal and a stray quote or backslash would otherwise produce a syntax error and a silent no-op.
-// The node is reused across calls (one id), auto-fades after `ms`, and is `pointer-events:none` so
-// it can never swallow a click meant for Leanback.
+// Build the JS for one toast (config/scripts/toast.js rendered with text/ms params). The node is
+// reused across calls (one id), auto-fades after `ms`, and is `pointer-events:none` so it can never
+// swallow a click meant for Leanback.
 std::string toast_js(std::string_view text, int ms);
 
 // JS that removes the toast immediately (used when a state ends earlier than the timeout).

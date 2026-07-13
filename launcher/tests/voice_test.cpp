@@ -65,28 +65,27 @@ void test_parse_point() {
 // ---- mic_probe_js -------------------------------------------------------------------------------
 
 void test_mic_probe_js() {
+  // Now config/scripts/mic_probe.js rendered with the selectors as a JSON string[] param.
   const std::string js = mic_probe_js({"[aria-label*='voice' i]", ".ytlr__mic"});
-  // Selectors are embedded verbatim, in order, so a config hotfix reaches the page without a
-  // rebuild.
+  // Selectors reach the page verbatim, in order, so a config hotfix needs no rebuild.
   assert(js.find("[aria-label*='voice' i]") != std::string::npos);
   assert(js.find(".ytlr__mic") != std::string::npos);
   assert(js.find("[aria-label*='voice' i]") < js.find(".ytlr__mic"));
-  // It measures the rect (that is what makes the click land) and guards against a zero-area
-  // element.
+  // ...and they arrive as the selectors param the script reads.
+  assert(js.find("\"selectors\":[") != std::string::npos);
+  // The body measures the rect (that is what makes the click land) and guards against a zero-area
+  // element, and try/catches an invalid selector.
   assert(js.find("getBoundingClientRect") != std::string::npos);
-  assert(js.find("if(!r.width||!r.height)continue") != std::string::npos);
-  // A bad selector must not abort the search — querySelector throws on invalid syntax.
-  assert(js.find("try{") != std::string::npos);
+  assert(js.find("!r.width || !r.height") != std::string::npos);
+  assert(js.find("try {") != std::string::npos);
 
-  // Single quotes -- the common form in CSS attribute selectors -- survive verbatim, because the
-  // generated JS string is double-quoted. Asserted above via the aria-label selectors.
-  // A double quote inside a selector must be escaped, or the generated JS is malformed.
+  // A double quote inside a selector must be escaped by ScriptParams, or the object literal breaks.
   const std::string q = mic_probe_js({"[title=\"x\"]"});
   assert(q.find("[title=\\\"x\\\"]") != std::string::npos);
 
-  // No selectors: a well-formed program that finds nothing, not a syntax error.
+  // No selectors: a well-formed program that finds nothing (an empty JSON array), not a syntax error.
   const std::string empty = mic_probe_js({});
-  assert(empty.find("var sels=[]") != std::string::npos);
+  assert(empty.find("\"selectors\":[]") != std::string::npos);
 }
 
 // ---- HoldToTalk ---------------------------------------------------------------------------------
@@ -235,9 +234,9 @@ void test_duck_mute_mutes_and_restores() {
   server.take_requests();
 
   assert(v.start());
-  assert(sent(server.take_requests(), "v.muted=true"));
+  assert(sent(server.take_requests(), "v.muted = true"));
   v.stop();
-  assert(sent(server.take_requests(), "v.muted=false"));
+  assert(sent(server.take_requests(), "v.muted = false"));
 }
 
 void test_click_toggle_mode_clicks_twice() {

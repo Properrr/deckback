@@ -17,6 +17,7 @@
 
 #include "fake_cdp_server.hpp"
 #include "haptic.hpp"
+#include "scripts.hpp"
 
 using namespace deckback;
 
@@ -26,7 +27,7 @@ bool has(const std::string& s, const std::string& needle) {
   return s.find(needle) != std::string::npos;
 }
 
-// ---- toast_js -----------------------------------------------------------------------------------
+// ---- toast_js (now config/scripts/toast.js rendered with text/ms params) ------------------------
 
 void test_toast_js_shape() {
   const std::string js = toast_js("Touchscreen locked", 2000);
@@ -40,40 +41,36 @@ void test_toast_js_shape() {
   // The timeout handle is cleared before being re-armed, or a rapid lock/unlock leaves the older
   // timer to hide the newer toast.
   assert(has(js, "clearTimeout(window.__deckbackToastT)"));
-  assert(has(js, "2000)"));
-  assert(has(js, "Touchscreen locked"));
+  // text/ms now arrive as JSON params on the invocation, not interpolated into the body.
+  assert(has(js, "\"ms\":2000"));
+  assert(has(js, "\"text\":\"Touchscreen locked\""));
 }
 
 void test_toast_js_escapes_quotes_and_backslashes() {
-  // The text is interpolated into a double-quoted JS string literal. An unescaped quote closes it
-  // early and the whole statement is a syntax error — which we would never see, because
-  // show_toast() ignores the result by design.
-  const std::string js = toast_js("say \"hi\"", 100);
-  assert(has(js, "d.textContent=\"say \\\"hi\\\"\";"));
-
-  const std::string b = toast_js("a\\b", 100);
-  assert(has(b, "d.textContent=\"a\\\\b\";"));
-  // A lone trailing backslash would otherwise escape the literal's closing quote.
-  const std::string t = toast_js("dir\\", 100);
-  assert(has(t, "d.textContent=\"dir\\\\\";"));
+  // The text is now a JSON string param, escaped once by ScriptParams. An unescaped quote would
+  // close the object literal early — the same syntax-error risk, centralised.
+  assert(has(toast_js("say \"hi\"", 100), R"("text":"say \"hi\"")"));
+  assert(has(toast_js("a\\b", 100), R"("text":"a\\b")"));
+  // A lone trailing backslash would otherwise escape the string's closing quote.
+  assert(has(toast_js("dir\\", 100), R"("text":"dir\\")"));
 }
 
 void test_toast_js_escapes_newlines() {
   // The lock toast is two lines ("Touchscreen locked\nHold l3+r3 to unlock"). A raw newline inside
-  // a JS string literal is a syntax error, so this is the shipped path, not a hypothetical one.
+  // the JSON string is a syntax error, so this is the shipped path, not a hypothetical one.
   const std::string js = toast_js("one\ntwo", 100);
-  assert(has(js, "d.textContent=\"one\\ntwo\";"));
-  assert(!has(js, "\"one\ntwo\""));  // no raw newline survived
+  assert(has(js, R"("text":"one\ntwo")"));
+  assert(!has(js, "one\ntwo"));  // no raw newline survived into the param
   // white-space:pre, or the escaped \n renders as a space.
   assert(has(js, "white-space:pre"));
 }
 
 void test_toast_js_clamps_negative_duration() {
-  // setTimeout(fn, -1) fires immediately: the toast would flash and vanish. Clamp rather than
-  // trust.
+  // setTimeout(fn, -1) fires immediately: the toast would flash and vanish. The clamp now lives in
+  // the script (p.ms < 0 ? 0 : p.ms), so the param carries -1 and the body defends against it.
   const std::string js = toast_js("x", -1);
-  assert(has(js, ",0)"));
-  assert(!has(js, "-1)"));
+  assert(has(js, "\"ms\":-1"));
+  assert(has(js, "p.ms < 0 ? 0 : p.ms"));
 }
 
 void test_toast_hide_js() {
@@ -83,30 +80,22 @@ void test_toast_hide_js() {
   assert(has(js, "opacity"));
 }
 
-// ---- js_trusted_html ----------------------------------------------------------------------------
+// ---- Trusted Types (folded into the HTML-injecting scripts) -------------------------------------
 
-void test_trusted_html_wraps_and_falls_back() {
-  const std::string js = js_trusted_html("\"<h2>hi</h2>\"");
-  // The raw HTML must still be in there -- we wrap it, we don't drop it.
-  assert(has(js, "<h2>hi</h2>"));
-  // It goes through a Trusted Types policy when one is available...
-  assert(has(js, "trustedTypes"));
-  assert(has(js, "createPolicy"));
-  assert(has(js, "createHTML"));
-  // ...and returns the raw string when it is not (about:blank) or when policy creation throws.
-  assert(has(js, "if(!T)return"));
-  assert(has(js, "catch"));
-  // The policy is memoised, or every re-inject after a navigation throws "policy already exists".
-  assert(has(js, "__dbTTP"));
-}
-
-void test_trusted_html_is_a_single_expression() {
-  // It is dropped straight into `d.innerHTML=<here>;`, so it must be one parenthesised expression,
-  // not a statement. A leading '(' and an IIFE call are the cheap structural proxy for that.
-  const std::string js = js_trusted_html("\"x\"");
-  assert(!js.empty());
-  assert(js.front() == '(');
-  assert(js.back() == ')');
+void test_trusted_types_folded_into_html_scripts() {
+  // js_trusted_html is gone; the policy youtube.com/tv's CSP requires now lives INSIDE the two
+  // scripts that assign innerHTML. Without it, the assignment silently throws on the real page (the
+  // card rendered in tests but nothing on the Deck until this was added — input-ux §17).
+  for (const char* name : {"overlay", "error_page"}) {
+    const std::string b(ScriptLibrary::instance().body(name));
+    assert(has(b, "trustedTypes"));
+    assert(has(b, "createPolicy"));
+    assert(has(b, "createHTML"));
+    // Memoised on window, or every re-inject after a navigation throws "policy already exists".
+    assert(has(b, "__dbTTP"));
+    // ...and it degrades to the raw string in a try/catch (about:blank has no Trusted Types).
+    assert(has(b, "catch"));
+  }
 }
 
 // ---- show_toast over CDP ------------------------------------------------------------------------
@@ -175,8 +164,7 @@ int main() {
   test_toast_js_escapes_newlines();
   test_toast_js_clamps_negative_duration();
   test_toast_hide_js();
-  test_trusted_html_wraps_and_falls_back();
-  test_trusted_html_is_a_single_expression();
+  test_trusted_types_folded_into_html_scripts();
 
   test_show_toast_evaluates_on_the_page();
   test_show_toast_survives_a_dead_engine();
