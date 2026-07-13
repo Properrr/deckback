@@ -39,6 +39,7 @@ struct GamepadOptions {
   KeymapConfig keymap;
   TouchConfig touch;
   FastScrollConfig fast_scroll;
+  int skip_seconds = 10;  // ± jump for a trigger bound to skip_back/skip_fwd (input-ux §18)
   const LayerState* layers = nullptr;
   VoiceController* voice = nullptr;
   OnboardingController* onboarding = nullptr;
@@ -113,6 +114,9 @@ class GamepadInput {
   const LayerState* layers_ = nullptr;  // context source; nullptr = always Browse
   std::string lt_key_, rt_key_;  // analog triggers; empty = unbound. Ignored while that trigger is
                                  // a modifier (i.e. its modifier layer is non-empty).
+  // A trigger bound to skip_back/skip_fwd carries a prebuilt seekBy() expression instead of a DOM
+  // key (input-ux §18); non-empty takes precedence over lt_key_/rt_key_ on the press edge.
+  std::string lt_skip_js_, rt_skip_js_;
   bool lt_down_ = false, rt_down_ = false;
 
   // Hold-to-talk (findings input-ux §13). voice_ is not owned and may be null.

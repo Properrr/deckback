@@ -179,6 +179,21 @@ bool trigger_pressed(int value, bool was_pressed) {
   return value >= kTriggerPress;
 }
 
+int skip_action_sign(std::string_view value) {
+  if (value == "skip_fwd" || value == "skip_forward") return 1;
+  if (value == "skip_back" || value == "skip_backward") return -1;
+  return 0;
+}
+
+std::string build_skip_js(int delta_seconds) {
+  return std::format(
+      "(function(){{var d={};var p=document.querySelector('#movie_player');"
+      "if(p&&typeof p.seekBy==='function'){{p.seekBy(d,true);return true;}}"
+      "var v=document.querySelector('video');"
+      "if(v){{v.currentTime=Math.max(0,v.currentTime+d);return true;}}return false;}})()",
+      delta_seconds);
+}
+
 FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg) {
   if (!cfg.enabled) return {nullptr, 0};
 

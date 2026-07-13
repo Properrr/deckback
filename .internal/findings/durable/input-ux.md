@@ -759,3 +759,16 @@ under `steam_input.vdf`'s `TRIGGER_LEFT/RIGHT` click binding. If it emits a digi
 `seekBy` binding still needs an evdev path that fires, so verify the axis reaches the launcher before
 relying on L2/R2 at all. (The reported "L2/R2 do nothing" is already fully explained without it:
 `lt`/`rt` → `scan_rewind`/`scan_forward` → unmapped, so they dispatch nothing regardless.)
+
+**Implemented 2026-07-13 (code, not yet hardware-verified).** The fixed-interval `seekBy` skip is
+built. New `skip_action_sign()`/`build_skip_js()` in `keymap.cpp` recognise the `skip_back`/`skip_fwd`
+actions (not `kActionAliases` rows — they resolve to a JS expression, not a DOM key); `input.cpp`
+prebuilds the expression per trigger at construction and evaluates it with `client_.eval_void(...)` on
+the trigger's press edge, taking precedence over any DOM-key binding. Interval is `config:skip_seconds`
+(default 10, hot-swappable). `config/app.json` now ships `lt`→`skip_back`, `rt`→`skip_fwd`, replacing
+the dead `scan_rewind`/`scan_forward`. L0-tested (`input_test.cpp`: `skip_action_sign`, the signed-delta
+JS shape, and `skip_seconds` config parse + default). **Rides into the in-flight M138 bundle.** What
+this does NOT yet prove: that the press edge actually fires on-Deck — i.e. the unresolved analog-axis
+vs digital-button question above. First on-Deck test of this build must confirm L2/R2 seek the player;
+if they still do nothing, the trigger reaches the launcher as an EV_KEY button, not `ABS_Z`/`ABS_RZ`,
+and the dispatch must move into the button path (or `steam_input.vdf` must bind the analog axis).

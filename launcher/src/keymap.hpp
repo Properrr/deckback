@@ -47,6 +47,20 @@ std::vector<ButtonBinding> build_button_map(
 // chatter. Xbox-pad triggers report 0..255. Press at >=192, release only below 64.
 bool trigger_pressed(int value, bool was_pressed);
 
+// ---- fixed-interval skip (findings input-ux §18) ------------------------------------------------
+
+// A skip binding performs a fixed-interval jump through the Leanback player over CDP, NOT a DOM key
+// — chapter data is unreachable on TVHTML5 (m138.md S0.6), so L2/R2 do a plain ±N s seek instead.
+// Returns the sign of the jump (+1 forward, -1 back) for a skip action value, or 0 when `value` is
+// not one. Bound only to the analog triggers today; the input layer evaluates build_skip_js() on the
+// press edge rather than dispatching a key through the button map.
+int skip_action_sign(std::string_view value);
+
+// A JS expression that seeks the player by `delta_seconds` (negative = back), preferring the
+// player's own seekBy() and falling back to the raw <video> element, clamped at 0. Evaluated for
+// side effects over CDP (DevToolsClient::eval_void), so it returns a bool the caller ignores.
+std::string build_skip_js(int delta_seconds);
+
 // ---- right-stick fast traversal (findings input-ux §7) -----------------------------------------
 
 // The right stick is otherwise unused (only its R3 click, as half the touch-lock chord), while

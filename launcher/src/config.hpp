@@ -66,6 +66,11 @@ struct Config {
   int right_stick_slow_ms = 200;
   int right_stick_fast_ms = 45;
 
+  // Fixed-interval skip (findings input-ux §18). A trigger bound to `skip_back`/`skip_fwd` jumps the
+  // player by this many seconds via the player's own seekBy() over CDP — chapter-aware seeking is
+  // unbuildable on TVHTML5 (m138.md S0.6), so this is the plain ±N s console model. Hot-swappable.
+  int skip_seconds = 10;
+
   // Phase 5 voice search (findings input-ux §13). Ships DISABLED: `kSbKeyMicrophone` does nothing
   // on this build, so voice must click Leanback's own soft-mic button — and whether that button
   // even exists under our Cobalt UA is the unverified V0 spike. A dead button is worse than a

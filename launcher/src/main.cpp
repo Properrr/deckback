@@ -314,6 +314,7 @@ int main(int argc, char** argv) {
                     cfg->touch_lock_unlock_hold_ms, cfg->touch_lock_toast, cfg->touch_lock_haptic};
     gp.fast_scroll = FastScrollConfig{cfg->right_stick_scroll, cfg->right_stick_deadzone,
                                       cfg->right_stick_slow_ms, cfg->right_stick_fast_ms};
+    gp.skip_seconds = cfg->skip_seconds;
     gp.layers = player ? &layers : nullptr;
     gp.voice = voice ? &*voice : nullptr;
     gp.onboarding = onboarding ? &*onboarding : nullptr;

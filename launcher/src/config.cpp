@@ -186,6 +186,7 @@ std::optional<Config> Config::load(const std::string& path) {
   read_into(s, "right_stick_deadzone", c.right_stick_deadzone);
   read_into(s, "right_stick_slow_ms", c.right_stick_slow_ms);
   read_into(s, "right_stick_fast_ms", c.right_stick_fast_ms);
+  read_into(s, "skip_seconds", c.skip_seconds);
   read_into(s, "voice_enabled", c.voice_enabled);
   read_into(s, "voice_hold_ms", c.voice_hold_ms);
   read_into(s, "voice_duck", c.voice_duck);

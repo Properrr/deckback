@@ -193,6 +193,34 @@ void test_trigger_hysteresis() {
   assert(!trigger_pressed(0, true));
 }
 
+// ---- fixed-interval skip (input-ux §18) ---------------------------------------------------------
+
+void test_skip_action_sign() {
+  // Forward and back, plus the longer spellings a hot-swapped app.json might use.
+  assert(skip_action_sign("skip_fwd") == 1);
+  assert(skip_action_sign("skip_forward") == 1);
+  assert(skip_action_sign("skip_back") == -1);
+  assert(skip_action_sign("skip_backward") == -1);
+  // Everything else — including the scrub actions and DOM keys — is NOT a skip.
+  assert(skip_action_sign("scrub_fwd") == 0);
+  assert(skip_action_sign("scrub_back") == 0);
+  assert(skip_action_sign("ArrowRight") == 0);
+  assert(skip_action_sign("") == 0);
+}
+
+void test_build_skip_js_carries_the_signed_delta() {
+  // The delta appears verbatim (with sign) and the seek prefers the player's own seekBy().
+  const std::string fwd = build_skip_js(10);
+  assert(fwd.find("var d=10;") != std::string::npos);
+  assert(fwd.find("p.seekBy(d,true)") != std::string::npos);
+  assert(fwd.find("#movie_player") != std::string::npos);
+
+  const std::string back = build_skip_js(-10);
+  assert(back.find("var d=-10;") != std::string::npos);
+  // A negative jump must not run off the front of the media: the <video> fallback clamps at 0.
+  assert(back.find("Math.max(0,v.currentTime+d)") != std::string::npos);
+}
+
 // ---- parse_chord --------------------------------------------------------------------------------
 
 void test_parse_chord_valid() {
@@ -330,6 +358,31 @@ void test_config_parses_right_stick() {
   assert(cfg->right_stick_slow_ms == 300);
   assert(cfg->right_stick_fast_ms == 60);
   std::remove(path.c_str());
+}
+
+void test_config_skip_seconds() {
+  // Present: parsed. Absent: the default 10 s stands (a hot-swapped app.json need not carry it).
+  const char* json = R"({ "url": "https://x", "skip_seconds": 30 })";
+  const std::string path = "/tmp/deckback_input_test_skip.json";
+  FILE* f = std::fopen(path.c_str(), "w");
+  assert(f);
+  std::fputs(json, f);
+  std::fclose(f);
+  auto cfg = Config::load(path);
+  assert(cfg.has_value());
+  assert(cfg->skip_seconds == 30);
+  std::remove(path.c_str());
+
+  const char* json2 = R"({ "url": "https://x" })";
+  const std::string path2 = "/tmp/deckback_input_test_skip2.json";
+  FILE* g = std::fopen(path2.c_str(), "w");
+  assert(g);
+  std::fputs(json2, g);
+  std::fclose(g);
+  auto cfg2 = Config::load(path2);
+  assert(cfg2.has_value());
+  assert(cfg2->skip_seconds == 10);
+  std::remove(path2.c_str());
 }
 
 // ---- fast_scroll (right stick) ------------------------------------------------------------------
@@ -783,6 +836,9 @@ int main() {
 
   test_trigger_hysteresis();
 
+  test_skip_action_sign();
+  test_build_skip_js_carries_the_signed_delta();
+
   test_parse_chord_valid();
   test_parse_chord_rejects_bad_input();
 
@@ -791,6 +847,7 @@ int main() {
   test_config_parses_touch_settings();
   test_config_touch_defaults();
   test_config_parses_right_stick();
+  test_config_skip_seconds();
 
   test_fast_scroll_idle_inside_the_deadzone();
   test_fast_scroll_disabled_is_always_idle();

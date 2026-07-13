@@ -95,6 +95,13 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     if (name != "lt" && name != "rt") continue;
     const bool is_mod = (name == "lt") ? !maps_.lt_mod.empty() : !maps_.rt_mod.empty();
     if (is_mod) continue;
+    // A skip action is not a DOM key: prebuild its seekBy() expression and let the press edge eval
+    // it (input-ux §18). Checked before resolve_binding so it never falls through to "no DOM key".
+    if (int sign = skip_action_sign(value); sign != 0) {
+      (name == "lt" ? lt_skip_js_ : rt_skip_js_) = build_skip_js(sign * opts.skip_seconds);
+      info(std::format("input: bind {} -> skip {}{}s", name, sign < 0 ? "-" : "+", opts.skip_seconds));
+      continue;
+    }
     std::string key = resolve_binding(value);
     if (key.empty())
       unmapped.push_back(std::format("keymap.{}={} (no DOM key)", name, value));
@@ -349,18 +356,28 @@ void GamepadInput::handle_event(int type, int code, int value) {
     // case, so the press-edge dispatch below is naturally skipped).
     case ABS_Z: {
       const bool now = trigger_pressed(value, lt_down_);
-      if (now && !lt_down_ && !lt_key_.empty()) {
-        info(std::format("input: lt -> {}", lt_key_));
-        client_.dispatch_key(lt_key_);
+      if (now && !lt_down_) {
+        if (!lt_skip_js_.empty()) {
+          info("input: lt -> skip");
+          client_.eval_void(lt_skip_js_);
+        } else if (!lt_key_.empty()) {
+          info(std::format("input: lt -> {}", lt_key_));
+          client_.dispatch_key(lt_key_);
+        }
       }
       lt_down_ = now;
       return;
     }
     case ABS_RZ: {
       const bool now = trigger_pressed(value, rt_down_);
-      if (now && !rt_down_ && !rt_key_.empty()) {
-        info(std::format("input: rt -> {}", rt_key_));
-        client_.dispatch_key(rt_key_);
+      if (now && !rt_down_) {
+        if (!rt_skip_js_.empty()) {
+          info("input: rt -> skip");
+          client_.eval_void(rt_skip_js_);
+        } else if (!rt_key_.empty()) {
+          info(std::format("input: rt -> {}", rt_key_));
+          client_.dispatch_key(rt_key_);
+        }
       }
       rt_down_ = now;
       return;
