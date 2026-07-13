@@ -137,6 +137,21 @@ std::vector<std::pair<std::string, std::string>> read_string_object(const std::s
   return out;
 }
 
+// Typed field assignment: overwrite `out` only when the key is present and parses. Overloaded on
+// the field type so Config::load stays one line per key with no cast noise.
+void read_into(const std::string& s, std::string_view key, std::string& out) {
+  if (auto v = read_string(s, key)) out = std::move(*v);
+}
+void read_into(const std::string& s, std::string_view key, bool& out) {
+  if (auto v = read_bool(s, key)) out = *v;
+}
+void read_into(const std::string& s, std::string_view key, int& out) {
+  if (auto v = read_int(s, key)) out = static_cast<int>(*v);
+}
+void read_into(const std::string& s, std::string_view key, long& out) {
+  if (auto v = read_int(s, key)) out = *v;
+}
+
 }  // namespace
 
 std::optional<Config> Config::load(const std::string& path) {
@@ -147,12 +162,11 @@ std::optional<Config> Config::load(const std::string& path) {
   }
   const std::string& s = *text;
   Config c;
-  if (auto v = read_string(s, "url")) c.url = *v;
-  if (auto v = read_string(s, "user_agent")) c.user_agent = *v;
-  if (auto v = read_int(s, "remote_debugging_port")) c.remote_debugging_port = static_cast<int>(*v);
-  if (auto v = read_bool(s, "restart_on_crash")) c.watchdog_restart_on_crash = *v;
-  if (auto v = read_int(s, "max_restarts_per_minute"))
-    c.watchdog_max_restarts_per_minute = static_cast<int>(*v);
+  read_into(s, "url", c.url);
+  read_into(s, "user_agent", c.user_agent);
+  read_into(s, "remote_debugging_port", c.remote_debugging_port);
+  read_into(s, "restart_on_crash", c.watchdog_restart_on_crash);
+  read_into(s, "max_restarts_per_minute", c.watchdog_max_restarts_per_minute);
   c.cobalt_flags = read_string_array(s, "cobalt_flags");
   // `"keymap"` includes its closing quote in the needle, so it cannot match `"keymap_player"`.
   c.keymap = read_string_object(s, "keymap");
@@ -160,46 +174,42 @@ std::optional<Config> Config::load(const std::string& path) {
   c.keymap_osk = read_string_object(s, "keymap_osk");
   c.keymap_lt = read_string_object(s, "keymap_lt");
   c.keymap_rt = read_string_object(s, "keymap_rt");
-  if (auto v = read_bool(s, "disable_touch")) c.disable_touch = *v;
-  if (auto v = read_bool(s, "block_touchscreen")) c.block_touchscreen = *v;
-  if (auto v = read_bool(s, "touch_lock_enabled")) c.touch_lock_enabled = *v;
-  if (auto v = read_string(s, "touch_lock_chord")) c.touch_lock_chord = *v;
-  if (auto v = read_int(s, "touch_lock_unlock_hold_ms"))
-    c.touch_lock_unlock_hold_ms = static_cast<int>(*v);
-  if (auto v = read_bool(s, "touch_lock_toast")) c.touch_lock_toast = *v;
-  if (auto v = read_bool(s, "touch_lock_haptic")) c.touch_lock_haptic = *v;
-  if (auto v = read_bool(s, "first_run_overlay")) c.first_run_overlay = *v;
-  if (auto v = read_bool(s, "right_stick_scroll")) c.right_stick_scroll = *v;
-  if (auto v = read_int(s, "right_stick_deadzone")) c.right_stick_deadzone = static_cast<int>(*v);
-  if (auto v = read_int(s, "right_stick_slow_ms")) c.right_stick_slow_ms = static_cast<int>(*v);
-  if (auto v = read_int(s, "right_stick_fast_ms")) c.right_stick_fast_ms = static_cast<int>(*v);
-  if (auto v = read_bool(s, "voice_enabled")) c.voice_enabled = *v;
-  if (auto v = read_int(s, "voice_hold_ms")) c.voice_hold_ms = static_cast<int>(*v);
-  if (auto v = read_string(s, "voice_duck")) c.voice_duck = *v;
-  if (auto v = read_bool(s, "voice_click_toggles")) c.voice_click_toggles = *v;
+  read_into(s, "disable_touch", c.disable_touch);
+  read_into(s, "block_touchscreen", c.block_touchscreen);
+  read_into(s, "touch_lock_enabled", c.touch_lock_enabled);
+  read_into(s, "touch_lock_chord", c.touch_lock_chord);
+  read_into(s, "touch_lock_unlock_hold_ms", c.touch_lock_unlock_hold_ms);
+  read_into(s, "touch_lock_toast", c.touch_lock_toast);
+  read_into(s, "touch_lock_haptic", c.touch_lock_haptic);
+  read_into(s, "first_run_overlay", c.first_run_overlay);
+  read_into(s, "right_stick_scroll", c.right_stick_scroll);
+  read_into(s, "right_stick_deadzone", c.right_stick_deadzone);
+  read_into(s, "right_stick_slow_ms", c.right_stick_slow_ms);
+  read_into(s, "right_stick_fast_ms", c.right_stick_fast_ms);
+  read_into(s, "voice_enabled", c.voice_enabled);
+  read_into(s, "voice_hold_ms", c.voice_hold_ms);
+  read_into(s, "voice_duck", c.voice_duck);
+  read_into(s, "voice_click_toggles", c.voice_click_toggles);
   c.voice_mic_selectors = read_string_array(s, "voice_mic_selectors");
-  if (auto v = read_bool(s, "steer_av1_unsupported")) c.steer_av1 = *v;
-  if (auto v = read_bool(s, "mic_autogrant")) c.mic_autogrant = *v;
-  if (auto v = read_bool(s, "error_page")) c.error_page = *v;
-  if (auto v = read_int(s, "error_retry_min_ms")) c.error_retry_min_ms = static_cast<int>(*v);
-  if (auto v = read_int(s, "error_retry_max_ms")) c.error_retry_max_ms = static_cast<int>(*v);
-  if (auto v = read_string(s, "error_title")) c.error_title = *v;
-  if (auto v = read_string(s, "error_hint")) c.error_hint = *v;
-  if (auto v = read_string(s, "cdm_url")) c.cdm_url = *v;
-  if (auto v = read_string(s, "cdm_sha256")) c.cdm_sha256 = *v;
-  if (auto v = read_string(s, "log_directory")) c.log_dir = *v;
-  if (auto v = read_int(s, "log_max_bytes")) c.log_max_bytes = *v;
-  if (auto v = read_int(s, "log_max_files")) c.log_max_files = static_cast<int>(*v);
-  if (auto v = read_bool(s, "log_mirror_stderr")) c.log_to_stderr = *v;
-  if (auto v = read_int(s, "devtools_poll_ms")) c.devtools_poll_ms = static_cast<int>(*v);
-  if (auto v = read_bool(s, "idle_inhibit_synthetic_fallback"))
-    c.idle_inhibit_synthetic_fallback = *v;
-  if (auto v = read_string(s, "resume_probe_host")) c.resume_probe_host = *v;
-  if (auto v = read_int(s, "resume_probe_port")) c.resume_probe_port = static_cast<int>(*v);
-  if (auto v = read_int(s, "resume_online_timeout_ms"))
-    c.resume_online_timeout_ms = static_cast<int>(*v);
-  if (auto v = read_int(s, "resume_reload_after_ms"))
-    c.resume_reload_after_ms = static_cast<int>(*v);
+  read_into(s, "steer_av1_unsupported", c.steer_av1);
+  read_into(s, "mic_autogrant", c.mic_autogrant);
+  read_into(s, "error_page", c.error_page);
+  read_into(s, "error_retry_min_ms", c.error_retry_min_ms);
+  read_into(s, "error_retry_max_ms", c.error_retry_max_ms);
+  read_into(s, "error_title", c.error_title);
+  read_into(s, "error_hint", c.error_hint);
+  read_into(s, "cdm_url", c.cdm_url);
+  read_into(s, "cdm_sha256", c.cdm_sha256);
+  read_into(s, "log_directory", c.log_dir);
+  read_into(s, "log_max_bytes", c.log_max_bytes);
+  read_into(s, "log_max_files", c.log_max_files);
+  read_into(s, "log_mirror_stderr", c.log_to_stderr);
+  read_into(s, "devtools_poll_ms", c.devtools_poll_ms);
+  read_into(s, "idle_inhibit_synthetic_fallback", c.idle_inhibit_synthetic_fallback);
+  read_into(s, "resume_probe_host", c.resume_probe_host);
+  read_into(s, "resume_probe_port", c.resume_probe_port);
+  read_into(s, "resume_online_timeout_ms", c.resume_online_timeout_ms);
+  read_into(s, "resume_reload_after_ms", c.resume_reload_after_ms);
   return c;
 }
 

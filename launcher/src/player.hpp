@@ -1,13 +1,11 @@
 #pragma once
 #include <atomic>
-#include <condition_variable>
-#include <mutex>
 #include <optional>
 #include <string>
-#include <thread>
 
 #include "devtools.hpp"
 #include "layers.hpp"
+#include "worker.hpp"
 
 namespace deckback {
 
@@ -90,11 +88,7 @@ class PlayerController {
   // and would drag in -latomic on GCC for no benefit.
   std::atomic<int> state_bits_{0};
 
-  std::thread thread_;
-  std::mutex mu_;
-  std::condition_variable cv_;
-  bool stop_ = false;
-  bool started_ = false;
+  WorkerThread worker_;
 };
 
 }  // namespace deckback

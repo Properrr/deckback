@@ -1,13 +1,18 @@
 #pragma once
-#include <condition_variable>
 #include <functional>
-#include <mutex>
 #include <string>
-#include <thread>
+#include <string_view>
 
 #include "devtools.hpp"
+#include "worker.hpp"
 
 namespace deckback {
+
+// The "already on the app" needle for `url`: host+path, minus scheme, query/fragment, and trailing
+// slashes. e.g. https://www.youtube.com/tv -> www.youtube.com/tv, which the loaded ".../tv#/"
+// contains but a desktop redirect (".../?app=desktop") or about:blank does not. Pure — this is the
+// predicate that decides whether the Navigator re-navigates, so it is unit-testable.
+std::string app_needle(std::string_view url);
 
 // Owns the TV-UA-injection + initial-navigation contract over CDP (findings m114 S0.2).
 // content_shell ignores `--user-agent` and, if handed the app URL positionally, would load it once
@@ -57,7 +62,6 @@ class Navigator {
 
  private:
   void loop();
-  bool wait_or_stop(int ms);  // returns true if asked to stop
   // One navigation attempt. Enters (or leaves) the error state depending on what CDP reports, and
   // schedules the next automatic retry. Returns whether we landed on the app.
   bool try_navigate();
@@ -76,11 +80,7 @@ class Navigator {
   int fail_attempt_ = 0;
   long next_retry_ms_ = 0;
 
-  std::thread thread_;
-  std::mutex mu_;
-  std::condition_variable cv_;
-  bool stop_ = false;
-  bool started_ = false;
+  WorkerThread worker_;
 };
 
 }  // namespace deckback

@@ -76,6 +76,7 @@ add_executable(deckback-launcher
   src/navigator.cpp
   src/errorpage.cpp
   src/input.cpp
+  src/keymap.cpp
   src/layers.cpp
   src/voice.cpp
   src/overlay.cpp
@@ -172,9 +173,9 @@ if(BUILD_TESTING)
 
   # Phase 3 input: pure keymap/direction/trigger logic. Pulls in devtools.cpp for key_supported() and
   # config.cpp to cover the keymap object parser.
-  add_executable(input_test tests/input_test.cpp src/input.cpp src/layers.cpp src/touch.cpp
-                            src/voice.cpp src/overlay.cpp src/haptic.cpp src/onboarding.cpp
-                            src/devtools.cpp src/config.cpp src/log.cpp)
+  add_executable(input_test tests/input_test.cpp src/input.cpp src/keymap.cpp src/layers.cpp
+                            src/touch.cpp src/voice.cpp src/overlay.cpp src/haptic.cpp
+                            src/onboarding.cpp src/devtools.cpp src/config.cpp src/log.cpp)
   target_include_directories(input_test PRIVATE src tests)
   target_link_libraries(input_test PRIVATE Threads::Threads)
   # Point one test at the real shipped config so app.json cannot drift away from the C++ keymap.
@@ -208,9 +209,9 @@ if(BUILD_TESTING)
 
   # First-run controls card. The card must be derived from the live keymap, never hardcoded: a card
   # that contradicts a hot-swapped app.json teaches the user something false.
-  add_executable(onboarding_test tests/onboarding_test.cpp src/onboarding.cpp src/input.cpp
-                                 src/layers.cpp src/touch.cpp src/voice.cpp src/overlay.cpp
-                                 src/haptic.cpp src/devtools.cpp src/config.cpp src/log.cpp)
+  add_executable(onboarding_test tests/onboarding_test.cpp src/onboarding.cpp src/keymap.cpp
+                                 src/layers.cpp src/overlay.cpp src/devtools.cpp src/config.cpp
+                                 src/log.cpp)
   target_include_directories(onboarding_test PRIVATE src tests)
   target_link_libraries(onboarding_test PRIVATE Threads::Threads)
   # Read the real shipped config, so a keymap change cannot make the card advertise a dead control.
@@ -226,10 +227,22 @@ if(BUILD_TESTING)
   target_link_libraries(overlay_test PRIVATE Threads::Threads)
   add_test(NAME overlay_test COMMAND overlay_test)
 
+  # The shared header-only helpers (util.hpp): the DECKBACK_EXTRA_ARGS splitter and the escapes.
+  add_executable(util_test tests/util_test.cpp)
+  target_include_directories(util_test PRIVATE src)
+  add_test(NAME util_test COMMAND util_test)
+
+  # The Navigator's "already on the app" needle — the predicate behind every re-navigation.
+  add_executable(navigator_test tests/navigator_test.cpp src/navigator.cpp src/errorpage.cpp
+                                src/overlay.cpp src/devtools.cpp src/log.cpp)
+  target_include_directories(navigator_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
+  target_link_libraries(navigator_test PRIVATE Threads::Threads)
+  add_test(NAME navigator_test COMMAND navigator_test)
+
   # Tests assert() their invariants. CI builds Release, which defines NDEBUG and would both compile
   # the assertions out (tests silently pass) and trip -Werror=unused-variable. Force NDEBUG off for
   # test targets so assertions stay live regardless of the build type.
-  foreach(t config_test log_test devtools_test player_test watchdog_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test cdm_fetcher_test touchmode_test)
+  foreach(t config_test log_test devtools_test player_test watchdog_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test cdm_fetcher_test touchmode_test util_test navigator_test)
     target_compile_options(${t} PRIVATE -UNDEBUG)
   endforeach()
 endif()

@@ -1,6 +1,5 @@
 #include "audio.hpp"
 
-#include <chrono>
 #include <format>
 #include <string_view>
 #include <vector>
@@ -132,38 +131,21 @@ int repair_pulse_streams() {
 AudioRepair::~AudioRepair() { stop(); }
 
 void AudioRepair::start() {
-  std::lock_guard lock(mutex_);
-  if (started_) return;
-  started_ = true;
-  stop_ = false;
-  thread_ = std::thread([this] { loop(); });
+  worker_.start([this] { loop(); });
 }
 
-void AudioRepair::stop() {
-  {
-    std::lock_guard lock(mutex_);
-    if (!started_) return;
-    stop_ = true;
-  }
-  cv_.notify_all();
-  if (thread_.joinable()) thread_.join();
-  std::lock_guard lock(mutex_);
-  started_ = false;
-}
+void AudioRepair::stop() { worker_.stop(); }
 
 void AudioRepair::loop() {
 #if defined(DECKBACK_PULSE)
-  while (true) {
+  do {
     const int repaired = repair_pulse_streams();
     if (repaired > 0) info(std::format("audio: unmuted {} Deckback sink input(s)", repaired));
-
-    std::unique_lock lock(mutex_);
-    if (cv_.wait_for(lock, std::chrono::seconds(2), [this] { return stop_; })) break;
-  }
+  } while (!worker_.wait_or_stop(2000));
 #else
   warn("audio: libpulse unavailable; automatic sink-input mute repair disabled");
-  std::unique_lock lock(mutex_);
-  cv_.wait(lock, [this] { return stop_; });
+  while (!worker_.wait_or_stop(60'000)) {
+  }
 #endif
 }
 

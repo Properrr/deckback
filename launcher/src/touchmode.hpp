@@ -1,9 +1,8 @@
 #pragma once
 
-#include <condition_variable>
-#include <mutex>
 #include <string_view>
-#include <thread>
+
+#include "worker.hpp"
 
 namespace deckback {
 
@@ -33,14 +32,9 @@ class TouchModeGuard {
 
  private:
   void loop();
-  bool wait_or_stop(int ms);
 
   int poll_ms_;
-  std::thread thread_;
-  std::mutex mu_;
-  std::condition_variable cv_;
-  bool stop_ = false;
-  bool started_ = false;
+  WorkerThread worker_;
 };
 
 }  // namespace deckback

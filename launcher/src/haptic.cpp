@@ -10,13 +10,10 @@
 #include <format>
 
 #include "log.hpp"
+#include "util.hpp"
 
 namespace deckback {
 namespace {
-
-bool test_bit(int bit, const unsigned long* arr) {
-  return (arr[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1UL;
-}
 
 bool can_rumble(int fd) {
   unsigned long ev[(EV_MAX / (8 * sizeof(long))) + 1] = {};

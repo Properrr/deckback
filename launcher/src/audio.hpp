@@ -1,8 +1,6 @@
 #pragma once
 
-#include <condition_variable>
-#include <mutex>
-#include <thread>
+#include "worker.hpp"
 
 namespace deckback {
 
@@ -22,11 +20,7 @@ class AudioRepair {
  private:
   void loop();
 
-  std::thread thread_;
-  std::mutex mutex_;
-  std::condition_variable cv_;
-  bool stop_ = false;
-  bool started_ = false;
+  WorkerThread worker_;
 };
 
 }  // namespace deckback

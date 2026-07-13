@@ -1,21 +1,16 @@
 #include "touchmode.hpp"
 
-#include <algorithm>
-#include <cctype>
-#include <chrono>
 #include <string>
 
 #include "log.hpp"
+#include "util.hpp"
 
 namespace deckback {
 
 bool focus_class_is_ours(std::string_view wm_class) {
   // Lowercase copy (WM_CLASS may embed NULs between instance and class — harmless for a substring
   // search) and look for our engine's class token.
-  std::string lc(wm_class);
-  std::transform(lc.begin(), lc.end(), lc.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return lc.find("content_shell") != std::string::npos;
+  return ascii_lower(wm_class).find("content_shell") != std::string::npos;
 }
 
 }  // namespace deckback
@@ -123,7 +118,7 @@ void TouchModeGuard::loop() {
         announced = true;
       }
     }
-    if (wait_or_stop(poll_ms_)) break;
+    if (worker_.wait_or_stop(poll_ms_)) break;
   }
   xcb_disconnect(c);
 }
@@ -149,23 +144,9 @@ TouchModeGuard::TouchModeGuard(int poll_ms) : poll_ms_(poll_ms > 0 ? poll_ms : 7
 TouchModeGuard::~TouchModeGuard() { stop(); }
 
 void TouchModeGuard::start() {
-  if (started_) return;
-  started_ = true;
-  thread_ = std::thread([this] { loop(); });
+  worker_.start([this] { loop(); });
 }
 
-void TouchModeGuard::stop() {
-  {
-    std::lock_guard lk(mu_);
-    stop_ = true;
-  }
-  cv_.notify_all();
-  if (thread_.joinable()) thread_.join();
-}
-
-bool TouchModeGuard::wait_or_stop(int ms) {
-  std::unique_lock lk(mu_);
-  return cv_.wait_for(lk, std::chrono::milliseconds(ms), [this] { return stop_; });
-}
+void TouchModeGuard::stop() { worker_.stop(); }
 
 }  // namespace deckback

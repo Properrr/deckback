@@ -90,7 +90,6 @@ class OnboardingController {
   bool show(bool first_run_only);
   void hide();
   bool visible() const { return state_.visible(); }
-  OverlayState* state() { return &state_; }
 
  private:
   DevToolsClient client_;

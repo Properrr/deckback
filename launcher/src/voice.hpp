@@ -105,6 +105,9 @@ class VoiceController {
   void stop();
 
   bool listening() const { return listening_; }
+  // The configured hold-to-talk debounce; the input layer's HoldToTalk is armed with this, so the
+  // two cannot drift apart.
+  long hold_ms() const { return cfg_.hold_ms; }
 
  private:
   // Why the probe did not yield a point. "Engine unreachable" and "the page has no mic button"

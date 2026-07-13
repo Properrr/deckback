@@ -1,22 +1,15 @@
 #include "navigator.hpp"
 
-#include <chrono>
-#include <ctime>
 #include <format>
 
 #include "av1_steering_js.hpp"  // GENERATED from config/av1_steering.js
 #include "errorpage.hpp"
 #include "log.hpp"
 #include "no_pointer_js.hpp"  // GENERATED from config/no_pointer.js
+#include "util.hpp"
 
 namespace deckback {
 namespace {
-
-long now_ms() {
-  timespec ts{};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
-}
 
 // scheme://host of a URL (the security origin), for Browser.grantPermissions. "" if unparseable.
 std::string origin_of(const std::string& url) {
@@ -27,6 +20,14 @@ std::string origin_of(const std::string& url) {
 }
 
 }  // namespace
+
+std::string app_needle(std::string_view url) {
+  std::string needle(url);
+  if (auto s = needle.find("://"); s != std::string::npos) needle.erase(0, s + 3);
+  if (auto q = needle.find_first_of("?#"); q != std::string::npos) needle.erase(q);
+  while (!needle.empty() && needle.back() == '/') needle.pop_back();
+  return needle;
+}
 
 Navigator::Navigator(std::string host, int port, std::string user_agent, std::string url,
                      int poll_ms, NavPolicy policy)
@@ -39,45 +40,18 @@ Navigator::Navigator(std::string host, int port, std::string user_agent, std::st
 Navigator::~Navigator() { stop(); }
 
 void Navigator::start() {
-  {
-    std::lock_guard lk(mu_);
-    if (started_) return;
-    started_ = true;
-    stop_ = false;
-  }
-  thread_ = std::thread([this] { loop(); });
+  worker_.start([this] { loop(); });
 }
 
-void Navigator::stop() {
-  {
-    std::lock_guard lk(mu_);
-    if (!started_) return;
-    stop_ = true;
-  }
-  cv_.notify_all();
-  if (thread_.joinable()) thread_.join();
-  std::lock_guard lk(mu_);
-  started_ = false;
-}
-
-bool Navigator::wait_or_stop(int ms) {
-  std::unique_lock lk(mu_);
-  return cv_.wait_for(lk, std::chrono::milliseconds(ms), [this] { return stop_; });
-}
+void Navigator::stop() { worker_.stop(); }
 
 void Navigator::loop() {
-  // "Already on the app" needle: the configured URL's host+path, minus scheme and any
-  // query/fragment. e.g. https://www.youtube.com/tv -> www.youtube.com/tv, which the loaded
-  // ".../tv#/" contains but a desktop redirect (".../?app=desktop") or about:blank does not.
-  std::string needle = url_;
-  if (auto s = needle.find("://"); s != std::string::npos) needle.erase(0, s + 3);
-  if (auto q = needle.find_first_of("?#"); q != std::string::npos) needle.erase(q);
-  while (!needle.empty() && needle.back() == '/') needle.pop_back();
+  const std::string needle = app_needle(url_);
 
   // Prime the sticky TV UA before the first navigation so YouTube sees it on the initial load.
   if (!user_agent_.empty()) {
     while (!client_.set_user_agent_override(user_agent_)) {
-      if (wait_or_stop(poll_ms_)) return;
+      if (worker_.wait_or_stop(poll_ms_)) return;
     }
     info("navigator: TV UA override armed");
   }
@@ -111,7 +85,7 @@ void Navigator::loop() {
         info("navigator: retry requested from the error page");
         fail_attempt_ = 0;
         if (try_navigate()) announced = false;
-      } else if (now_ms() >= next_retry_ms_) {
+      } else if (mono_ms() >= next_retry_ms_) {
         if (try_navigate()) announced = false;
       } else if (client_.eval_bool(kIsErrorPageExpr) == false) {
         // The engine was restarted (watchdog) or navigated out from under us, so the page we were
@@ -137,7 +111,7 @@ void Navigator::loop() {
         if (on_app_loaded_) on_app_loaded_();
       }
     }
-  } while (!wait_or_stop(poll_ms_));
+  } while (!worker_.wait_or_stop(poll_ms_));
 }
 
 bool Navigator::try_navigate() {
@@ -159,7 +133,7 @@ bool Navigator::try_navigate() {
   warn(std::format("navigator: navigation to {} failed: {}", url_, st.error_text));
 
   const long delay = retry_backoff_ms(fail_attempt_, policy_.retry_min_ms, policy_.retry_max_ms);
-  next_retry_ms_ = now_ms() + delay;
+  next_retry_ms_ = mono_ms() + delay;
   ++fail_attempt_;
 
   if (policy_.error_page) {

@@ -3,7 +3,8 @@
 #include <format>
 
 #include "log.hpp"
-#include "overlay.hpp"  // js_string_escape
+#include "overlay.hpp"  // js_trusted_html
+#include "util.hpp"     // js_string_escape
 
 namespace deckback {
 

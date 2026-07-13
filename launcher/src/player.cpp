@@ -1,6 +1,5 @@
 #include "player.hpp"
 
-#include <chrono>
 #include <ctime>
 #include <format>
 
@@ -78,32 +77,17 @@ PlayerController::PlayerController(Platform& platform, std::string host, int por
 PlayerController::~PlayerController() { stop(); }
 
 void PlayerController::start() {
-  {
-    std::lock_guard lk(mu_);
-    if (started_) return;
-    started_ = true;
-    stop_ = false;
-  }
-  thread_ = std::thread([this] { poll_loop(); });
+  worker_.start([this] { poll_loop(); });
 }
 
-void PlayerController::stop() {
-  {
-    std::lock_guard lk(mu_);
-    if (!started_) return;
-    stop_ = true;
-  }
-  cv_.notify_all();
-  if (thread_.joinable()) thread_.join();
-  std::lock_guard lk(mu_);
-  started_ = false;
-}
+void PlayerController::stop() { worker_.stop(); }
 
 bool PlayerController::poll_once() {
   // value_or(-1): an unreachable engine must decode to all-false, not to a stale or lucky value.
-  const PlayState s = decode_play_state(client_.eval_number(kPlayStateExpr).value_or(-1));
-  state_bits_.store((s.playing ? 1 : 0) | (s.player_open ? 2 : 0) | (s.text_input_focused ? 4 : 0),
-                    std::memory_order_relaxed);
+  const double raw = client_.eval_number(kPlayStateExpr).value_or(-1);
+  const int bits = raw >= 0 ? (static_cast<int>(raw) & 7) : 0;  // NaN fails the comparison too
+  state_bits_.store(bits, std::memory_order_relaxed);
+  const PlayState s = decode_play_state(bits);
 
   platform_.set_idle_inhibited(s.playing);
   if (s.playing && synthetic_fallback_ && !platform_.backend_live() && !warned_synthetic_) {
@@ -118,15 +102,10 @@ bool PlayerController::poll_once() {
 }
 
 void PlayerController::poll_loop() {
-  std::unique_lock lk(mu_);
-  while (!stop_) {
-    lk.unlock();
+  do {
     poll_once();
-    lk.lock();
-    cv_.wait_for(lk, std::chrono::milliseconds(poll_ms_), [this] { return stop_; });
-  }
+  } while (!worker_.wait_or_stop(poll_ms_));
   // Leaving the loop: don't leave a stale inhibitor held.
-  lk.unlock();
   platform_.set_idle_inhibited(false);
 }
 

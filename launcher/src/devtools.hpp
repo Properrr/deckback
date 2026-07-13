@@ -160,8 +160,13 @@ class DevToolsClient {
   std::optional<std::string> request(std::string_view method, std::string_view params_json);
   // Runtime.evaluate helper built on request(); caller holds mutex_.
   std::optional<std::string> evaluate(std::string_view expression);
+  // Lock, evaluate, and return the raw `"value":` token of the reply — the shared front half of
+  // every eval_*() method. Takes mutex_ itself.
+  std::optional<std::string> eval_token(std::string_view expression);
   bool send_all(const std::string& bytes);
-  std::optional<ws::Frame> read_frame(int deadline_ms);
+  // `deadline_ms` is an ABSOLUTE mono_ms() timestamp, so it must stay `long`: truncated to int it
+  // wraps negative once the machine has been up ~25 days and every read times out instantly.
+  std::optional<ws::Frame> read_frame(long deadline_ms);
 
   std::string host_;
   int port_;

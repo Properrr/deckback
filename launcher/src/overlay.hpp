@@ -3,6 +3,7 @@
 #include <string_view>
 
 #include "devtools.hpp"
+#include "util.hpp"
 
 namespace deckback {
 
@@ -15,11 +16,9 @@ namespace deckback {
 // glyph/toast on engage, and today a user who trips the chord sees a screen that has simply stopped
 // responding to touch. That is the bug report this exists to prevent.
 
-// Escape for embedding inside a **double-quoted JS string literal**. This is NOT the CDP JSON
-// escaping — devtools.cpp applies that on top, and the two must not be confused: a `\"` produced
-// here becomes `\\\"` on the wire, which is correct. Shared with errorpage.cpp, which builds its
-// injected document the same way.
-std::string js_string_escape(std::string_view s);
+// `js_string_escape` (util.hpp) escapes for embedding inside a **double-quoted JS string
+// literal**. This is NOT the CDP JSON escaping — devtools.cpp applies that on top, and the two must
+// not be confused: a `\"` produced here becomes `\\\"` on the wire, which is correct.
 
 // A JS *expression* that turns `raw_expr` (itself a JS expression evaluating to an HTML string)
 // into a value assignable to `.innerHTML` under a Trusted Types CSP, falling back to the raw string

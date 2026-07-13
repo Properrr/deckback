@@ -11,16 +11,13 @@
 #include <format>
 
 #include "log.hpp"
+#include "util.hpp"
 
 namespace deckback {
 namespace {
 
 constexpr uint16_t kVendorFocaltech = 0x2808;
 constexpr uint16_t kProductFts3528 = 0x1015;
-
-bool test_bit(int bit, const unsigned long* arr) {
-  return (arr[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1UL;
-}
 
 // A node is our touchscreen if it either matches the FTS3528 USB id, or is a genuine multitouch
 // absolute device whose name looks like the Deck panel. The id match is authoritative; the
@@ -40,9 +37,7 @@ bool is_touchscreen(int fd, std::string& name_out) {
   if (id_match) return true;
   if (!multitouch) return false;
   // Name-based fallback: accept a multitouch node advertising the Focaltech panel / "touchscreen".
-  std::string lower = name_out;
-  for (char& ch : lower)
-    if (ch >= 'A' && ch <= 'Z') ch = static_cast<char>(ch - 'A' + 'a');
+  const std::string lower = ascii_lower(name_out);
   return lower.find("fts3528") != std::string::npos ||
          lower.find("touchscreen") != std::string::npos;
 }

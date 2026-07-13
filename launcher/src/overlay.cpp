@@ -4,33 +4,6 @@
 
 namespace deckback {
 
-std::string js_string_escape(std::string_view s) {
-  std::string out;
-  out.reserve(s.size() + 8);
-  for (char c : s) {
-    switch (c) {
-      case '"':
-        out += "\\\"";
-        break;
-      case '\\':
-        out += "\\\\";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      case '\r':
-        out += "\\r";
-        break;
-      case '\t':
-        out += "\\t";
-        break;
-      default:
-        out.push_back(c);
-    }
-  }
-  return out;
-}
-
 std::string js_trusted_html(std::string_view raw_expr) {
   // Memoise the policy on window; create it lazily and defensively. `createHTML` is identity: we
   // are not sanitising, only satisfying the type gate for HTML we generated ourselves. The whole

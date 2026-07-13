@@ -11,10 +11,10 @@
 #include <cerrno>
 #include <cstdint>
 #include <cstring>
-#include <ctime>
 #include <format>
 
 #include "log.hpp"
+#include "util.hpp"
 
 namespace deckback {
 namespace ws {
@@ -106,12 +106,6 @@ DecodeResult decode_frame(std::string_view buf) {
 
 namespace {
 
-long mono_ms() {
-  timespec ts{};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
-}
-
 constexpr char kB64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 std::string base64(const unsigned char* data, size_t n) {
@@ -128,33 +122,9 @@ std::string base64(const unsigned char* data, size_t n) {
   return out;
 }
 
-// JSON-escape a string for embedding in a CDP expression literal.
-std::string json_escape(std::string_view s) {
-  std::string out;
-  out.reserve(s.size() + 8);
-  for (char c : s) {
-    switch (c) {
-      case '"':
-        out += "\\\"";
-        break;
-      case '\\':
-        out += "\\\\";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      case '\r':
-        out += "\\r";
-        break;
-      case '\t':
-        out += "\\t";
-        break;
-      default:
-        out.push_back(c);
-    }
-  }
-  return out;
-}
+// JSON-escape for embedding in a CDP expression literal: the JS and JSON string escape sets
+// coincide for everything we emit, so this is the shared helper.
+std::string json_escape(std::string_view s) { return js_string_escape(s); }
 
 // Reverse json_escape for a value pulled out of a CDP reply (URLs, titles). Handles the escapes CDP
 // actually emits; a stray backslash is passed through. Sufficient for our primitive string reads.
@@ -312,9 +282,7 @@ int connect_tcp(const std::string& host, int port, int timeout_ms) {
 // Case-insensitive Content-Length lookup in a response header block. -1 when absent.
 long content_length_of(std::string_view headers) {
   constexpr std::string_view kKey = "content-length:";
-  std::string lower(headers);
-  for (char& c : lower)
-    if (c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+  const std::string lower = ascii_lower(headers);
   size_t k = lower.find(kKey);
   if (k == std::string::npos) return -1;
   size_t p = k + kKey.size();
@@ -516,7 +484,7 @@ bool DevToolsClient::send_all(const std::string& bytes) {
   return true;
 }
 
-std::optional<ws::Frame> DevToolsClient::read_frame(int deadline_ms) {
+std::optional<ws::Frame> DevToolsClient::read_frame(long deadline_ms) {
   for (;;) {
     ws::DecodeResult dr = ws::decode_frame(rxbuf_);
     if (dr.status == ws::DecodeResult::Error) return std::nullopt;
@@ -550,7 +518,7 @@ std::optional<std::string> DevToolsClient::request(std::string_view method,
 
   const long deadline = mono_ms() + 2500;
   for (;;) {
-    auto frame = read_frame(static_cast<int>(deadline));
+    auto frame = read_frame(deadline);
     if (!frame) {
       disconnect();
       return std::nullopt;
@@ -585,11 +553,15 @@ std::optional<std::string> DevToolsClient::evaluate(std::string_view expression)
                              json_escape(expression)));
 }
 
-std::optional<bool> DevToolsClient::eval_bool(std::string_view expression) {
+std::optional<std::string> DevToolsClient::eval_token(std::string_view expression) {
   std::lock_guard lk(mutex_);
   auto body = evaluate(expression);
   if (!body) return std::nullopt;
-  auto tok = extract_value_token(*body);
+  return extract_value_token(*body);
+}
+
+std::optional<bool> DevToolsClient::eval_bool(std::string_view expression) {
+  auto tok = eval_token(expression);
   if (!tok) return std::nullopt;
   if (*tok == "true") return true;
   if (*tok == "false") return false;
@@ -597,10 +569,7 @@ std::optional<bool> DevToolsClient::eval_bool(std::string_view expression) {
 }
 
 std::optional<double> DevToolsClient::eval_number(std::string_view expression) {
-  std::lock_guard lk(mutex_);
-  auto body = evaluate(expression);
-  if (!body) return std::nullopt;
-  auto tok = extract_value_token(*body);
+  auto tok = eval_token(expression);
   if (!tok || tok->empty()) return std::nullopt;
   try {
     return std::stod(*tok);
@@ -610,10 +579,7 @@ std::optional<double> DevToolsClient::eval_number(std::string_view expression) {
 }
 
 std::optional<std::string> DevToolsClient::eval_string(std::string_view expression) {
-  std::lock_guard lk(mutex_);
-  auto body = evaluate(expression);
-  if (!body) return std::nullopt;
-  auto tok = extract_value_token(*body);
+  auto tok = eval_token(expression);
   if (!tok || tok->size() < 2 || tok->front() != '"' || tok->back() != '"') return std::nullopt;
   return json_unescape(std::string_view(*tok).substr(1, tok->size() - 2));
 }

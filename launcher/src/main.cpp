@@ -23,6 +23,7 @@
 #include "player.hpp"
 #include "profile.hpp"
 #include "touchmode.hpp"
+#include "util.hpp"
 #include "voice.hpp"
 #include "watchdog.hpp"
 
@@ -54,18 +55,6 @@ bool acquire_single_instance_lock(const std::string& runtime_dir) {
   return true;  // fd intentionally leaked: lock lives as long as the process
 }
 
-// Resolve the log directory: explicit config wins, then $DECKBACK_LOG_DIR, then
-// $XDG_STATE_HOME/deckback/logs, then ~/.local/state/deckback/logs, else the runtime dir.
-std::string resolve_log_dir(const std::string& cfg_dir, const std::string& runtime_dir) {
-  if (!cfg_dir.empty()) return cfg_dir;
-  if (const char* v = std::getenv("DECKBACK_LOG_DIR"); v && *v) return v;
-  if (const char* v = std::getenv("XDG_STATE_HOME"); v && *v)
-    return std::string(v) + "/deckback/logs";
-  if (const char* v = std::getenv("HOME"); v && *v)
-    return std::string(v) + "/.local/state/deckback/logs";
-  return runtime_dir + "/deckback/logs";
-}
-
 // Where small persistent launcher state lives (the first-run marker). Deliberately NOT the Chromium
 // profile: that directory is Chromium's to manage, and `just install`'s reset path may wipe it.
 std::string resolve_state_dir(const std::string& runtime_dir) {
@@ -73,6 +62,14 @@ std::string resolve_state_dir(const std::string& runtime_dir) {
   if (const char* v = std::getenv("HOME"); v && *v)
     return std::string(v) + "/.local/state/deckback";
   return runtime_dir + "/deckback";
+}
+
+// Resolve the log directory: explicit config wins, then $DECKBACK_LOG_DIR, else `logs/` under the
+// state dir (XDG_STATE_HOME / ~/.local/state / the runtime dir, in that order).
+std::string resolve_log_dir(const std::string& cfg_dir, const std::string& runtime_dir) {
+  if (!cfg_dir.empty()) return cfg_dir;
+  if (const char* v = std::getenv("DECKBACK_LOG_DIR"); v && *v) return v;
+  return resolve_state_dir(runtime_dir) + "/logs";
 }
 
 // Resolve the Chromium profile dir. Must be PERSISTENT so sign-in survives reboot/updates (doc §6
@@ -260,17 +257,8 @@ int main(int argc, char** argv) {
   for (const auto& f : cfg->cobalt_flags) args.push_back(f);
   // Dev/bring-up passthrough for flags we don't want baked into the shipped config (e.g.
   // --no-sandbox before zypak lands in Phase 8). Whitespace-separated; empty when unset.
-  if (const char* extra = std::getenv("DECKBACK_EXTRA_ARGS"); extra && *extra) {
-    std::string_view sv{extra};
-    size_t p = 0;
-    while (p < sv.size()) {
-      size_t b = sv.find_first_not_of(" \t", p);
-      if (b == std::string_view::npos) break;
-      size_t e = sv.find_first_of(" \t", b);
-      args.emplace_back(sv.substr(b, e == std::string_view::npos ? e : e - b));
-      p = e;
-    }
-  }
+  if (const char* extra = std::getenv("DECKBACK_EXTRA_ARGS"); extra && *extra)
+    for (std::string& a : split_whitespace(extra)) args.push_back(std::move(a));
   args.push_back(cdp_nav ? "about:blank" : url);
 
   // First-run controls card (findings input-ux §17). Drawn once the TV app has actually loaded —
@@ -318,16 +306,18 @@ int main(int argc, char** argv) {
     // config drives the runtime touchscreen block/unblock (findings input-ux §4). `layers` carries
     // the context (browse/player/osk) the player poll observed; it is only live when `player`
     // exists.
-    gamepad.emplace(
-        "127.0.0.1", cfg->remote_debugging_port,
-        KeymapConfig{cfg->keymap, cfg->keymap_player, cfg->keymap_osk, cfg->keymap_lt,
-                     cfg->keymap_rt},
-        TouchConfig{cfg->touch_lock_enabled, cfg->touch_lock_chord, cfg->block_touchscreen,
-                    cfg->touch_lock_unlock_hold_ms, cfg->touch_lock_toast, cfg->touch_lock_haptic},
-        player ? &layers : nullptr, voice ? &*voice : nullptr, cfg->voice_hold_ms,
-        FastScrollConfig{cfg->right_stick_scroll, cfg->right_stick_deadzone,
-                         cfg->right_stick_slow_ms, cfg->right_stick_fast_ms},
-        onboarding ? &*onboarding : nullptr);
+    GamepadOptions gp;
+    gp.keymap = KeymapConfig{cfg->keymap, cfg->keymap_player, cfg->keymap_osk, cfg->keymap_lt,
+                             cfg->keymap_rt};
+    gp.touch =
+        TouchConfig{cfg->touch_lock_enabled,        cfg->touch_lock_chord, cfg->block_touchscreen,
+                    cfg->touch_lock_unlock_hold_ms, cfg->touch_lock_toast, cfg->touch_lock_haptic};
+    gp.fast_scroll = FastScrollConfig{cfg->right_stick_scroll, cfg->right_stick_deadzone,
+                                      cfg->right_stick_slow_ms, cfg->right_stick_fast_ms};
+    gp.layers = player ? &layers : nullptr;
+    gp.voice = voice ? &*voice : nullptr;
+    gp.onboarding = onboarding ? &*onboarding : nullptr;
+    gamepad.emplace("127.0.0.1", cfg->remote_debugging_port, std::move(gp));
     gamepad->start();
   } else {
     warn(

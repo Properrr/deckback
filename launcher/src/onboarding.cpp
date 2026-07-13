@@ -4,9 +4,10 @@
 #include <filesystem>
 #include <format>
 
-#include "input.hpp"  // resolve_binding, parse_chord
+#include "keymap.hpp"  // resolve_binding, parse_chord
 #include "log.hpp"
-#include "overlay.hpp"  // js_string_escape
+#include "overlay.hpp"  // js_trusted_html
+#include "util.hpp"     // js_string_escape
 
 namespace deckback {
 namespace {
