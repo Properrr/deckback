@@ -90,6 +90,9 @@ This is the harness's least obvious property. Three different machines are invol
 | `just deploy [host]` | rsync a stripped `out/deck` bundle to `~/cobalt-yt/` | `out/deck`, Deck | | | | 1,3,4 |
 | `just run` | SSH-launch the deployed binary, tee to a remote log | deployed Deck | ✓ foreground | | | 3,4 |
 | `just remote-run` | launch the **installed Flatpak** through Steam in Game Mode, then **verify** it came up | installed Deck | | | | 2,3,4 |
+| `just deck-install-dev [bundle]` | ship a local `.flatpak` → **overwrite** the Deck install, **keeping user data**; verify grant + origin + data | `.flatpak`, Deck | | ✓ replaces install (data kept) | | 2,3,4 |
+| `just deck-use-repo` | (re)point the Deck at the **published repo** for updates, keeping user data | Deck, reachable repo | | ✓ replaces install (data kept) | | 2,3 |
+| `just deck-channel` | report which channel (dev bundle / official repo) the Deck is on | Deck | ✓ read by eye | | | 3,4 |
 | `just logs` | tail the remote app log + journal | Deck | ✓ read by eye | | | — |
 | `just debug` | `ssh -L 9222` tunnel for `chrome://inspect` | Deck | ✓ browser | | | 3,4 |
 | `just power [secs]` | assert playback + VA-API, sample draw → CSV, adjudicate vs the ≤9 W gate | Deck **on battery**, video playing | ✓ open a video | | ✓ CSV | 2,3,4,5 |
@@ -150,12 +153,37 @@ Three paths that share no state. Pick deliberately.
 | **Desktop Mode, raw binary** | `just deploy` → `just run` | the rsynced `content_shell` directly, `--no-sandbox`, `DISPLAY=:1` | fast iteration; no Flatpak, no Steam |
 | **Game Mode, Steam shortcut** | `just flatpak` → copy bundle → `just install` *(on the Deck)* → launch from Steam | the sandboxed Flatpak | what users actually get |
 | **Game Mode, headless** | …then `just remote-run` *(from the workstation)* | same Flatpak, launched via `steam://rungameid/…` | automation; the on-Deck test harness |
+| **Game Mode, dev overwrite** | `just flatpak` → `just deck-install-dev` *(from the workstation)* | the sandboxed Flatpak, replaced in place | iterating on the *installed* app without re-typing `just install` on the Deck |
 
 > `just deploy` does **not** pass `--delete` — it preserves a user-fetched Widevine CDM under
 > `~/cobalt-yt/`. (The `justfile` comment claimed `--delete` for a while; it was wrong.)
 >
 > **`just deploy` alone leaves Game Mode stale.** The Steam shortcut runs the *installed Flatpak*,
 > not the rsynced bundle. To test a change in Game Mode you must rebuild and reinstall the bundle.
+
+#### Channel switching: dev bundle ⇄ published repo (`scripts/deck-flatpak.sh`)
+
+`just install` (typed on the Deck) is the *first* install: it adds the Steam shortcut, which needs
+the GUI session. Once that shortcut exists, iterating no longer needs the Deck's keyboard — the app
+id never changes, so the shortcut keeps launching whatever is installed under it. These three
+recipes drive that from the workstation over SSH:
+
+- `just deck-install-dev [bundle]` — ship the local `.flatpak` and **overwrite** the install with
+  it. It does *not* use `flatpak install --reinstall`: that fails with *"GPG verification enabled,
+  but no signatures found"* when the installed app came from the gpg-verified published repo and the
+  bundle is unsigned. Instead it `uninstall`s **without `--delete-data`** (so `~/.var/app/<id>` —
+  the YouTube sign-in — survives) and installs the bundle fresh, then **proves** the data survived
+  by measuring the data dir before and after (a shrink to zero is `die_assert`, not a shrug).
+- `just deck-use-repo` — add the `deckback` remote from `flatpak/deckback.flatpakrepo` and switch
+  the install to it, so `flatpak update` pulls official releases. Probes the repo **from the Deck**
+  first; if the GitHub-Pages repo is not published yet it exits `3` with instructions
+  (`just publish-repo`, or set `DECKBACK_REPO_URL` to a reachable/staging repo). Keeps user data the
+  same way.
+- `just deck-channel` — report the current origin, channel, version, commit, data size, and grant,
+  so you know which channel the Deck is on before you touch it.
+
+The pure decisions (channel classification, the descriptor-URL derivation, and the keep-data guard)
+are L0-tested in `tests/harness/test_flatpak_channel.sh`.
 
 ---
 

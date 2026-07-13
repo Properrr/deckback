@@ -70,6 +70,18 @@ run:
 remote-run:
     ./scripts/remote-run.sh
 
+# Overwrite the Deck's install with a locally-built .flatpak, keeping user data (the YouTube login).
+deck-install-dev bundle="io.github.properrr.deckback.flatpak":
+    ./scripts/deck-flatpak.sh dev "{{bundle}}"
+
+# (Re)point the Deck's install at the published repo for updates, keeping user data.
+deck-use-repo:
+    ./scripts/deck-flatpak.sh repo
+
+# Report which channel (dev bundle / official repo) the Deck's install is on.
+deck-channel:
+    ./scripts/deck-flatpak.sh status
+
 # Tail remote app log + relevant journalctl over SSH.
 logs:
     ./scripts/logs.sh
