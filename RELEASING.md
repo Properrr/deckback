@@ -40,6 +40,9 @@ git tag -a v0.0.2 -m "Deckback v0.0.2"
 git push origin main v0.0.2
 ```
 
+Then **wait for CI to go green on the tagged commit** — `just release` won't build without it (see
+below). `just release-prep` already ran `just preflight` locally, but CI is the authority.
+
 ### 3. Build + draft the GitHub Release (workstation/CI)
 
 ```sh
@@ -47,7 +50,10 @@ just release v0.0.2           # gold+ThinLTO engine build → .flatpak bundle + 
                               #   SHA256SUMS, then drafts the GitHub Release with changelog notes
 ```
 
-`just release` refuses if the tag doesn't match `VERSION`. It leaves the release as a **draft**.
+`just release` refuses if the tag doesn't match `VERSION`, **and refuses to build unless every CI
+check-run on the tagged commit is `completed/success`** — a Chromium-scale build is the wrong place
+to discover a red tag. Override for an offline/emergency build with `FORCE=1 just release <tag>`. It
+leaves the release as a **draft**.
 
 ### 4. Publish → the repo deploys itself
 

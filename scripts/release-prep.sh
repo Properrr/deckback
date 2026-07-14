@@ -19,6 +19,12 @@ esac
 
 [ -z "$(git status --porcelain)" ] || die_assert "working tree is dirty — commit or stash first"
 
+# Never cut a release branch from a tree that would land red in CI. Same gate as the pre-push hook,
+# one definition (scripts/preflight.sh): shellcheck + harness suite + clang-format-18 + launcher
+# gcc/clang builds + gn-args. Cheap insurance before the bump commit that a human then tags.
+info "Preflight (the checks CI runs) ..."
+"$(dirname "$0")/preflight.sh" all || die_assert "preflight failed — fix before cutting a release"
+
 today="$(date +%F)"
 branch="release/v${ver}"
 metainfo="flatpak/assets/io.github.properrr.deckback.metainfo.xml"

@@ -30,6 +30,14 @@ minor versions may include breaking changes.
   smoke gate. On-Deck re-verification of hardware decode is pending
   (`.internal/findings/durable/build-slimming.md`).
 
+### Development
+- **CI/local parity gate (`just preflight`)**: one script (`scripts/preflight.sh`) now defines the
+  pre-push and pre-release checks — shellcheck, the harness suite, clang-format-18, and the launcher
+  gcc/clang builds — and both `.githooks/pre-push` and CI (`.github/workflows/lint.yml`) call it, so
+  a local push and a CI run can no longer diverge. `just release` refuses to build unless the tagged
+  commit is green in CI. Run `just hooks` once per clone. See
+  `.internal/findings/durable/preflight-parity.md`.
+
 ## [0.0.2] - 2026-07-10
 
 ### Added

@@ -1,4 +1,9 @@
 # Free-runner-safe checks only. Chromium-scale builds run on the self-hosted runner (doc §14.3).
+#
+# Every job here just installs its deps and calls scripts/preflight.sh <target>. That script is the
+# SAME one .githooks/pre-push runs locally, so CI and a contributor's push execute identical checks —
+# they cannot drift. (They did drift once: the old pre-push mirrored only clang-format + shellcheck,
+# so a stale test and a clang-only -Werror sailed past it into a red CI. See the preflight finding.)
 name: lint
 on:
   push:
@@ -14,12 +19,10 @@ jobs:
         # test_video_corruption.py exercises the green-band pixel verdict and needs Pillow; without it
         # the test ERRORs on import instead of running.
         run: sudo apt-get update && sudo apt-get install -y shellcheck python3-pil
-      - name: shellcheck
-        run: shellcheck -S warning scripts/*.sh tests/harness/*.sh
-      # L0 tests for the harness's own logic (power-gate adjudication, exit-code taxonomy). These
-      # need no Deck and no Chromium tree, so they belong on the free runner next to shellcheck.
-      - name: harness tests
-        run: ./tests/harness/run.sh
+      # shellcheck (scripts + harness) + the L0 harness suite (power-gate adjudication, exit-code
+      # taxonomy, cdp_lib, video-corruption). preflight prefers the system shellcheck installed above.
+      - name: preflight (shell)
+        run: ./scripts/preflight.sh shell
 
   launcher:
     # The launcher builds anywhere — no Chromium checkout needed (doc §14.3).
@@ -29,38 +32,23 @@ jobs:
       - name: install toolchain
         # Pin clang-format to a major version: an unpinned `clang-format` tracks the runner image's
         # default, so a future ubuntu-latest bump would silently reformat the tree and turn this job
-        # red on unchanged code. The tree is formatted with clang-format 18.
+        # red on unchanged code. The tree is formatted with clang-format 18 (preflight prefers this
+        # system clang-format-18 over its pinned-pip fallback).
         # The launcher's system deps are optional (pkg_check_modules, not REQUIRED), but install them
         # so CI builds the real, fully-featured configuration — otherwise DECKBACK_HAVE_CURL=0 and the
         # CDM download path (plus its tests) never compile.
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format-18 clang
           libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev
-      - name: clang-format check
-        run: |
-          find launcher/src launcher/tests \( -name '*.cpp' -o -name '*.hpp' \) \
-            | xargs clang-format-18 --style=file --dry-run --Werror
-      - name: build + test (gcc)
-        run: |
-          cmake -S launcher -B launcher/build -G Ninja -DCMAKE_BUILD_TYPE=Release
-          cmake --build launcher/build
-          ctest --test-dir launcher/build --output-on-failure
-      - name: build (clang)
-        run: |
-          CXX=clang++ cmake -S launcher -B launcher/build-clang -G Ninja
-          cmake --build launcher/build-clang
+      # clang-format-18 check + gcc build & ctest + clang build (-Wall -Wextra -Werror).
+      - name: preflight (launcher)
+        run: ./scripts/preflight.sh launcher
 
   gn-format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: gn args sanity
-        run: |
-          # args/*.gn are EXTRAS layered on Cobalt's chromium_linux-x64x11 config (gen.sh), not
-          # standalone arg sets. Codec overrides (proprietary_codecs/ffmpeg_branding) legitimately
-          # live in args/common.gn. Guard only against re-introducing platform/build_type base args,
-          # which come from gn.py -p/-c and must not be hand-set here.
-          for f in args/*.gn; do
-            if grep -qE '^\s*(target_os|target_cpu|is_debug|is_official_build)\b' "$f"; then
-              echo "$f sets a platform/build_type base arg; args/*.gn must contain only overrides"; exit 1
-            fi
-          done
+      # args/*.gn are EXTRAS layered on Cobalt's chromium_linux-x64x11 config (gen.sh), not standalone
+      # arg sets. Codec overrides (proprietary_codecs/ffmpeg_branding) legitimately live in
+      # args/common.gn. preflight guards only against re-introducing platform/build_type base args.
+      - name: preflight (gn)
+        run: ./scripts/preflight.sh gn

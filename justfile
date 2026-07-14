@@ -26,11 +26,17 @@ build preset="dev":
 launcher *args:
     ./scripts/launcher.sh "$@"
 
-# Enable the repo's git hooks (pre-push mirrors CI lint: clang-format-18 + shellcheck + gn-args).
-# Run once per clone. Bypass a single push with `git push --no-verify`.
+# Enable the repo's git hooks (pre-push runs `just preflight`, the exact checks CI runs).
+# Run once per clone — REQUIRED before you push. Bypass a single push with `git push --no-verify`.
 hooks:
     git config core.hooksPath .githooks
-    @echo "git hooks enabled — .githooks/pre-push will lint before every push."
+    @echo "git hooks enabled — .githooks/pre-push runs 'just preflight' before every push."
+
+# The pre-push / pre-release gate: the SAME checks CI runs (.github/workflows/lint.yml), one script.
+# shellcheck + harness suite + clang-format-18 + launcher gcc/clang builds + gn-args sanity. Needs no
+# Chromium tree, no Deck, no Docker — run it anywhere before you push. target: shell|launcher|gn|all.
+preflight target="all":
+    ./scripts/preflight.sh "{{target}}"
 
 # L0 tests for the harness itself (shell/awk logic + the tests/deck pure helpers).
 # No Deck, no container, no Chromium tree. CI runs this on every push.

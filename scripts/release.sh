@@ -16,6 +16,29 @@ file_ver="$(tr -d '[:space:]' < VERSION 2>/dev/null)"
 [ "$ver" = "$file_ver" ] ||
   die_assert "tag '$tag' does not match VERSION '$file_ver' — run 'just release-prep $ver' first"
 
+# Gate: the tagged commit must be GREEN in CI before we burn a Chromium-scale build on it. 0.0.3
+# nearly shipped from a commit whose launcher job was red; a build that takes an hour is the wrong
+# place to discover a red tag. Every check-run on the tagged commit must be completed+success.
+# Override for an offline/emergency build:  FORCE=1 just release <tag>   (or a --force 2nd arg).
+force="${FORCE:-0}"
+[ "${2:-}" = "--force" ] && force=1
+if [ "$force" = 1 ]; then
+  info "FORCE set — skipping the CI-green gate for $tag."
+else
+  command -v gh >/dev/null 2>&1 || die_env "need 'gh' to verify CI is green on $tag (or FORCE=1 to skip)"
+  sha="$(git rev-list -n1 "$tag" 2>/dev/null)" || die_assert "tag $tag not found locally — create/fetch it first"
+  info "Verifying CI is green on $tag ($sha) ..."
+  states="$(gh api "repos/{owner}/{repo}/commits/$sha/check-runs" --jq '.check_runs[] | "\(.name) \(.status)/\(.conclusion)"' 2>/dev/null)" ||
+    die_transport "could not query CI status for $sha (network/gh auth?) — retry, or FORCE=1"
+  [ -n "$states" ] || die_assert "no CI check-runs on $sha — has lint run and finished? (FORCE=1 to override)"
+  if printf '%s\n' "$states" | grep -qv ' completed/success$'; then
+    echo "CI on $sha is not all green:" >&2
+    printf '%s\n' "$states" | sed 's/^/  /' >&2
+    die_assert "refusing to build a release from a commit that is not green in CI (FORCE=1 to override)"
+  fi
+  info "CI green on $tag ✓ — building."
+fi
+
 info "Release build (gold + ThinLTO) ..."
 in_container bash -c "cd $CTR_TREE && python3 cobalt/build/gn.py --no-rbe -p $COBALT_PLATFORM -c gold out/release"
 # Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO for the tagged build. Strip

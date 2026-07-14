@@ -26,6 +26,30 @@ Every script sources `scripts/lib.sh`, which sets `set -euo pipefail`, `cd`s to 
 exceptions run *on the Deck* and deliberately do not source it: `scripts/audio-repair.sh` and
 `scripts/install-audio-repair.sh`.
 
+### 0.1 `just preflight` — the one gate before code leaves your machine
+
+**`scripts/preflight.sh [shell|launcher|gn|all]`** is the single definition of the pre-push /
+pre-release checks. `.githooks/pre-push`, every job in `.github/workflows/lint.yml`, and
+`scripts/release-prep.sh` all call it, so **local and CI cannot drift** — the whole point (a hook
+that mirrored only *part* of CI once let three red commits through in a row;
+`.internal/findings/durable/preflight-parity.md`). It runs anywhere: no Chromium tree, no Deck, no
+Docker.
+
+| target | mirrors CI job | checks |
+|---|---|---|
+| `shell` | `shell` | `shellcheck` (scripts + harness) + `tests/harness/run.sh` |
+| `launcher` | `launcher` | clang-format-18 `--Werror` + gcc `Release` build & `ctest` + clang build |
+| `gn` | `gn-format` | `args/*.gn` are overrides only |
+| `all` | (all three) | everything above |
+
+Exit `2` = a check failed (the tree is wrong); `3` = a required tool/lib is missing. **Run
+`just hooks` once per clone** so the pre-push hook enforces it. **Local tool requirements:**
+`clang-format-18` and `shellcheck` are auto-bootstrapped into a cached venv when absent (pinned:
+clang-format **18** — v20 differs and CI stays red); the launcher build needs `cmake ninja g++
+clang++` and `libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev`; the harness suite needs
+Python 3 + Pillow (`python3-pil`). And **`just release` refuses to build unless the tagged commit is
+green in CI** (`FORCE=1` overrides).
+
 ---
 
 ## 1. Exit-code taxonomy — read this before automating anything

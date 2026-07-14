@@ -1,55 +1,22 @@
 #!/usr/bin/env bash
-# Pre-push hook: mirror CI's lint jobs (.github/workflows/lint.yml) so a push never lands red.
-# Applies clang-format-18 (the exact version CI pins) and runs shellcheck + the gn-args sanity check.
-# The lint pins clang-format 18 — a different local version reformats differently and CI stays red —
-# so if the system has no clang-format-18 (or no shellcheck) we bootstrap the exact versions into a
-# cached venv via pip. Enable once with:  just hooks   (sets core.hooksPath to .githooks)
+# Pre-push hook: run the SAME gate CI runs, so a push never lands red. It delegates to
+# scripts/preflight.sh — the one definition shared with .github/workflows/lint.yml — which runs the
+# harness suite, clang-format-18, the launcher gcc/clang builds, the gn-args check and shellcheck,
+# bootstrapping pinned clang-format-18/shellcheck into a cached venv if the system lacks them.
+#
+# This replaces the old hook that mirrored only clang-format + shellcheck: it let a stale test and a
+# clang-only -Werror land red because it never ran the harness suite or the launcher builds locally.
+#
+# Enable once per clone:  just hooks   (sets core.hooksPath to .githooks)
+# Bypass a single push (use sparingly, CI is still the backstop):  git push --no-verify
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 
-VENV="${DECKBACK_HOOK_VENV:-${TMPDIR:-/tmp}/deckback-lint-venv}"
-bootstrapped=0
-tool() { # tool <system-name> <venv-binary>  -> prints a runnable path (system pinned version, else venv)
-  local sys; sys="$(command -v "$1" 2>/dev/null || true)"
-  if [ -n "$sys" ]; then echo "$sys"; return; fi
-  if [ ! -x "$VENV/bin/$2" ]; then
-    [ "$bootstrapped" -eq 0 ] && echo "pre-push: bootstrapping pinned lint tools (clang-format-18 + shellcheck)…" >&2
-    bootstrapped=1
-    python3 -m venv "$VENV" >/dev/null 2>&1 && "$VENV/bin/pip" install -q clang-format==18.1.8 shellcheck-py >&2
-  fi
-  echo "$VENV/bin/$2"
-}
-
-fail=0
-
-# 1. clang-format-18 — APPLY, then block the push if anything was reformatted (commit it first).
-CF="$(tool clang-format-18 clang-format)"
-mapfile -t cxx < <(find launcher/src launcher/tests \( -name '*.cpp' -o -name '*.hpp' \))
-if [ "${#cxx[@]}" -gt 0 ]; then
-  "$CF" --style=file -i "${cxx[@]}"
-  if ! git diff --quiet -- launcher/; then
-    echo "pre-push: clang-format-18 reformatted the launcher — review, commit, and push again:" >&2
-    git --no-pager diff --stat -- launcher/ >&2
-    fail=1
-  fi
+if ./scripts/preflight.sh all; then
+  echo "pre-push: preflight green ✓ — safe to push."
+  exit 0
 fi
-
-# 2. shellcheck (CI: shellcheck -S warning scripts/*.sh tests/harness/*.sh)
-SC="$(tool shellcheck shellcheck)"
-"$SC" -S warning scripts/*.sh tests/harness/*.sh || fail=1
-
-# 3. gn-args sanity: args/*.gn are overrides only, never platform/build_type base args.
-for f in args/*.gn; do
-  [ -e "$f" ] || continue
-  if grep -qE '^\s*(target_os|target_cpu|is_debug|is_official_build)\b' "$f"; then
-    echo "pre-push: $f sets a platform/build_type base arg; args/*.gn must contain only overrides" >&2
-    fail=1
-  fi
-done
-
-if [ "$fail" -eq 0 ]; then
-  echo "pre-push: lint clean ✓"
-else
-  echo "pre-push: BLOCKED — fix the above, then push again. (bypass once with 'git push --no-verify')" >&2
-fi
-exit "$fail"
+echo "pre-push: BLOCKED — preflight failed above; this would land red in CI." >&2
+echo "          Fix it (formatting: 'just fmt'), commit, and push again." >&2
+echo "          Bypass once with 'git push --no-verify' (CI still gates)." >&2
+exit 1
