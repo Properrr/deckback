@@ -90,6 +90,26 @@ file(WRITE "${DECKBACK_GENERATED_DIR}/scripts_registry.hpp.in" "${_reg}")
 configure_file("${DECKBACK_GENERATED_DIR}/scripts_registry.hpp.in"
                "${DECKBACK_GENERATED_DIR}/scripts_registry.hpp" COPYONLY)
 
+# Compile the real version string in, from the repo's VERSION file (single source of truth), so
+# `--version` and the self-updater's logging report the truth. flatpak-builder copies the module FLAT
+# so `../VERSION` may be absent there — the manifest adds it as a `file` source at ./VERSION, and
+# -DDECKBACK_VERSION=<x> overrides. Falls back to a dev marker so a bare `just launcher` still builds.
+set(DECKBACK_VERSION "" CACHE STRING "Version to compile in (else read from the VERSION file)")
+if(NOT DECKBACK_VERSION)
+  foreach(_vf "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
+    if(EXISTS "${_vf}")
+      file(STRINGS "${_vf}" DECKBACK_VERSION LIMIT_COUNT 1)
+      set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_vf}")
+      break()
+    endif()
+  endforeach()
+endif()
+if(NOT DECKBACK_VERSION)
+  set(DECKBACK_VERSION "0.0.0-dev")
+endif()
+configure_file("${CMAKE_CURRENT_SOURCE_DIR}/version.hpp.in"
+               "${DECKBACK_GENERATED_DIR}/version.hpp" @ONLY)
+
 option(DECKBACK_ASAN "Build with ASan+UBSan" OFF)
 if(DECKBACK_ASAN)
   add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
@@ -101,6 +121,7 @@ add_executable(deckback-launcher
   src/log.cpp
   src/config.cpp
   src/platform.cpp
+  src/updater.cpp
   src/watchdog.cpp
   src/cdm_fetcher.cpp
   src/sha256.cpp
@@ -184,6 +205,18 @@ if(BUILD_TESTING)
   target_include_directories(watchdog_test PRIVATE src)
   target_link_libraries(watchdog_test PRIVATE Threads::Threads)
   add_test(NAME watchdog_test COMMAND watchdog_test)
+
+  # Self-updater lifecycle. The portal path is on-Deck-verified (durable/self-update.md); this pins
+  # the factory + crash-free/idempotent lifecycle. Links libsystemd (compiled in via __has_include)
+  # + devtools/overlay/scripts for the "restart to apply" toast path.
+  add_executable(updater_test tests/updater_test.cpp src/updater.cpp src/devtools.cpp
+                              src/overlay.cpp src/scripts.cpp src/log.cpp)
+  target_include_directories(updater_test PRIVATE src "${DECKBACK_GENERATED_DIR}")
+  target_link_libraries(updater_test PRIVATE Threads::Threads)
+  if(SYSTEMD_FOUND)
+    target_link_libraries(updater_test PRIVATE PkgConfig::SYSTEMD)
+  endif()
+  add_test(NAME updater_test COMMAND updater_test)
 
   # The Widevine CDM path rule (P7). `usable_cdm_path` mirrors the engine patch's check; the
   # near-miss cases ("/a/..b") are the ones worth a test.
@@ -286,7 +319,7 @@ if(BUILD_TESTING)
   # Tests assert() their invariants. CI builds Release, which defines NDEBUG and would both compile
   # the assertions out (tests silently pass) and trip -Werror=unused-variable. Force NDEBUG off for
   # test targets so assertions stay live regardless of the build type.
-  foreach(t config_test log_test devtools_test player_test watchdog_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test cdm_fetcher_test touchmode_test util_test navigator_test scripts_test)
+  foreach(t config_test log_test devtools_test player_test watchdog_test updater_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test cdm_fetcher_test touchmode_test util_test navigator_test scripts_test)
     target_compile_options(${t} PRIVATE -UNDEBUG)
   endforeach()
 endif()

@@ -211,6 +211,7 @@ std::optional<Config> Config::load(const std::string& path) {
   read_into(s, "resume_probe_port", c.resume_probe_port);
   read_into(s, "resume_online_timeout_ms", c.resume_online_timeout_ms);
   read_into(s, "resume_reload_after_ms", c.resume_reload_after_ms);
+  read_into(s, "self_update", c.self_update);
   return c;
 }
 

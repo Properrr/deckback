@@ -8,6 +8,16 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **Opt-in self-update** (`self_update`, **off by default**): when enabled, the launcher asks the
+  Flatpak portal to update **only Deckback**, from its own `deckback` remote, in the background — no
+  root, no password — and the new version applies on the next launch (a toast says so). It updates
+  nothing else; keeping the runtime and other apps current is still a separate `flatpak update`.
+  Backed by an sd-bus session-bus client to `org.freedesktop.portal.Flatpak` (mirrors the logind
+  integration). Also: `--version`/startup now report the real version (compiled in from `VERSION`),
+  and `--selftest-update` probes the portal. **Not yet verified on a Deck** — see
+  `.internal/findings/durable/self-update.md` for the on-device validation plan.
+
 ## [0.0.3] - 2026-07-13
 
 ### Added

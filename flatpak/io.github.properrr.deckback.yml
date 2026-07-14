@@ -32,6 +32,10 @@ finish-args:
   - --device=input
   - --talk-name=org.freedesktop.ScreenSaver
   - --system-talk-name=org.freedesktop.login1
+  # Self-update: the Flatpak portal lets this sandboxed app update ONLY itself, from its own remote,
+  # with no root and no password (findings durable/self-update.md). Off by default (app.json:
+  # self_update=false) until verified on a Deck; the permission is inert while the feature is off.
+  - --talk-name=org.freedesktop.portal.Flatpak
   - --filesystem=xdg-run/pipewire-0:ro
   # content_shell is forked by the launcher, which finds it here (see the deckback wrapper).
   - --env=DECKBACK_COBALT_BIN=/app/bin/cobalt-zypak
@@ -64,6 +68,11 @@ modules:
     sources:
       - type: dir
         path: ../launcher
+      # The repo VERSION file lives above launcher/, so the flat dir-copy misses it. Add it explicitly
+      # so CMake compiles the real version in (version.hpp) rather than the 0.0.0-dev fallback.
+      - type: file
+        path: ../VERSION
+        dest-filename: VERSION
       - type: dir
         path: ../config/scripts
         dest: scripts

@@ -24,7 +24,9 @@
 #include "profile.hpp"
 #include "scripts.hpp"
 #include "touchmode.hpp"
+#include "updater.hpp"
 #include "util.hpp"
+#include "version.hpp"
 #include "voice.hpp"
 #include "watchdog.hpp"
 
@@ -32,7 +34,8 @@ namespace {
 
 using namespace deckback;
 
-constexpr std::string_view kVersion = "deckback-launcher 0.0.0 (scaffolding)";
+// Compiled in from the repo VERSION file (launcher/CMakeLists.txt → version.hpp).
+std::string version_line() { return std::string("deckback-launcher ") + kDeckbackVersion; }
 
 void on_signal(int) { Watchdog::request_shutdown(); }
 
@@ -116,6 +119,7 @@ void print_usage() {
       "  --config <path>    Config file (default: config/app.json)\n"
       "  --collect-logs     Write a support bundle to stdout and exit\n"
       "  --selftest-dbus    Report whether the logind backend is live and exit\n"
+      "  --selftest-update  Probe the Flatpak update portal (run inside the flatpak) and exit\n"
       "  --version          Print version and exit\n"
       "  -h, --help         Print this help and exit\n"
       "\n"
@@ -134,6 +138,7 @@ int main(int argc, char** argv) {
   std::string config_path = "config/app.json";
   std::string deep_link;
   bool selftest_dbus = false;
+  bool selftest_update = false;
 
   for (int i = 1; i < argc; ++i) {
     const std::string_view a = argv[i];
@@ -141,12 +146,14 @@ int main(int argc, char** argv) {
       print_usage();
       return 0;
     } else if (a == "--version") {
-      info(std::string(kVersion));
+      info(version_line());
       return 0;
     } else if (a == "--collect-logs") {
       return collect_logs();
     } else if (a == "--selftest-dbus") {
       selftest_dbus = true;
+    } else if (a == "--selftest-update") {
+      selftest_update = true;
     } else if (a == "--config" && i + 1 < argc) {
       config_path = argv[++i];
     } else if (a == "--config") {
@@ -170,6 +177,12 @@ int main(int argc, char** argv) {
     return Platform::create()->selftest();
   }
 
+  if (selftest_update) {
+    info(std::string("selftest-update: backend ") +
+         (Updater::backend_available() ? "libsystemd" : "stub (no libsystemd)"));
+    return Updater::create(UpdaterConfig{})->selftest();
+  }
+
   const std::string runtime_dir = env_or("XDG_RUNTIME_DIR", "/tmp");
   if (!acquire_single_instance_lock(runtime_dir)) return 1;
 
@@ -180,7 +193,7 @@ int main(int argc, char** argv) {
   }
   const std::string log_dir = resolve_log_dir(cfg->log_dir, runtime_dir);
   log_init(log_dir + "/deckback.log", cfg->log_max_bytes, cfg->log_max_files, cfg->log_to_stderr);
-  info(std::string(kVersion));
+  info(version_line());
 
   // Page-script runtime overrides (findings durable/page-scripts.md). Same ship-a-fix-without-a-
   // rebuild surface as app.json: a same-named .js in the scripts dir shadows the embedded default.
@@ -351,6 +364,21 @@ int main(int argc, char** argv) {
     touch_mode->start();
   }
 
+  // Self-update via the Flatpak portal (findings durable/self-update.md). Off by default; when on,
+  // it updates ONLY this app from its own remote in the background and toasts "restart to apply".
+  // Needs the CDP port only for that toast — the update itself does not. NOT verified on a Deck
+  // yet.
+  std::unique_ptr<Updater> updater;
+  if (cfg->self_update) {
+    updater = Updater::create(UpdaterConfig{.enabled = true,
+                                            .cdp_host = "127.0.0.1",
+                                            .cdp_port = cdp_nav ? cfg->remote_debugging_port : 0});
+    updater->start();
+  } else {
+    info(
+        "startup: self_update off — update via 'flatpak update'/Discover (durable/self-update.md)");
+  }
+
   info(std::format("startup: launching {} -> {}", cobalt_bin, url));
   AudioRepair audio;
   audio.start();
@@ -359,6 +387,7 @@ int main(int argc, char** argv) {
 
   // Shut down in dependency order: stop the input + navigator + poll threads (they call into the
   // engine/platform), then the logind backend (its callbacks call into player), then flush logs.
+  if (updater) updater->stop();
   if (touch_mode) touch_mode->stop();
   if (gamepad) gamepad->stop();
   if (navigator) navigator->stop();

@@ -45,7 +45,9 @@
     "resume_probe_port": 443,
     "resume_online_timeout_ms": 8000,
     "resume_reload_after_ms": 0,
-    "$comment_reload": "If the Deck slept at least this many ms, reload on resume (Page.reload) instead of just nudging play(), so stale stream URLs / auth token are refreshed. Measured with CLOCK_BOOTTIME. 0 = disabled (always nudge). Tune on-Deck; e.g. 3600000 = 1h."
+    "$comment_reload": "If the Deck slept at least this many ms, reload on resume (Page.reload) instead of just nudging play(), so stale stream URLs / auth token are refreshed. Measured with CLOCK_BOOTTIME. 0 = disabled (always nudge). Tune on-Deck; e.g. 3600000 = 1h.",
+    "self_update": false,
+    "$comment_self_update": "Self-update via the Flatpak portal: when true, the launcher asks the portal to update ONLY this app, from its own `deckback` remote, in the background — no root, no password — and the new version applies on the NEXT launch. Updating the runtime and every other flatpak is a separate `flatpak update`. OFF by default until the portal path is verified on a Deck (findings durable/self-update.md)."
   },
   "log": {
     "$comment": "Size-rotating file sink owned by launcher/ (doc §2 P2). Empty log_directory derives from DECKBACK_LOG_DIR / XDG_STATE_HOME at runtime. Lines also mirror to stderr for journald/Steam.",
