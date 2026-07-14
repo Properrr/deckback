@@ -114,8 +114,10 @@ class GamepadInput {
   const LayerState* layers_ = nullptr;  // context source; nullptr = always Browse
   std::string lt_key_, rt_key_;  // analog triggers; empty = unbound. Ignored while that trigger is
                                  // a modifier (i.e. its modifier layer is non-empty).
-  // A trigger bound to skip_back/skip_fwd carries a prebuilt seekBy() expression instead of a DOM
-  // key (input-ux §18); non-empty takes precedence over lt_key_/rt_key_ on the press edge.
+  // A trigger bound to a seek action (skip_back/skip_fwd or chapter_back/chapter_fwd) carries a
+  // prebuilt eval expression instead of a DOM key (input-ux §18): skip.js for a fixed jump,
+  // chapter_seek.js for chapter-boundary navigation. Non-empty takes precedence over lt_key_/rt_key_
+  // on the press edge.
   std::string lt_skip_js_, rt_skip_js_;
   bool lt_down_ = false, rt_down_ = false;
 

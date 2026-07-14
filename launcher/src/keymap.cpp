@@ -185,6 +185,12 @@ int skip_action_sign(std::string_view value) {
   return 0;
 }
 
+int chapter_action_sign(std::string_view value) {
+  if (value == "chapter_fwd" || value == "chapter_forward" || value == "chapter_next") return 1;
+  if (value == "chapter_back" || value == "chapter_backward" || value == "chapter_prev") return -1;
+  return 0;
+}
+
 FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg) {
   if (!cfg.enabled) return {nullptr, 0};
 

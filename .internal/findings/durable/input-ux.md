@@ -748,27 +748,72 @@ WEB context from the app is rejected: **every** id came back UNPLAYABLE, includi
 one, which means the *request context* is refused, not the videos — 2026-era YouTube gates the WEB
 client behind fresh client-versions + `visitorData`/proof-of-origin tokens. Getting chapters would
 mean tracking YouTube's client versions and tokens the way yt-dlp does: an arms race squarely
-against our minimal-fragility / R1 posture. **Do not build chapter-aware seek.** Build fixed-interval
+against our minimal-fragility / R1 posture. ~~**Do not build chapter-aware seek.**~~ Build fixed-interval
 `seekBy` skip instead, and if you want "chapter-ish" navigation later, revisit only if the TVHTML5
 `/next` engagement-panel path (unprobed) turns out to carry `macroMarkersListEntity`.
 
-*Milestone-scoped values* (exact keys/versions, keyed to cobalt-27/M138) belong in `m138.md`; the
-strategic conclusions above are durable. *Still unverified:* the §12 hazard — whether Steam's virtual
-pad emits the **analog axis** (`ABS_Z`/`ABS_RZ`, which `input.cpp` reads) or a **digital button**
-under `steam_input.vdf`'s `TRIGGER_LEFT/RIGHT` click binding. If it emits a digital button, the
-`seekBy` binding still needs an evdev path that fires, so verify the axis reaches the launcher before
-relying on L2/R2 at all. (The reported "L2/R2 do nothing" is already fully explained without it:
-`lt`/`rt` → `scan_rewind`/`scan_forward` → unmapped, so they dispatch nothing regardless.)
+**★ CORRECTION 2026-07-13 (on-Deck, live app over CDP) — the `/next` lead pays off; chapters ARE
+reachable.** The negative table above only tried `/player` (no overlays) and a WEB-context `/player`
+(UNPLAYABLE). It never tried **`/next`**, the exact endpoint flagged one line up as the unprobed lead.
+It works: `POST /youtubei/v1/next` with the page's TVHTML5 context + `INNERTUBE_API_KEY` and the
+videoId passed directly (`status 200`) returns an `engagement-panel-macro-markers-description-chapters`
+panel AND a `macroMarkersListEntity` in `frameworkUpdates.entityBatchUpdate.mutations[].payload`. Its
+`markersList` (`markerType: MARKER_TYPE_CHAPTERS`) is `markers[]`, each with `title.simpleText`,
+**`startMillis`** (string ms), `durationMillis`, and
+`onTap.innertubeCommand.seekToVideoTimestampCommand.offsetFromVideoStartMilliseconds`. Confirmed for
+`X5xlTpuiRCE` (0 / 348000 / 533000 / 638000 …). Milestone-keyed shape lives in m138.md.
 
-**Implemented 2026-07-13 (code, not yet hardware-verified).** The fixed-interval `seekBy` skip is
-built. New `skip_action_sign()`/`build_skip_js()` in `keymap.cpp` recognise the `skip_back`/`skip_fwd`
-actions (not `kActionAliases` rows — they resolve to a JS expression, not a DOM key); `input.cpp`
-prebuilds the expression per trigger at construction and evaluates it with `client_.eval_void(...)` on
-the trigger's press edge, taking precedence over any DOM-key binding. Interval is `config:skip_seconds`
-(default 10, hot-swappable). `config/app.json` now ships `lt`→`skip_back`, `rt`→`skip_fwd`, replacing
-the dead `scan_rewind`/`scan_forward`. L0-tested (`input_test.cpp`: `skip_action_sign`, the signed-delta
-JS shape, and `skip_seconds` config parse + default). **Rides into the in-flight M138 bundle.** What
-this does NOT yet prove: that the press edge actually fires on-Deck — i.e. the unresolved analog-axis
-vs digital-button question above. First on-Deck test of this build must confirm L2/R2 seek the player;
-if they still do nothing, the trigger reaches the launcher as an EV_KEY button, not `ABS_Z`/`ABS_RZ`,
-and the dispatch must move into the button path (or `steam_input.vdf` must bind the analog axis).
+**★ The TVHTML5 player element is `.html5-video-player`, NOT `#movie_player`.** `#movie_player` is a
+desktop-watch-page id and does NOT exist on youtube.com/tv; the player API object there is
+`document.querySelector('.html5-video-player')` (id `ytlr-player__player-container-player`), which
+exposes the full API — `seekTo`, `getCurrentTime`, `getDuration`, `getVideoData`, `seekBy`,
+`getPlayerState`. The first cut of skip.js/chapter_seek.js keyed on `#movie_player` and so silently
+fell through to the raw `<video>` element (skip still nudged `currentTime`, but chapter_seek never
+reached its chapter branch — "just skips, not by chapters"). All player scripts now select
+`.html5-video-player || #movie_player || video`. Verified on-Deck 2026-07-13. **Any future player
+interaction must use this selector, not `#movie_player`.**
+
+**Implemented + on-Deck verified 2026-07-13.** `config/scripts/chapter_seek.js`
+(ScriptLibrary, params `dir`/`skip`) does exactly the design below; `chapter_action_sign()` in
+`keymap.cpp` recognises `chapter_back`/`chapter_fwd`; `input.cpp` prebuilds the render per trigger.
+`config/app.json` ships `lt`→`chapter_back`, `rt`→`chapter_fwd` (the new default) — `skip_back`/
+`skip_fwd` remain for pure fixed-jump. Non-blocking: `eval_void` does not await promises, so the
+script caches chapters on `window.__dbChapters` and fixed-skips on a cache miss while a background
+`/next` fetch warms it (first chapter press after a new video acts as a skip; subsequent are true
+chapter jumps). No launcher/PlayerController change — all logic in the one hot-swappable script.
+L0-tested (`input_test.cpp`: `chapter_action_sign`, the render shape). Design as built:
+
+**How chapter-aware L2/R2 works:**
+1. On entering a watch view (PlayerController already detects the `#/watch` route), fetch `/next` for
+   the current videoId via a page-context script (`config/scripts/chapters_fetch.js` — ScriptLibrary,
+   so it is hot-swappable when Leanback shifts the shape), parse `startMillis[]` where
+   `markerType == MARKER_TYPE_CHAPTERS`, sorted. Cache per videoId; refetch on video change.
+2. L2/R2 → prev/next boundary: read `#movie_player.getCurrentTime()`, find the surrounding chapter,
+   `#movie_player.seekTo(targetSeconds, true)` (verified primitive). "Prev" jumps to the current
+   chapter's start unless within ~2 s of it, then the previous — the console convention.
+3. **Fallback stays fixed-interval skip** when a video has no chapters (`markers` absent/empty) or the
+   fetch fails — so L2/R2 always do *something*. This is the config knob split: `skip_back`/`skip_fwd`
+   (today) vs a new `chapter_back`/`chapter_fwd` action that falls back to skip.
+This is more "proper" than the desktop render-tree scraping rejected above: it uses the TV client's own
+InnerTube data source, not internal JSON of a different client. Fragility is the usual R1 UA risk, no
+worse than the rest of the app; the hot-swappable fetch script is the mitigation.
+
+This does NOT change what SHIPPED: L2/R2 today do fixed ±10 s skip (verified working on-Deck
+2026-07-13 — the triggers arrive as analog `ABS_Z`/`ABS_RZ`, the axis question below is RESOLVED).
+
+*Milestone-scoped values* (exact keys/versions, keyed to cobalt-27/M138) belong in `m138.md`; the
+strategic conclusions above are durable. *RESOLVED 2026-07-13 on-Deck:* the §12 hazard is gone —
+Steam's virtual pad emits the **analog axis** (`ABS_Z`/`ABS_RZ`, which `input.cpp` reads), not a
+digital button, so the press-edge path fires and L2/R2 seek works with the shipped code. No
+button-path fallback was needed.
+
+**Implemented + hardware-verified 2026-07-13.** The fixed-interval `seekBy` skip is built and
+confirmed working on-Deck (OLED, live Leanback playback). `skip_action_sign()` in `keymap.cpp`
+recognises `skip_back`/`skip_fwd`; `input.cpp` prebuilds `config/scripts/skip.js` (ScriptLibrary,
+hot-swappable) per trigger at construction and `eval_void`s it on the press edge, taking precedence
+over any DOM-key binding. Interval is `config:skip_seconds` (default 10). `config/app.json` ships
+`lt`→`skip_back`, `rt`→`skip_fwd`, replacing the dead `scan_rewind`/`scan_forward`. L0-tested
+(`input_test.cpp` + `scripts_test.cpp`). On-Deck: L2 = −10 s, R2 = +10 s, both seek the player. The
+analog-axis question is RESOLVED (above). **Next iteration:** promote to chapter-aware seek via the
+`/next` `macroMarkersListEntity` data (see the ★ CORRECTION above), keeping fixed skip as the
+no-chapters fallback.

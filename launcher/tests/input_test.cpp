@@ -209,6 +209,27 @@ void test_skip_action_sign() {
   assert(skip_action_sign("") == 0);
 }
 
+void test_chapter_action_sign() {
+  assert(chapter_action_sign("chapter_fwd") == 1);
+  assert(chapter_action_sign("chapter_next") == 1);
+  assert(chapter_action_sign("chapter_back") == -1);
+  assert(chapter_action_sign("chapter_prev") == -1);
+  // Skip actions and DOM keys are NOT chapter actions.
+  assert(chapter_action_sign("skip_fwd") == 0);
+  assert(chapter_action_sign("scrub_back") == 0);
+  assert(chapter_action_sign("") == 0);
+}
+
+void test_chapter_seek_script_renders_with_dir_and_skip() {
+  // config/scripts/chapter_seek.js rendered with the direction + the fixed-skip fallback interval.
+  const std::string js = ScriptLibrary::instance().render(
+      "chapter_seek", ScriptParams().set("dir", -1).set("skip", 10));
+  assert(js.find(R"("dir":-1)") != std::string::npos);
+  assert(js.find(R"("skip":10)") != std::string::npos);
+  assert(js.find("macroMarkersListEntity") != std::string::npos);  // the real chapter source
+  assert(js.find("seekTo") != std::string::npos);
+}
+
 void test_skip_script_renders_with_the_signed_delta() {
   // The seek is now config/scripts/skip.js rendered with the signed delta as a param (input-ux §18).
   const std::string fwd =
@@ -841,6 +862,8 @@ int main() {
 
   test_skip_action_sign();
   test_skip_script_renders_with_the_signed_delta();
+  test_chapter_action_sign();
+  test_chapter_seek_script_renders_with_dir_and_skip();
 
   test_parse_chord_valid();
   test_parse_chord_rejects_bad_input();
