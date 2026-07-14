@@ -8,6 +8,8 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.3] - 2026-07-13
+
 ### Added
 - **L2/R2 chapter seek**: the triggers now jump to the previous/next chapter of the playing video
   (chapter boundaries fetched from YouTube's TVHTML5 `/next` endpoint and cached per video). Videos
@@ -57,6 +59,7 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.2...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.3...HEAD
+[0.0.3]: https://github.com/properrr/deckback/releases/tag/v0.0.3
 [0.0.2]: https://github.com/properrr/deckback/releases/tag/v0.0.2
 [0.0.1]: https://github.com/properrr/deckback/releases/tag/v0.0.1
