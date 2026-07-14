@@ -8,6 +8,26 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **L2/R2 chapter seek**: the triggers now jump to the previous/next chapter of the playing video
+  (chapter boundaries fetched from YouTube's TVHTML5 `/next` endpoint and cached per video). Videos
+  without chapters — or a press before the chapter data has arrived — fall back to the fixed
+  ±`skip_seconds` jump introduced alongside (configurable in `app.json`).
+
+### Fixed
+- Launcher CDP requests no longer all time out instantly once the Deck has been up for ~25 days
+  (a 32-bit monotonic-clock truncation in the DevTools socket deadline).
+
+### Changed
+- Slimmed the engine build: ~40 feature-off GN args (WebGPU/Dawn backends, SwiftShader, Vulkan, VR,
+  TFLite/WebNN, printing/PDF/plugins, chromoting, WebRTC call codecs, HLS/MPEG2-TS, HSTS preload
+  list, qt/gtk shims) plus a patch dropping content_shell's web-test harness. Stripped engine binary
+  193.4 → 175.0 MB (−9.5%); `libvk_swiftshader.so` (29.4 MB) no longer ships; ~11% fewer compile
+  units per build. Playback-critical paths (VP9/H.264/HEVC, software-VP9 fallback, AV1 steering,
+  VA-API, Widevine hooks, voice-search mic capture) are unchanged; verified by the headless Leanback
+  smoke gate. On-Deck re-verification of hardware decode is pending
+  (`.internal/findings/durable/build-slimming.md`).
+
 ## [0.0.2] - 2026-07-10
 
 ### Added

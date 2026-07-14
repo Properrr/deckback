@@ -1,0 +1,113 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Artem Gaiduchenko <agaiduchenko@roku.com>
+Date: Mon, 13 Jul 2026 17:20:41 -0700
+Subject: [PATCH] Disable content_shell web-test harness
+
+---
+ content/shell/BUILD.gn                   |  8 +++++++-
+ content/shell/app/shell_main_delegate.cc | 13 ++++++++-----
+ content/shell/app/shell_main_delegate.h  |  6 ++++--
+ 3 files changed, 19 insertions(+), 8 deletions(-)
+
+diff --git a/content/shell/BUILD.gn b/content/shell/BUILD.gn
+index 864537710e2..9c9e37592bc 100644
+--- a/content/shell/BUILD.gn
++++ b/content/shell/BUILD.gn
+@@ -61,7 +61,10 @@ config("content_shell_lib_warnings") {
+ }
+ 
+ # Web test support not built on android, but is everywhere else.
+-support_web_tests = !is_android
++# Deckback: never built. The shipped kiosk never runs --run-web-tests, and the harness
++# (//content/test:test_support + //content/web_test + assorted //components/*:test_support)
++# is ~1,134 dead TUs in every deployable binary.
++support_web_tests = false
+ 
+ source_set("android_shell_descriptors") {
+   testonly = true
+@@ -136,6 +139,9 @@ static_library("content_shell_app") {
+     "CONTENT_SHELL_VERSION=\"$content_shell_version\"",
+     "CONTENT_SHELL_MAJOR_VERSION=\"$content_shell_major_version\"",
+   ]
++  if (!support_web_tests) {
++    defines += [ "CONTENT_SHELL_DISABLE_WEB_TESTS" ]
++  }
+ }
+ 
+ inspector_protocol_generate("protocol_sources") {
+diff --git a/content/shell/app/shell_main_delegate.cc b/content/shell/app/shell_main_delegate.cc
+index 583fa11303d..6936bc0e085 100644
+--- a/content/shell/app/shell_main_delegate.cc
++++ b/content/shell/app/shell_main_delegate.cc
+@@ -52,7 +52,8 @@
+     content::RegisterIPCLogger(msg_id, logger)
+ #endif
+ 
+-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD) && \
++    !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+ #include "content/web_test/browser/web_test_browser_main_runner.h"  // nogncheck
+ #include "content/web_test/browser/web_test_content_browser_client.h"  // nogncheck
+ #include "content/web_test/renderer/web_test_content_renderer_client.h"  // nogncheck
+@@ -240,7 +241,7 @@ std::optional<int> ShellMainDelegate::BasicStartupComplete() {
+ 
+   InitLogging(command_line);
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     const bool browser_process =
+         command_line.GetSwitchValueASCII(switches::kProcessType).empty();
+@@ -314,7 +315,7 @@ std::variant<int, MainFunctionParams> ShellMainDelegate::RunProcess(
+   base::CurrentProcess::GetInstance().SetProcessType(
+       base::CurrentProcessType::PROCESS_BROWSER);
+ 
+-#if !BUILDFLAG(IS_ANDROID)
++#if !BUILDFLAG(IS_ANDROID) && !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     // Web tests implement their own BrowserMain() replacement.
+     web_test_runner_->RunBrowserMain(std::move(main_function_params));
+@@ -464,7 +465,8 @@ ContentClient* ShellMainDelegate::CreateContentClient() {
+ }
+ 
+ ContentBrowserClient* ShellMainDelegate::CreateContentBrowserClient() {
+-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD) && \
++    !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     browser_client_ = std::make_unique<WebTestContentBrowserClient>();
+     return browser_client_.get();
+@@ -480,7 +482,8 @@ ContentGpuClient* ShellMainDelegate::CreateContentGpuClient() {
+ }
+ 
+ ContentRendererClient* ShellMainDelegate::CreateContentRendererClient() {
+-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD) && \
++    !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+   if (switches::IsRunWebTestsSwitchPresent()) {
+     renderer_client_ = std::make_unique<WebTestContentRendererClient>();
+     return renderer_client_.get();
+diff --git a/content/shell/app/shell_main_delegate.h b/content/shell/app/shell_main_delegate.h
+index 44ea48fbdab..e93bd9450dc 100644
+--- a/content/shell/app/shell_main_delegate.h
++++ b/content/shell/app/shell_main_delegate.h
+@@ -20,7 +20,8 @@ class ShellContentGpuClient;
+ class ShellContentRendererClient;
+ class ShellContentUtilityClient;
+ 
+-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD) && \
++    !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+ class WebTestBrowserMainRunner;
+ #endif
+ 
+@@ -61,7 +62,8 @@ class ShellMainDelegate : public ContentMainDelegate {
+   // content_browsertests should not set the kRunWebTests command line flag, so
+   // |is_content_browsertests_| and |web_test_runner_| are mututally exclusive.
+   bool is_content_browsertests_;
+-#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD)
++#if !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_STARBOARD) && \
++    !defined(CONTENT_SHELL_DISABLE_WEB_TESTS)
+   // Only present when running web tests, which run inside Content Shell.
+   //
+   // Web tests are not browser tests, so |is_content_browsertests_| and

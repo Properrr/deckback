@@ -5,3 +5,7 @@
 # Put only dev-preset-specific OVERRIDES here.
 #
 # Kept empty for now. Candidate: cc_wrapper = "sccache" (faster incremental) once proven.
+
+# Skip the devtools-frontend TypeScript typecheck (~1.5k GN targets of pure build time). REJECTED
+# by an assert on official builds, so this lives here and in asan.gn, never common/deck.
+devtools_skip_typecheck = true

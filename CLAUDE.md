@@ -95,12 +95,16 @@ Three cooperating layers, each with a **different toolchain** (see below):
    modified via a rebaseable **quilt patch series in `patches/`** (never edited in place). The
    patch surface stayed smaller than planned: gamepad input, `MediaCapabilities`/AV1 steering, and
    the mic auto-grant all landed in the launcher over CDP instead. `patches/series` holds exactly
-   **one** entry: Widevine CDM registration, because the shell has no `AddContentDecryptionModules`
-   override and `enable_widevine` alone loads nothing (m114.md "Widevine registration gap"). It
-   compiles, links, and regresses neither `just smoke` nor `just cert` (2026-07-10); with no CDM
-   installed it correctly registers nothing, and `com.widevine.alpha` rejects with
-   `NotSupportedError`. **No real CDM has ever been loaded** — CI must never fetch Google's
-   (`docs/legal.md`).
+   **two** entries: (1) Widevine CDM registration, because the shell has no
+   `AddContentDecryptionModules` override and `enable_widevine` alone loads nothing (m114.md
+   "Widevine registration gap") — it compiles, links, and regresses neither `just smoke` nor
+   `just cert` (2026-07-10); with no CDM installed it correctly registers nothing, and
+   `com.widevine.alpha` rejects with `NotSupportedError`; **no real CDM has ever been loaded** — CI
+   must never fetch Google's (`docs/legal.md`); (2) `support_web_tests=false` in content/shell —
+   content_shell is upstream's web-test shell and otherwise always links ~1,134 TUs of dead test
+   harness (2026-07-13, part of the build-slimming pass; see
+   `.internal/findings/durable/build-slimming.md`, which also documents the feature-off GN args in
+   `args/common.gn`: −9.5% stripped binary, no SwiftShader, smoke-verified — on-Deck gates pending).
 2. **`launcher/`** — a small standalone C++ shim (its own CMake build, no Chromium checkout
    needed): env/flags/config, evdev gamepad→CDP key injection + touchscreen lock, logind
    sleep-watcher over D-Bus, idle-inhibit manager, startup CDP policy (TV UA, AV1 steering, mic

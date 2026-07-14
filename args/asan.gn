@@ -2,3 +2,6 @@
 # AddressSanitizer for workstation-side memory-bug repro. Not deployable to the Deck (perf/size).
 # NOT a standalone arg set — see the note in args/dev.gn.
 is_asan = true
+
+# Same non-official-only build-time win as in args/dev.gn.
+devtools_skip_typecheck = true

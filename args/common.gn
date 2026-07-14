@@ -20,3 +20,63 @@ ffmpeg_branding = "Chrome"
 # if the on-Deck power gate comes up short (see m114 open issues).
 cc_wrapper = "sccache"
 enable_precompiled_headers = false
+
+# Feature-off ("slim") set — investigated + measured 2026-07-13 at m138; the full report is
+# .internal/findings/durable/build-slimming.md (§4 for the assert traps, §6 for what must stay ON
+# and why — read it before adding/removing anything here). Verified as ONE unit: gn-gen clean on
+# qa, full build, smoke PASS (Leanback + UA + AV1 steering + clean screenshot). Effect at m138:
+# -6.7% ninja steps, -7.7% compile TUs, stripped binary 193.4 -> 177.0 MB, and libvk_swiftshader.so
+# (29.4 MB) is no longer built or shipped. Flag names/defaults are milestone-scoped: re-run the
+# report's §8 method on every Cobalt bump.
+#
+# GPU: WebGPU off; ANGLE keeps ONLY the GL backend (runtime ships --use-angle=gl). Dawn's CORE
+# cannot leave the graph (//services/on_device_model, no off switch) — its backends can.
+use_dawn = false
+skia_use_dawn = false
+enable_swiftshader = false
+angle_enable_swiftshader = false
+enable_swiftshader_vulkan = false
+enable_vulkan = false
+angle_enable_vulkan = false
+angle_use_vulkan_display = false
+dawn_enable_vulkan = false
+dawn_enable_desktop_gl = false
+dawn_enable_opengles = false
+dawn_use_swiftshader = false
+dawn_enable_vulkan_validation_layers = false
+dawn_enable_spirv_validation = false
+# XR / ML
+enable_vr = false
+build_with_tflite_lib = false
+build_tflite_with_xnnpack = false
+webnn_use_tflite = false
+# Printing / PDF / plugins move together, and glic (chrome-layer, gen-time-evaluated) is the
+# linchpin: glic asserts pdf, pdf asserts plugins + pulls printing.
+enable_glic = false
+enable_pdf = false
+enable_plugins = false
+enable_printing = false
+enable_print_preview = false
+use_cups = false
+enable_paint_preview = false
+# Media long tail: WebRTC call codecs (voice search = getUserMedia audio, which stays), cast
+# remoting, HLS/MPEG2-TS, capture. libvpx/dav1d/HEVC deliberately KEPT — report §6.
+enable_libaom = false
+enable_hls_demuxer = false
+enable_mse_mpeg2ts_stream_parser = false
+media_use_openh264 = false
+rtc_use_h264 = false
+rtc_use_h265 = false
+rtc_include_dav1d_in_internal_decoder_factory = false
+rtc_use_pipewire = false
+enable_media_remoting = false
+enable_screen_capture = false
+# Net / desktop-integration long tail. HSTS preload: kiosk only ever opens https://youtube.com/tv.
+include_transport_security_state_preload_list = false
+use_kerberos = false
+enable_mdns = false
+use_qt5 = false
+use_qt6 = false
+use_gtk = false
+# Size, not speed: ~167 KB of binary for <10 ms startup (upstream Cobalt ships this).
+v8_enable_snapshot_compression = true
