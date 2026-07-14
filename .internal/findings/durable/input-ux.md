@@ -817,3 +817,26 @@ over any DOM-key binding. Interval is `config:skip_seconds` (default 10). `confi
 analog-axis question is RESOLVED (above). **Next iteration:** promote to chapter-aware seek via the
 `/next` `macroMarkersListEntity` data (see the ★ CORRECTION above), keeping fixed skip as the
 no-chapters fallback.
+
+**★ BUGFIX 2026-07-14 — off-watch seek/resume resumed the backgrounded player (audible prev video).**
+The seek scripts locate the player by `document.querySelector('.html5-video-player')` alone. Leanback
+keeps that element in the DOM (backgrounded, paused) after the user backs out of a watch view to the
+home screen, so pressing L2/R2 there called `pl.seekTo(...)`/`seekBy(...)` and the TVHTML5 player
+*resumed* — the previous video played audibly behind the home screen. `config/scripts/chapter_seek.js`
+and `skip.js` now bail early unless `location.hash.indexOf('/watch') >= 0` — the SAME "player open"
+signal `player_state.js` already computes and `player.cpp` trusts to pick `Layer::Player` (kept as a
+substring match, hash-only, so the seek guard and the layer poll stay byte-for-byte in lockstep rather
+than tightening one in isolation). The guard lives in the JS, not `input.cpp`'s trigger dispatch,
+because it must read the route at the *instant* of the press: `layer()` is a poll result up to
+`poll_ms` stale, so a fast "back out → press L2" would beat a C++-only gate. The identical automatic
+path — `player_play.js` via `on_resume()` (nudges play unconditionally after every suspend/resume,
+`player.cpp` on_resume) — carried the same class of bug (resume on the home screen → backgrounded
+video plays) and got the same guard. The voice-duck resume (`voice_play.js`) is NOT affected: `unduck()`
+only fires when `ducked_` is set, which requires `voice_pause` to have paused a *playing* video, so it
+is self-balancing. All three guards are hot-swappable script edits; no launcher rebuild is needed for
+the logic. **Hardware-verified 2026-07-14 (OLED, Game Mode):** the fixed scripts were hot-swapped onto
+the installed Flatpak via `DECKBACK_SCRIPTS_DIR` (journald confirmed all three `scripts: '…' overridden
+from …` at startup), and L2/R2 on the home screen after backing out of playback no longer resumes the
+backgrounded video — the reported bug is gone. The `player_play.js` suspend/resume guard shares the
+identical route check but was not independently exercised via `just soak`; that path's `just soak`
+scenario runs on `/watch` (unchanged), so no regression is expected.
