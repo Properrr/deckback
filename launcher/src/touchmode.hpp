@@ -33,7 +33,8 @@ class TouchModeGuard {
  private:
   void loop();
 
-  int poll_ms_;
+  // [[maybe_unused]]: the no-xcb build of loop() never reads it (clang's -Wunused-private-field).
+  [[maybe_unused]] int poll_ms_;
   WorkerThread worker_;
 };
 
