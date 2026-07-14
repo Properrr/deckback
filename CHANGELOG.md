@@ -8,6 +8,19 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **Self-update** (`self_update`, **on by default**): the launcher asks the Flatpak portal to update
+  **only Deckback**, from its own `deckback` remote, in the background — no root, no password — and
+  the new version applies on the next launch (a toast says so). It updates nothing else; keeping the
+  runtime and other apps current is still a separate `flatpak update`. Backed by an sd-bus session-bus
+  client to `org.freedesktop.portal.Flatpak` (mirrors the logind integration). Because SteamOS Game
+  Mode has no Access-portal backend for the portal's consent dialog, the launcher pre-records the
+  consent in the permission store (`flatpak`/`updates`=`yes`), respecting an explicit host-side
+  `no`. Verified end-to-end on the Deck in Game Mode on the stock 30-minute portal poll (auto-seed →
+  deploy → next launch binds the new version). Also: `--version`/startup report the real version
+  (compiled in from `VERSION`), and `--selftest-update` / `--selftest-deploy[-seed]` probe the portal.
+  See `.internal/findings/durable/self-update.md`.
+
 ## [0.0.3] - 2026-07-13
 
 ### Added

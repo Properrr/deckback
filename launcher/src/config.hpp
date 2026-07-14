@@ -124,6 +124,11 @@ struct Config {
   // URLs / auth token. 0 = disabled (always nudge). Duration is measured with CLOCK_BOOTTIME.
   int resume_reload_after_ms = 0;
 
+  // Self-update via the Flatpak portal (findings durable/self-update.md). When on, the launcher
+  // asks the portal to update only this app, from its own `deckback` remote, in the background (no
+  // root, no password); the new version applies on the next launch. Off by default.
+  bool self_update = false;
+
   // Loads and parses the JSON at `path`. Returns nullopt on read/parse failure.
   // NOTE: this is a minimal top-level-key extractor sufficient for app.json's shape; replace with a
   // real JSON parser when the config grows nested structure that must round-trip.
