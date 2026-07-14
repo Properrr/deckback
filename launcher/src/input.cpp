@@ -96,16 +96,17 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     if (name != "lt" && name != "rt") continue;
     const bool is_mod = (name == "lt") ? !maps_.lt_mod.empty() : !maps_.rt_mod.empty();
     if (is_mod) continue;
-    // A seek action is not a DOM key: prebuild its eval expression from config/scripts/ (ScriptLibrary,
-    // hot-swappable) so the press edge is a single eval_void (input-ux §18). Checked before
-    // resolve_binding so it never falls through to "no DOM key". Two kinds:
+    // A seek action is not a DOM key: prebuild its eval expression from config/scripts/
+    // (ScriptLibrary, hot-swappable) so the press edge is a single eval_void (input-ux §18).
+    // Checked before resolve_binding so it never falls through to "no DOM key". Two kinds:
     //   skip_back/skip_fwd       -> skip.js: a fixed ±skip_seconds seek.
     //   chapter_back/chapter_fwd -> chapter_seek.js: jump to the prev/next chapter boundary,
     //                               falling back to a fixed skip when the video has no chapters.
     if (int sign = skip_action_sign(value); sign != 0) {
       (name == "lt" ? lt_skip_js_ : rt_skip_js_) = ScriptLibrary::instance().render(
           "skip", ScriptParams().set("delta", sign * opts.skip_seconds));
-      info(std::format("input: bind {} -> skip {}{}s", name, sign < 0 ? "-" : "+", opts.skip_seconds));
+      info(std::format("input: bind {} -> skip {}{}s", name, sign < 0 ? "-" : "+",
+                       opts.skip_seconds));
       continue;
     }
     if (int dir = chapter_action_sign(value); dir != 0) {

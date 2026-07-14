@@ -83,7 +83,8 @@ void test_mic_probe_js() {
   const std::string q = mic_probe_js({"[title=\"x\"]"});
   assert(q.find("[title=\\\"x\\\"]") != std::string::npos);
 
-  // No selectors: a well-formed program that finds nothing (an empty JSON array), not a syntax error.
+  // No selectors: a well-formed program that finds nothing (an empty JSON array), not a syntax
+  // error.
   const std::string empty = mic_probe_js({});
   assert(empty.find("\"selectors\":[]") != std::string::npos);
 }

@@ -7,8 +7,7 @@ namespace deckback {
 std::string toast_js(std::string_view text, int ms) {
   // The toast markup + style now live in config/scripts/toast.js (ScriptLibrary), reached by name;
   // text/ms are passed as JSON params so this call site no longer hand-escapes JS.
-  return ScriptLibrary::instance().render(
-      "toast", ScriptParams().set("text", text).set("ms", ms));
+  return ScriptLibrary::instance().render("toast", ScriptParams().set("text", text).set("ms", ms));
 }
 
 std::string toast_hide_js() { return ScriptLibrary::instance().render("toast_hide"); }

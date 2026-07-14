@@ -9,10 +9,10 @@
 namespace deckback {
 namespace {
 
-// Duck/restore now live in config/scripts/voice_*.js (ScriptLibrary). `pause` is the default because
-// it is the only one that removes speaker bleed entirely; `mute` keeps the timeline moving, which
-// some users prefer. Each script carries a `/*voice*/` marker so the test double can tell it apart
-// from player_pause.js (both call pause()).
+// Duck/restore now live in config/scripts/voice_*.js (ScriptLibrary). `pause` is the default
+// because it is the only one that removes speaker bleed entirely; `mute` keeps the timeline moving,
+// which some users prefer. Each script carries a `/*voice*/` marker so the test double can tell it
+// apart from player_pause.js (both call pause()).
 std::string voice_duck_pause_js() { return ScriptLibrary::instance().render("voice_pause"); }
 std::string voice_duck_play_js() { return ScriptLibrary::instance().render("voice_play"); }
 std::string voice_duck_mute_js() { return ScriptLibrary::instance().render("voice_mute"); }
@@ -58,8 +58,7 @@ std::string mic_probe_js(const std::vector<std::string>& selectors) {
   // config/scripts/mic_probe.js, rendered with the selector list as a JSON string[] param (one
   // central escaper — no more per-call js_quote). Returns "x,y" for the first visible candidate, ""
   // when nothing matches.
-  return ScriptLibrary::instance().render("mic_probe",
-                                          ScriptParams().set("selectors", selectors));
+  return ScriptLibrary::instance().render("mic_probe", ScriptParams().set("selectors", selectors));
 }
 
 HoldToTalk::Action HoldToTalk::on_press(long now_ms) {

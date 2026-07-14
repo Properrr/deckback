@@ -114,7 +114,8 @@ std::string overlay_js(const std::vector<ControlRow>& rows, std::string_view tit
   // (ScriptLibrary). Rows are passed as structured [control, action] pairs, escaped ONCE by
   // ScriptParams — the page builds the <td>s. Trusted Types is required: youtube.com/tv's CSP
   // rejects a bare innerHTML, which is why the card rendered in tests but nothing on the Deck until
-  // the policy was added (input-ux §17). Appended (not innerHTML-replaced): Leanback is alive under it.
+  // the policy was added (input-ux §17). Appended (not innerHTML-replaced): Leanback is alive under
+  // it.
   std::vector<std::pair<std::string, std::string>> pairs;
   pairs.reserve(rows.size());
   for (const ControlRow& r : rows) pairs.emplace_back(r.control, r.action);

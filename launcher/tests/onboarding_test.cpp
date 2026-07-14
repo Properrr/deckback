@@ -236,8 +236,8 @@ void test_overlay_js_renders_rows_and_escapes() {
   assert(has(js, "document.documentElement.appendChild"));  // Leanback replaces body on navigation
   // Rows are passed as structured [control, action] data; the page builds the <td>s at runtime.
   assert(has(js, "[\"A\",\"Select\"]"));
-  assert(has(js, "Controls"));            // the title param
-  assert(has(js, "Press any button"));    // the footer param
+  assert(has(js, "Controls"));          // the title param
+  assert(has(js, "Press any button"));  // the footer param
   // A quote in a hot-swapped label would close the object literal; the card would then silently
   // never render, because a failed injection looks exactly like no injection. BOTH columns are
   // hot-swappable text: `control` comes from control_label() today, but the chord row's control is

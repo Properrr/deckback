@@ -49,16 +49,17 @@ bool trigger_pressed(int value, bool was_pressed);
 
 // ---- trigger seek (findings input-ux §18) -------------------------------------------------------
 
-// A skip binding performs a fixed-interval jump through the Leanback player over CDP, NOT a DOM key.
-// Returns the sign of the jump (+1 forward, -1 back) for a skip action value, or 0 when `value` is
-// not one. Bound only to the analog triggers today; the input layer renders config/scripts/skip.js
-// (ScriptLibrary) with the signed interval and evaluates it on the press edge.
+// A skip binding performs a fixed-interval jump through the Leanback player over CDP, NOT a DOM
+// key. Returns the sign of the jump (+1 forward, -1 back) for a skip action value, or 0 when
+// `value` is not one. Bound only to the analog triggers today; the input layer renders
+// config/scripts/skip.js (ScriptLibrary) with the signed interval and evaluates it on the press
+// edge.
 int skip_action_sign(std::string_view value);
 
 // Like skip_action_sign, but for chapter-aware seek (chapter_back/chapter_fwd → -1/+1, else 0). The
-// input layer renders config/scripts/chapter_seek.js with the direction + the skip_seconds fallback;
-// that script jumps to the prev/next chapter boundary (TVHTML5 /next macroMarkersListEntity) and
-// degrades to a fixed skip when the video has no chapters.
+// input layer renders config/scripts/chapter_seek.js with the direction + the skip_seconds
+// fallback; that script jumps to the prev/next chapter boundary (TVHTML5 /next
+// macroMarkersListEntity) and degrades to a fixed skip when the video has no chapters.
 int chapter_action_sign(std::string_view value);
 
 // ---- right-stick fast traversal (findings input-ux §7) -----------------------------------------

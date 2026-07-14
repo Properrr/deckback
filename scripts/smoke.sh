@@ -9,7 +9,7 @@
 #   3. AV1 steering works through all three APIs YouTube probes, and does not over-reach onto
 #      VP9/H.264 (--assert-av1-steering).
 #
-# (3) injects config/av1_steering.js — the same file CMake compiles into the launcher — so this
+# (3) injects config/scripts/av1_steering.js — the same file CMake embeds into the launcher — so this
 # tests the script that ships rather than a copy of it. It also runs a BASELINE first: before the
 # script is injected, MediaSource.isTypeSupported(av01...) must be true. An engine built without any
 # AV1 decoder would otherwise satisfy every steering assertion while proving nothing at all, which is

@@ -231,9 +231,9 @@ void test_chapter_seek_script_renders_with_dir_and_skip() {
 }
 
 void test_skip_script_renders_with_the_signed_delta() {
-  // The seek is now config/scripts/skip.js rendered with the signed delta as a param (input-ux §18).
-  const std::string fwd =
-      ScriptLibrary::instance().render("skip", ScriptParams().set("delta", 10));
+  // The seek is now config/scripts/skip.js rendered with the signed delta as a param (input-ux
+  // §18).
+  const std::string fwd = ScriptLibrary::instance().render("skip", ScriptParams().set("delta", 10));
   assert(fwd.find(R"(({"delta":10}))") != std::string::npos);  // invoked with the param
   assert(fwd.find("seekBy") != std::string::npos);             // the real body (public player API)
   assert(fwd.find("#movie_player") != std::string::npos);

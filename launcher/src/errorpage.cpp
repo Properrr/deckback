@@ -55,8 +55,8 @@ long retry_backoff_ms(int attempt, long min_ms, long max_ms) {
 std::string error_page_js(const ErrorPageInfo& info) {
   // The page markup, style, and Trusted Types policy now live in config/scripts/error_page.js
   // (ScriptLibrary); title/hint/url/detail are JSON string params, escaped once by ScriptParams —
-  // this call site no longer hand-escapes JS. Enter/Space retry; Escape is deliberately unbound. The
-  // script's policy falls back to the raw string on about:blank, which has no Trusted Types.
+  // this call site no longer hand-escapes JS. Enter/Space retry; Escape is deliberately unbound.
+  // The script's policy falls back to the raw string on about:blank, which has no Trusted Types.
   return ScriptLibrary::instance().render("error_page", ScriptParams()
                                                             .set("title", info.title)
                                                             .set("hint", info.hint)

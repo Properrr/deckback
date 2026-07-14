@@ -118,7 +118,8 @@ void ScriptLibrary::load_overrides(const std::string& dir) {
     ++n;
     info(std::format("scripts: '{}' overridden from {}", name, dir));
   }
-  if (n == 0) info(std::format("scripts: no runtime overrides in {} (embedded defaults in use)", dir));
+  if (n == 0)
+    info(std::format("scripts: no runtime overrides in {} (embedded defaults in use)", dir));
 }
 
 std::string_view ScriptLibrary::body(std::string_view name) const {
@@ -142,9 +143,10 @@ bool ScriptLibrary::invoke(DevToolsClient& client, std::string_view name,
 }
 
 bool ScriptLibrary::install_sticky(DevToolsClient& client, std::string_view name) const {
-  // Sticky scripts are installed VERBATIM (no params appended): they are self-invoking document-start
-  // scripts `(function(){...})();`, not the `(function(p){...})` one-shot shape render() feeds. `just
-  // smoke` injects the same file verbatim, so the two paths run identical text.
+  // Sticky scripts are installed VERBATIM (no params appended): they are self-invoking
+  // document-start scripts `(function(){...})();`, not the `(function(p){...})` one-shot shape
+  // render() feeds. `just smoke` injects the same file verbatim, so the two paths run identical
+  // text.
   std::string_view b = body(name);
   if (b.empty()) {
     warn(std::format("scripts: no sticky script named '{}' (call-site typo?)", name));

@@ -267,14 +267,15 @@ def test_assertion_failure_is_not_retryable():
 
 
 def test_av1_steering_script_has_exactly_one_source():
-    """`config/av1_steering.js` is the only copy.
+    """`config/scripts/av1_steering.js` is the only copy.
 
-    The launcher compiles it in (CMake generates av1_steering_js.hpp) and `just smoke` injects the
-    same file. A second copy — a C++ string literal, a Python constant — is a copy that goes stale
-    silently, and the symptom is a green smoke run gating a script nobody ships.
+    The launcher embeds all of config/scripts/ as the ScriptLibrary registry (CMake generates
+    scripts_registry.hpp) and `just smoke` injects the same file. A second copy — a C++ string
+    literal, a Python constant — is a copy that goes stale silently, and the symptom is a green
+    smoke run gating a script nobody ships.
     """
-    js = pathlib.Path(_ROOT, "config", "av1_steering.js")
-    check("config/av1_steering.js exists", js.is_file())
+    js = pathlib.Path(_ROOT, "config", "scripts", "av1_steering.js")
+    check("config/scripts/av1_steering.js exists", js.is_file())
     src = js.read_text()
     for api in ("MediaSource.isTypeSupported", "canPlayType", "decodingInfo"):
         check(f"the script overrides {api}", api in src)
@@ -283,11 +284,11 @@ def test_av1_steering_script_has_exactly_one_source():
     nav = pathlib.Path(_ROOT, "launcher", "src", "navigator.cpp").read_text()
     check("navigator.cpp holds no inline copy of the script",
           "isTypeSupported" not in nav and "decodingInfo" not in nav)
-    check("navigator.cpp includes the generated header", "av1_steering_js.hpp" in nav)
+    check("navigator.cpp installs it from the ScriptLibrary registry", '"av1_steering"' in nav)
 
     cmake = pathlib.Path(_ROOT, "launcher", "CMakeLists.txt").read_text()
-    check("CMake regenerates the header when the .js changes",
-          "CMAKE_CONFIGURE_DEPENDS" in cmake and "av1_steering.js" in cmake)
+    check("CMake regenerates the registry when the scripts change",
+          "CMAKE_CONFIGURE_DEPENDS" in cmake and "config/scripts" in cmake)
 
 
 # ---- import hygiene -------------------------------------------------------------------------

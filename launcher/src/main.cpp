@@ -185,7 +185,8 @@ int main(int argc, char** argv) {
   // Page-script runtime overrides (findings durable/page-scripts.md). Same ship-a-fix-without-a-
   // rebuild surface as app.json: a same-named .js in the scripts dir shadows the embedded default.
   // Loaded here — before any worker thread starts — so the registry is read-only once shared. The
-  // dir defaults to <config dir>/scripts, co-located with app.json, and DECKBACK_SCRIPTS_DIR overrides.
+  // dir defaults to <config dir>/scripts, co-located with app.json, and DECKBACK_SCRIPTS_DIR
+  // overrides.
   {
     std::string scripts_dir = env_or("DECKBACK_SCRIPTS_DIR", "");
     if (scripts_dir.empty()) {

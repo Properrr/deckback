@@ -16,10 +16,10 @@ namespace deckback {
 // glyph/toast on engage, and today a user who trips the chord sees a screen that has simply stopped
 // responding to touch. That is the bug report this exists to prevent.
 
-// The Trusted Types policy that youtube.com/tv's CSP (`require-trusted-types-for 'script'`) requires
-// for any `.innerHTML` assignment used to live here as `js_trusted_html`. It is now folded into the
-// two scripts that inject HTML — config/scripts/{error_page,overlay}.js — so each is self-contained;
-// the toast uses `textContent` and needs no policy.
+// The Trusted Types policy that youtube.com/tv's CSP (`require-trusted-types-for 'script'`)
+// requires for any `.innerHTML` assignment used to live here as `js_trusted_html`. It is now folded
+// into the two scripts that inject HTML — config/scripts/{error_page,overlay}.js — so each is
+// self-contained; the toast uses `textContent` and needs no policy.
 
 // Build the JS for one toast (config/scripts/toast.js rendered with text/ms params). The node is
 // reused across calls (one id), auto-fades after `ms`, and is `pointer-events:none` so it can never

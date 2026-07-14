@@ -50,9 +50,8 @@ void test_params_raw_is_verbatim() {
 
 void test_render_appends_params_to_the_body() {
   // The embedded skip.js is a function expression; render wraps it into a call with the params.
-  const std::string js =
-      ScriptLibrary::instance().render("skip", ScriptParams().set("delta", -10));
-  assert(has(js, "seekBy"));            // the real body is present
+  const std::string js = ScriptLibrary::instance().render("skip", ScriptParams().set("delta", -10));
+  assert(has(js, "seekBy"));  // the real body is present
   assert(has(js, "#movie_player"));
   assert(has(js, R"(({"delta":-10}))"));  // ...invoked with the params object
   // No params -> invoked with {}.
@@ -68,7 +67,8 @@ void test_embedded_defaults_present() {
   // The whole config/scripts/ dir is embedded; a couple of known members must be there, with their
   // real content (sticky scripts are self-invoking, not the (function(p) shape).
   assert(has(std::string(ScriptLibrary::instance().body("av1_steering")), "MediaSource"));
-  assert(has(std::string(ScriptLibrary::instance().body("no_pointer")), "stopImmediatePropagation"));
+  assert(
+      has(std::string(ScriptLibrary::instance().body("no_pointer")), "stopImmediatePropagation"));
   assert(has(std::string(ScriptLibrary::instance().body("toast")), "__deckback_toast"));
 }
 
@@ -81,12 +81,15 @@ void test_runtime_override_shadows_the_default() {
     f << "(function(p){return 'OVERRIDDEN:'+p.delta;})";
   }
   // A blank file must be IGNORED (a truncation must not silently disable the behaviour).
-  { std::ofstream f(dir / "toast.js"); f << "   \n\t "; }
+  {
+    std::ofstream f(dir / "toast.js");
+    f << "   \n\t ";
+  }
 
   ScriptLibrary::instance().load_overrides(dir.string());
   assert(has(std::string(ScriptLibrary::instance().body("skip")), "OVERRIDDEN"));
   assert(has(ScriptLibrary::instance().render("skip", ScriptParams().set("delta", 5)),
-            R"(OVERRIDDEN:'+p.delta;})({"delta":5}))"));
+             R"(OVERRIDDEN:'+p.delta;})({"delta":5}))"));
   // toast kept its embedded default despite the blank override file.
   assert(has(std::string(ScriptLibrary::instance().body("toast")), "__deckback_toast"));
 
