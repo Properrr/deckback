@@ -25,25 +25,8 @@
 target="${1:-all}"
 case "$target" in shell | launcher | gn | all) : ;; *) die_usage "usage: preflight.sh [shell|launcher|gn|all]" ;; esac
 
-# ---- pinned-tool bootstrap ----------------------------------------------------------------------
-# CI pins clang-format 18; a different local version reformats differently and CI stays red. Prefer a
-# system-installed pinned tool (what CI's apt provides); otherwise drop the exact version into a
-# cached venv so a fresh clone still gets parity with one command.
-VENV="${DECKBACK_PREFLIGHT_VENV:-${TMPDIR:-/tmp}/deckback-preflight-venv}"
-_bootstrapped=0
-pinned_tool() { # pinned_tool <preferred-system-name> <venv-binary> <pip-spec...>
-  local sys
-  sys="$(command -v "$1" 2>/dev/null || true)"
-  if [ -n "$sys" ]; then echo "$sys"; return; fi
-  if [ ! -x "$VENV/bin/$2" ]; then
-    [ "$_bootstrapped" -eq 0 ] && info "bootstrapping pinned lint tools into $VENV (clang-format-18 + shellcheck)…"
-    _bootstrapped=1
-    python3 -m venv "$VENV" >/dev/null 2>&1 &&
-      "$VENV/bin/pip" install -q "${@:3}" >&2 ||
-      die_env "could not bootstrap pinned lint tools — install clang-format-18 and shellcheck, or fix python3-venv/pip"
-  fi
-  echo "$VENV/bin/$2"
-}
+# The pinned-tool bootstrap (pinned_tool + venv) lives in lib.sh, shared with fmt.sh so `just fmt`
+# writes the same clang-format-18 style this gate checks.
 
 # ---- gn: args/*.gn are overrides only -----------------------------------------------------------
 run_gn() {
@@ -96,7 +79,10 @@ run_launcher() {
 
   if cmake -S launcher -B "$gdir" -G Ninja -DCMAKE_BUILD_TYPE=Release >/dev/null 2>&1 &&
     cmake --build "$gdir" >/dev/null 2>&1; then
-    ctest --test-dir "$gdir" --output-on-failure >/dev/null 2>&1 || { echo "  FAIL  launcher ctest (gcc) failed — rerun: ctest --test-dir <build> --output-on-failure" >&2; bad=1; }
+    ctest --test-dir "$gdir" --output-on-failure >/dev/null 2>&1 || {
+      echo "  FAIL  launcher ctest (gcc) failed — rerun: ctest --test-dir <build> --output-on-failure" >&2
+      bad=1
+    }
   else
     echo "  FAIL  launcher gcc build failed" >&2
     bad=1
@@ -105,7 +91,10 @@ run_launcher() {
   if command -v clang++ >/dev/null 2>&1; then
     CXX=clang++ cmake -S launcher -B "$cdir" -G Ninja >/dev/null 2>&1 &&
       cmake --build "$cdir" >/dev/null 2>&1 ||
-      { echo "  FAIL  launcher clang build failed (clang -Wall -Wextra -Werror is stricter than gcc)" >&2; bad=1; }
+      {
+        echo "  FAIL  launcher clang build failed (clang -Wall -Wextra -Werror is stricter than gcc)" >&2
+        bad=1
+      }
   else
     die_env "the launcher clang build needs clang++ (CI runs both gcc and clang). Install: clang"
   fi
@@ -116,7 +105,11 @@ run_launcher() {
 rc=0
 run_one() {
   info "preflight: $1"
-  "run_$1" || { rc="$EX_ASSERT"; echo "  ✗ $1 FAILED" >&2; return; }
+  "run_$1" || {
+    rc="$EX_ASSERT"
+    echo "  ✗ $1 FAILED" >&2
+    return
+  }
   echo "  ✓ $1 clean" >&2
 }
 case "$target" in

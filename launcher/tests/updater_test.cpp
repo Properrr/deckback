@@ -74,17 +74,38 @@ int main() {
   up->stop();
   up->stop();
 
-  // A configured-but-disabled instance with a CDP port set is still a no-op: no toast can fire
-  // without a delivered update, and a disabled updater never applies one.
-  auto up2 = Updater::create(UpdaterConfig{.enabled = false, .cdp_port = 65000});
+  // A notify-mode instance (auto_deploy=false) with a CDP port set is still a no-op off-Deck: no
+  // toast can fire without a delivered update, and request_update() is safe before/after
+  // start/stop.
+  auto up2 = Updater::create(UpdaterConfig{.auto_deploy = false, .cdp_port = 65000});
+  up2->request_update();  // no pending update, no portal: must not crash
   up2->start();
+  up2->request_update();
   up2->stop();
 
-  // An enabled instance is lifecycle-safe off-Deck too: the consent seeder finds no /.flatpak-info
-  // outside a sandbox and skips, and a missing portal still leaves the updater inert.
-  auto up3 = Updater::create(UpdaterConfig{.enabled = true});
+  // An auto-deploy instance is lifecycle-safe off-Deck too: the consent seeder finds no
+  // /.flatpak-info outside a sandbox and skips, and a missing portal still leaves the updater
+  // inert.
+  auto up3 = Updater::create(UpdaterConfig{.auto_deploy = true});
   up3->start();
   up3->stop();
+
+  // UpdateState is the updater->UI hand-off. A commit change re-arms the dot even after the user
+  // dismissed the previous one — a newer version is worth surfacing again (durable/self-update.md).
+  UpdateState state;
+  assert(!state.available());
+  assert(state.commit().empty());
+  assert(!state.dot_suppressed());
+  state.set_available(true, "aaaa1111");
+  assert(state.available());
+  assert(state.commit() == "aaaa1111");
+  state.suppress_dot();
+  assert(state.dot_suppressed());
+  state.set_available(true, "aaaa1111");  // same commit: suppression sticks
+  assert(state.dot_suppressed());
+  state.set_available(true, "bbbb2222");  // a newer commit re-arms the dot
+  assert(!state.dot_suppressed());
+  assert(state.commit() == "bbbb2222");
 
   std::puts("updater: lifecycle ok");
   return 0;

@@ -74,6 +74,30 @@ die_transport() { fail "$EX_TRANSPORT" "$@"; } # the wire is wrong
 die_usage() { fail "$EX_USAGE" "$@"; }
 info() { echo ">> $*" >&2; }
 
+# ---- pinned-tool bootstrap (shared by preflight.sh and fmt.sh so the two cannot drift) -----------
+# CI pins clang-format 18; a different local version reformats differently, so `just fmt` writing v20
+# style while preflight checks v18 is an endless fmt→preflight loop (exactly the drift preflight-parity
+# exists to kill). Prefer a system-installed pinned tool (what CI's apt provides); otherwise drop the
+# exact version into a cached venv so a fresh clone still gets parity with one command.
+DECKBACK_PREFLIGHT_VENV="${DECKBACK_PREFLIGHT_VENV:-${TMPDIR:-/tmp}/deckback-preflight-venv}"
+_pinned_bootstrapped=0
+pinned_tool() { # pinned_tool <preferred-system-name> <venv-binary> <pip-spec...>
+  local sys
+  sys="$(command -v "$1" 2>/dev/null || true)"
+  if [ -n "$sys" ]; then
+    echo "$sys"
+    return
+  fi
+  if [ ! -x "$DECKBACK_PREFLIGHT_VENV/bin/$2" ]; then
+    [ "$_pinned_bootstrapped" -eq 0 ] && info "bootstrapping pinned lint tools into $DECKBACK_PREFLIGHT_VENV …"
+    _pinned_bootstrapped=1
+    python3 -m venv "$DECKBACK_PREFLIGHT_VENV" >/dev/null 2>&1 &&
+      "$DECKBACK_PREFLIGHT_VENV/bin/pip" install -q "${@:3}" >&2 ||
+      die_env "could not bootstrap pinned lint tools — install $1 (and shellcheck), or fix python3-venv/pip"
+  fi
+  echo "$DECKBACK_PREFLIGHT_VENV/bin/$2"
+}
+
 # Does this `flatpak info --show-permissions` output grant evdev access?
 #
 #   flatpak_grants_input "$(flatpak info --show-permissions io.github.properrr.deckback)"

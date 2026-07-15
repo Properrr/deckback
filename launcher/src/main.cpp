@@ -24,6 +24,7 @@
 #include "profile.hpp"
 #include "scripts.hpp"
 #include "touchmode.hpp"
+#include "updateprompt.hpp"
 #include "updater.hpp"
 #include "util.hpp"
 #include "version.hpp"
@@ -196,7 +197,9 @@ int main(int argc, char** argv) {
     info(std::string("selftest-deploy: backend ") +
          (Updater::backend_available() ? "libsystemd" : "stub (no libsystemd)") +
          (selftest_deploy_seed ? " — seeding consent first" : " — RAW permission (not seeded)"));
-    return Updater::create(UpdaterConfig{.enabled = true})->selftest_deploy(selftest_deploy_seed);
+    // selftest_deploy drives one portal Update cycle explicitly; auto_deploy/state are irrelevant
+    // to it (it uses the `seed` argument), so a default config is correct here.
+    return Updater::create(UpdaterConfig{})->selftest_deploy(selftest_deploy_seed);
   }
 
   const std::string runtime_dir = env_or("XDG_RUNTIME_DIR", "/tmp");
@@ -314,6 +317,13 @@ int main(int argc, char** argv) {
   // explicitly below, but relying on that rather than on declaration order is a use-after-free
   // waiting for someone to add an early return.
   std::optional<OnboardingController> onboarding;
+  // Self-update (findings durable/self-update.md). Declared before the navigator and gamepad so it
+  // outlives the two threads that borrow update_prompt; the updater owns its own thread, stopped
+  // first in the shutdown sequence below. update_state is the thread-safe hand-off the updater
+  // writes and the notify UI reads.
+  UpdateState update_state;
+  std::unique_ptr<Updater> updater;
+  std::optional<UpdatePromptController> update_prompt;
   std::optional<Navigator> navigator;
   std::optional<GamepadInput> gamepad;
   // Phase 5 voice search. Disabled by default: voice cannot be a keypress on this engine, and
@@ -338,13 +348,52 @@ int main(int argc, char** argv) {
                        first_run_marker_path(resolve_state_dir(runtime_dir)));
   }
 
+  // Self-update. Detection (portal UpdateMonitor) runs in notify + auto; 'off' never constructs the
+  // updater. auto_deploy distinguishes them: auto deploys on detection, notify only publishes
+  // availability into update_state and waits for the user's "Update now" via update_prompt.
+  if (cfg->self_update_mode != SelfUpdateMode::Off) {
+    updater = Updater::create(
+        UpdaterConfig{.auto_deploy = (cfg->self_update_mode == SelfUpdateMode::Auto),
+                      .state = &update_state,
+                      .cdp_port = cdp_nav ? cfg->remote_debugging_port : 0});
+    info(std::format("startup: self-update mode = {}",
+                     self_update_mode_name(cfg->self_update_mode)));
+    if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav) {
+      update_prompt.emplace(UpdatePromptConfig{.cdp_port = cfg->remote_debugging_port,
+                                               .state_dir = resolve_state_dir(runtime_dir),
+                                               .local_version = kDeckbackVersion,
+                                               .state = &update_state,
+                                               .updater = updater.get()});
+      // Test aid: force the notify UI (dot + one-time card + changelog) without waiting for the
+      // portal's ~30-min poll. DECKBACK_FAKE_UPDATE=<any-commit-string> publishes availability at
+      // launch. Confirming the update still routes through the real portal deploy.
+      if (const char* fake = std::getenv("DECKBACK_FAKE_UPDATE"); fake && *fake) {
+        update_state.set_available(true, fake);
+        warn(std::string("startup: DECKBACK_FAKE_UPDATE set — simulating an available update (") +
+             fake + ") for UI testing");
+      }
+    }
+    updater->start();
+  } else {
+    info(
+        "startup: self_update off — update via 'flatpak update'/Discover (durable/self-update.md)");
+  }
+
   if (cdp_nav) {
     navigator.emplace(
         "127.0.0.1", cfg->remote_debugging_port, cfg->user_agent, url, cfg->devtools_poll_ms,
         NavPolicy{cfg->steer_av1, cfg->mic_autogrant, cfg->error_page, cfg->error_retry_min_ms,
                   cfg->error_retry_max_ms, cfg->error_title, cfg->error_hint, cfg->disable_touch});
-    if (onboarding)
-      navigator->set_on_app_loaded([&onboarding] { onboarding->show(/*first_run_only=*/true); });
+    if (onboarding || update_prompt)
+      navigator->set_on_app_loaded([&onboarding, &update_prompt] {
+        if (onboarding) onboarding->show(/*first_run_only=*/true);
+        // Re-draw the dot and re-inject the card (if open) after a full reload tore down
+        // documentElement — else a navigation strands the card and traps input (self-update.md).
+        if (update_prompt) {
+          update_prompt->redraw_dot_on_reload();
+          update_prompt->redraw_card_on_reload();
+        }
+      });
     navigator->start();
     // Phase 3 input: gamepad evdev -> DOM key events over CDP (S0.6 mechanism), bindings from
     // config/app.json:keymap so a Leanback change can be hotfixed without a rebuild. The touch
@@ -363,6 +412,7 @@ int main(int argc, char** argv) {
     gp.layers = player ? &layers : nullptr;
     gp.voice = voice ? &*voice : nullptr;
     gp.onboarding = onboarding ? &*onboarding : nullptr;
+    gp.update_prompt = update_prompt ? &*update_prompt : nullptr;
     gamepad.emplace("127.0.0.1", cfg->remote_debugging_port, std::move(gp));
     gamepad->start();
   } else {
@@ -378,16 +428,6 @@ int main(int argc, char** argv) {
   if (cfg->disable_touch) {
     touch_mode.emplace();
     touch_mode->start();
-  }
-
-  std::unique_ptr<Updater> updater;
-  if (cfg->self_update) {
-    updater = Updater::create(
-        UpdaterConfig{.enabled = true, .cdp_port = cdp_nav ? cfg->remote_debugging_port : 0});
-    updater->start();
-  } else {
-    info(
-        "startup: self_update off — update via 'flatpak update'/Discover (durable/self-update.md)");
   }
 
   info(std::format("startup: launching {} -> {}", cobalt_bin, url));

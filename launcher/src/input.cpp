@@ -14,6 +14,7 @@
 #include "log.hpp"
 #include "overlay.hpp"
 #include "scripts.hpp"
+#include "updateprompt.hpp"
 #include "util.hpp"
 
 namespace deckback {
@@ -54,6 +55,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       voice_(opts.voice),
       hold_(opts.voice ? opts.voice->hold_ms() : 0),
       onboarding_(opts.onboarding),
+      update_prompt_(opts.update_prompt),
       fast_cfg_(opts.fast_scroll) {
   KeymapConfig& keymap = opts.keymap;
   // Voice is not a DOM key. When it is enabled, take its control out of the button map so it is not
@@ -75,6 +77,14 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     if (help_code_ >= 0)
       info(std::format("input: controls card re-opens on evdev code {}", help_code_));
     keymap.base = without_action(keymap.base, "show_controls");
+  }
+  // Update card buttons are FIXED (A/B/Y), independent of the user's keymap: the card teaches those
+  // exact glyphs, and the tool that offers an update must not depend on a keymap the user may have
+  // rebound. Only meaningful while the card is up, so the base map is left untouched.
+  if (update_prompt_) {
+    upd_a_ = control_code("a");
+    upd_b_ = control_code("b");
+    upd_y_ = control_code("y");
   }
   if (opts.touch.lock_enabled) {
     const auto [a, b] = parse_chord(opts.touch.chord);
@@ -231,9 +241,10 @@ void GamepadInput::set_direction(const char* key) {
 }
 
 void GamepadInput::update_fast_scroll() {
-  // A held D-pad/left-stick direction suppresses the right stick entirely — and so does the modal
-  // controls card, which would otherwise scroll Leanback's focus behind itself.
-  const bool blocked = dir_key_ || (onboarding_ && onboarding_->visible());
+  // A held D-pad/left-stick direction suppresses the right stick entirely — and so does either
+  // modal card, which would otherwise scroll Leanback's focus behind itself.
+  const bool blocked = dir_key_ || (onboarding_ && onboarding_->visible()) ||
+                       (update_prompt_ && update_prompt_->card_visible());
   const FastScrollTick t =
       blocked ? FastScrollTick{nullptr, 0} : fast_scroll(rstick_x_, rstick_y_, fast_cfg_);
   if (t.key == fast_key_) return;  // pointer identity: same direction, only the rate moved
@@ -308,6 +319,21 @@ bool GamepadInput::handle_voice(int code, int value) {
   return true;  // the voice button is ours; never also dispatch it as a mapped button
 }
 
+bool GamepadInput::handle_update_card(int type, int code, int value) {
+  if (!update_prompt_ || !update_prompt_->card_visible()) return false;
+  // Modal, like the controls card, but with three distinct actions instead of "any button
+  // dismisses" — so the fixed A/B/Y are read directly here. Every other event is swallowed.
+  if (type == EV_KEY && value == 1) {
+    if (code == upd_a_ && upd_a_ >= 0)
+      update_prompt_->confirm_update();
+    else if (code == upd_b_ && upd_b_ >= 0)
+      update_prompt_->dismiss_later();
+    else if (code == upd_y_ && upd_y_ >= 0)
+      update_prompt_->ignore_version();
+  }
+  return true;
+}
+
 bool GamepadInput::handle_onboarding(int type, int code, int value) {
   if (!onboarding_) return false;
 
@@ -322,8 +348,12 @@ bool GamepadInput::handle_onboarding(int type, int code, int value) {
     return true;
   }
 
-  // Re-open. Deliberate, so it is a press edge and never an auto-repeat.
+  // Re-open on the Menu button. Deliberate, so it is a press edge and never an auto-repeat. When an
+  // update is available it takes priority — this is the "reach the update from the Menu at any
+  // time" path (durable/self-update.md), reachable even after the ambient dot was dismissed;
+  // otherwise the controls card opens as usual.
   if (type == EV_KEY && value == 1 && code == help_code_ && help_code_ >= 0) {
+    if (update_prompt_ && update_prompt_->open_from_menu()) return true;
     onboarding_->show(/*first_run_only=*/false);
     return true;
   }
@@ -331,6 +361,7 @@ bool GamepadInput::handle_onboarding(int type, int code, int value) {
 }
 
 void GamepadInput::handle_event(int type, int code, int value) {
+  if (handle_update_card(type, code, value)) return;
   if (handle_onboarding(type, code, value)) return;
   if (type == EV_KEY) {
     if (handle_chord(code, value)) return;
@@ -448,9 +479,15 @@ void GamepadInput::loop() {
       for (size_t k = 0; k < count; ++k) handle_event(evs[k].type, evs[k].code, evs[k].value);
     }
 
-    // The controls card is modal, and a direction held when it appeared would keep auto-repeating
-    // into the page behind it. Dropping the direction also releases the right-stick scroll.
-    if (onboarding_ && onboarding_->visible()) set_direction(nullptr);
+    // Self-update notify UI: cheap on every tick (an atomic read of the shared state), draws the
+    // dot / auto-shows the one-time card only on the edge where a newer commit first appears.
+    if (update_prompt_) update_prompt_->tick();
+
+    // Either card is modal, and a direction held when it appeared would keep auto-repeating into
+    // the page behind it. Dropping the direction also releases the right-stick scroll.
+    if ((onboarding_ && onboarding_->visible()) ||
+        (update_prompt_ && update_prompt_->card_visible()))
+      set_direction(nullptr);
 
     // Hold-to-talk matures on a timer, not on an event.
     if (hold_.pending() && hold_.on_tick(mono_ms()) == HoldToTalk::Action::Start) voice_->start();

@@ -77,6 +77,22 @@ const char* update_permission_name(UpdatePermission p) {
   return kPermUnsetName;
 }
 
+void UpdateState::set_available(bool available, std::string commit) {
+  {
+    std::lock_guard<std::mutex> lk(m_);
+    if (commit != commit_) {
+      commit_ = std::move(commit);
+      dot_suppressed_.store(false, std::memory_order_relaxed);  // a newer version re-arms the dot
+    }
+  }
+  available_.store(available, std::memory_order_relaxed);
+}
+
+std::string UpdateState::commit() const {
+  std::lock_guard<std::mutex> lk(m_);
+  return commit_;
+}
+
 std::string parse_flatpak_app_id(const std::string& text) {
   bool in_application = false;
   size_t pos = 0;
@@ -100,6 +116,7 @@ class StubUpdater final : public Updater {
  public:
   void start() override {}
   void stop() override {}
+  void request_update() override {}
   bool backend_live() const override { return false; }
   int selftest() override {
     error("selftest-update: no libsystemd backend compiled in");
@@ -222,6 +239,13 @@ class PortalUpdater final : public Updater {
     running_.store(false);
     nudge();
     if (thread_.joinable()) thread_.join();
+  }
+
+  // Thread-safe consent from the UI thread. Set a flag and wake the loop; the loop (never this
+  // caller) issues Update(), so sd_bus_call is never re-entered from outside the event-loop thread.
+  void request_update() override {
+    confirm_requested_.store(true, std::memory_order_relaxed);
+    nudge();
   }
 
   bool backend_live() const override { return live_; }
@@ -422,7 +446,10 @@ class PortalUpdater final : public Updater {
   }
 
   void run() {
-    if (cfg_.enabled) seed_update_permission();
+    // Seed consent in every constructed mode (notify + auto): a user-confirmed notify deploy needs
+    // the same no-dialog path as an auto deploy (durable/self-update.md ★ SOLUTION). An explicit
+    // host-side "no" is still respected inside seed_update_permission().
+    seed_update_permission();
     if (!create_monitor(&monitor_path_)) {
       error("updater: could not create the update monitor — self-update inactive this session");
       running_.store(false);
@@ -457,6 +484,11 @@ class PortalUpdater final : public Updater {
         return;
       }
       if (!running_.load()) break;
+      // A user "Update now" (notify mode) lands here, on the loop thread, so Update() is issued the
+      // same way an auto deploy is — never from the request_update() caller's thread.
+      if (confirm_requested_.exchange(false, std::memory_order_relaxed) && !updating_) {
+        want_update_ = true;
+      }
       if (want_update_ && !updating_) {
         want_update_ = false;
         updating_ = true;
@@ -513,12 +545,17 @@ class PortalUpdater final : public Updater {
     auto* self = static_cast<PortalUpdater*>(userdata);
     std::string remote;
     scan_dict(m, nullptr, nullptr, "remote-commit", &remote);
+    const std::string short_commit = remote.substr(0, kShortCommitLen);
     info("updater: an update is available" +
-         (remote.empty() ? std::string() : " (remote " + remote.substr(0, kShortCommitLen) + ")"));
-    if (self->cfg_.enabled && !self->updating_)
-      self->want_update_ = true;
-    else if (!self->cfg_.enabled)
-      info("updater: self_update is off — not applying (update manually or enable self_update)");
+         (remote.empty() ? std::string() : " (remote " + short_commit + ")"));
+    if (self->cfg_.auto_deploy) {
+      if (!self->updating_) self->want_update_ = true;  // deploy now (auto mode)
+    } else {
+      // notify mode: publish availability for the UI threads; the deploy waits for
+      // request_update().
+      if (self->cfg_.state) self->cfg_.state->set_available(true, short_commit);
+      info("updater: notify mode — awaiting user confirmation (Menu ☰ or the update card)");
+    }
     return 0;
   }
 
@@ -592,6 +629,7 @@ class PortalUpdater final : public Updater {
   int wake_pipe_[2] = {-1, -1};
   std::atomic<bool> running_{false};
   bool started_ = false;
+  std::atomic<bool> confirm_requested_{false};  // set by request_update() (UI thread), read by loop
   bool want_update_ = false;
   bool updating_ = false;
   bool live_ = false;

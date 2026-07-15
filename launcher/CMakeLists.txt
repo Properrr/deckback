@@ -122,6 +122,7 @@ add_executable(deckback-launcher
   src/config.cpp
   src/platform.cpp
   src/updater.cpp
+  src/updateprompt.cpp
   src/watchdog.cpp
   src/cdm_fetcher.cpp
   src/sha256.cpp
@@ -244,14 +245,37 @@ if(BUILD_TESTING)
   # config.cpp to cover the keymap object parser.
   add_executable(input_test tests/input_test.cpp src/input.cpp src/keymap.cpp src/layers.cpp
                             src/touch.cpp src/voice.cpp src/overlay.cpp src/haptic.cpp
-                            src/onboarding.cpp src/devtools.cpp src/scripts.cpp src/config.cpp
-                            src/log.cpp)
+                            src/onboarding.cpp src/updateprompt.cpp src/updater.cpp
+                            src/devtools.cpp src/scripts.cpp src/config.cpp src/log.cpp)
   target_include_directories(input_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
   target_link_libraries(input_test PRIVATE Threads::Threads)
+  # input.cpp now drives the self-update notify UI (updateprompt.cpp), which pulls in updater.cpp
+  # (UpdateState) and optionally libcurl (changelog fetch) / libsystemd (updater backend).
+  if(CURL_FOUND)
+    target_link_libraries(input_test PRIVATE PkgConfig::CURL)
+  endif()
+  if(SYSTEMD_FOUND)
+    target_link_libraries(input_test PRIVATE PkgConfig::SYSTEMD)
+  endif()
   # Point one test at the real shipped config so app.json cannot drift away from the C++ keymap.
   target_compile_definitions(input_test PRIVATE
     DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
   add_test(NAME input_test COMMAND input_test)
+
+  # Self-update notify UI: the pure helpers that the card/dot/dedup rely on — semantic version
+  # compare, GitHub-releases parse, changelog summary, the show-card/show-dot decision, and the
+  # dismissal state files. The portal deploy is verified separately on a Deck (durable/self-update.md).
+  add_executable(updateprompt_test tests/updateprompt_test.cpp src/updateprompt.cpp src/updater.cpp
+                                   src/overlay.cpp src/scripts.cpp src/devtools.cpp src/log.cpp)
+  target_include_directories(updateprompt_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
+  target_link_libraries(updateprompt_test PRIVATE Threads::Threads)
+  if(CURL_FOUND)
+    target_link_libraries(updateprompt_test PRIVATE PkgConfig::CURL)
+  endif()
+  if(SYSTEMD_FOUND)
+    target_link_libraries(updateprompt_test PRIVATE PkgConfig::SYSTEMD)
+  endif()
+  add_test(NAME updateprompt_test COMMAND updateprompt_test)
 
   # Phase 5 voice: the hold-to-talk state machine, duck-mode parsing, the mic-button probe, and the
   # VoiceController's CDP behaviour against a fake soft-mic button.

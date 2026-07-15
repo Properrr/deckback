@@ -1,10 +1,37 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
 namespace deckback {
+
+// Shared, thread-safe hand-off from the updater thread (which detects an available update) to the
+// UI threads (input thread draws the one-time card + amber dot; navigator re-draws the dot after a
+// full page reload). Mirrors the relaxed-atomic OverlayState/LayerState pattern. Keyed on the
+// portal's remote ostree commit — the precise dedup key (version labels are cosmetic to the portal,
+// durable/self-update.md).
+class UpdateState {
+ public:
+  // Publish "a newer commit R is available" (updater thread). A commit change re-arms the dot even
+  // if the user had dismissed the previous one — a newer version is worth surfacing again.
+  void set_available(bool available, std::string commit);
+  bool available() const { return available_.load(std::memory_order_relaxed); }
+  std::string commit() const;  // the short remote commit, mutex-guarded
+
+  // The user chose "ignore this version": stop drawing the dot until a different commit arrives
+  // (input thread). The Menu route stays reachable regardless.
+  void suppress_dot() { dot_suppressed_.store(true, std::memory_order_relaxed); }
+  bool dot_suppressed() const { return dot_suppressed_.load(std::memory_order_relaxed); }
+
+ private:
+  std::atomic<bool> available_{false};
+  std::atomic<bool> dot_suppressed_{false};
+  mutable std::mutex m_;
+  std::string commit_;
+};
 
 // Flatpak portal `Progress.status` codes (data/org.freedesktop.portal.Flatpak.xml):
 // 0 Running, 1 Empty (nothing to do), 2 Done, 3 Failed. Pure decoder, always compiled.
@@ -36,7 +63,13 @@ std::string parse_flatpak_app_id(const std::string& text);
 //
 // Backed by libsystemd sd-bus on the session bus; a no-op stub without libsystemd.
 struct UpdaterConfig {
-  bool enabled = false;
+  // The Updater is constructed only in `notify`/`auto` (never `off`), so being constructed already
+  // means "enabled". `auto_deploy` distinguishes the two: true deploys on detection (auto), false
+  // only publishes availability and waits for request_update() (notify).
+  bool auto_deploy = false;
+  // Where the updater publishes "an update is available" for the UI threads. Non-owning; must
+  // outlive the Updater. Null in `auto`-only builds/tests that don't wire the notify UI.
+  UpdateState* state = nullptr;
   // Only for the "restart to apply" toast; cdp_port <= 0 disables the toast (the update still
   // deploys). Host/port match the engine's --remote-debugging-port (loopback).
   std::string cdp_host = "127.0.0.1";
@@ -55,6 +88,11 @@ class Updater {
   virtual void start() = 0;
   // Signal + join the event-loop thread. Idempotent.
   virtual void stop() = 0;
+
+  // Consent to deploy the currently-available update (notify mode): thread-safe, called from the UI
+  // thread when the user chooses "Update now". The deploy happens on the updater's own loop thread
+  // (never reentrantly), exactly as an `auto` deploy would. No-op in the stub / if nothing pending.
+  virtual void request_update() = 0;
 
   // True if a live session-bus connection was established (the portal itself is probed by
   // selftest).

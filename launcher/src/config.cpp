@@ -154,6 +154,25 @@ void read_into(const std::string& s, std::string_view key, long& out) {
 
 }  // namespace
 
+SelfUpdateMode parse_self_update_mode(std::string_view s) {
+  if (s == "off") return SelfUpdateMode::Off;
+  if (s == "auto") return SelfUpdateMode::Auto;
+  return SelfUpdateMode::Notify;  // "notify" and anything unrecognised: never deploy without
+                                  // consent
+}
+
+const char* self_update_mode_name(SelfUpdateMode m) {
+  switch (m) {
+    case SelfUpdateMode::Off:
+      return "off";
+    case SelfUpdateMode::Notify:
+      return "notify";
+    case SelfUpdateMode::Auto:
+      return "auto";
+  }
+  return "notify";
+}
+
 std::optional<Config> Config::load(const std::string& path) {
   auto text = slurp(path);
   if (!text) {
@@ -211,7 +230,14 @@ std::optional<Config> Config::load(const std::string& path) {
   read_into(s, "resume_probe_port", c.resume_probe_port);
   read_into(s, "resume_online_timeout_ms", c.resume_online_timeout_ms);
   read_into(s, "resume_reload_after_ms", c.resume_reload_after_ms);
-  read_into(s, "self_update", c.self_update);
+  // Update policy: the tri-state `self_update_mode` wins; a bare legacy `self_update` boolean maps
+  // for configs written before the split (true -> auto, false -> off).
+  if (auto mode = read_string(s, "self_update_mode")) {
+    c.self_update_mode = parse_self_update_mode(*mode);
+  } else if (auto legacy = read_bool(s, "self_update")) {
+    c.self_update_mode = *legacy ? SelfUpdateMode::Auto : SelfUpdateMode::Off;
+    warn("config: 'self_update' is deprecated — use 'self_update_mode' (off|notify|auto)");
+  }
   return c;
 }
 

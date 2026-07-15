@@ -12,32 +12,29 @@
 # run rewrote ~160 files nobody had opened and left the Cobalt tree dirty enough that `just sync`
 # refuses to run. A formatter whose blast radius is the whole tree is a formatter nobody dares run.
 #
-# The host clang-format is also whatever you happen to have (v20 here, v18 in CI), so wholesale
-# formatting churns lines in the CI version's style, not yours.
+# clang-format is PINNED to 18 (via lib.sh's pinned_tool), the same version preflight/CI check, so
+# `just fmt` can never write a style the gate then rejects. A host v20/v21 disagrees with v18 and
+# would put you in an endless fmt→preflight loop.
 . "$(dirname "$0")/lib.sh"
 
 if [ "$#" -gt 0 ]; then
   die_usage "fmt.sh takes no arguments (got: $*). It formats in place; there is no check mode."
 fi
 
-# Launcher: LLVM-style clang-format (host tool is fine for out-of-tree code).
+# Launcher: LLVM-style clang-format (out-of-tree code), pinned to 18 to match preflight/CI exactly.
 #
-# Only files you TOUCHED. The host clang-format is whatever you happen to have — v20 here, v18 in CI
-# — and the two disagree. Formatting the whole of launcher/ therefore rewrites ten files you never
-# opened, in a style CI does not share, and hides your actual change inside the churn.
-if command -v clang-format >/dev/null 2>&1; then
-  changed=$(
-    git diff --name-only -- 'launcher/*.cpp' 'launcher/*.hpp'
-    git ls-files --others --exclude-standard -- 'launcher/*.cpp' 'launcher/*.hpp'
-  )
-  if [ -n "$changed" ]; then
-    info "clang-format on modified launcher/ files ..."
-    printf "%s\n" "$changed" | xargs -r clang-format -i --style=file
-  else
-    info "no modified launcher/*.{cpp,hpp} — nothing for clang-format to do."
-  fi
+# Only files you TOUCHED. Formatting the whole of launcher/ would rewrite ten files you never opened
+# and hide your actual change inside the churn.
+cf="$(pinned_tool clang-format-18 clang-format clang-format==18.1.8)"
+changed=$(
+  git diff --name-only -- 'launcher/*.cpp' 'launcher/*.hpp'
+  git ls-files --others --exclude-standard -- 'launcher/*.cpp' 'launcher/*.hpp'
+)
+if [ -n "$changed" ]; then
+  info "clang-format-18 on modified launcher/ files ..."
+  printf "%s\n" "$changed" | xargs -r "$cf" -i --style=file
 else
-  info "clang-format not found on host — skipping launcher/ (runs in the dev container)."
+  info "no modified launcher/*.{cpp,hpp} — nothing for clang-format to do."
 fi
 
 # In-tree patches + .gn: use the tree's own clang-format / gn format inside the container.

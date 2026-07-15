@@ -1,5 +1,184 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★ NOTIFY MODE is the default (2026-07-14) — detect, don't enforce
+
+The config key is now **`self_update_mode`: `notify` | `auto` | `off`, default `notify`** (the legacy
+boolean `self_update` still parses: `true`→`auto`, `false`→`off`). The portal detect+deploy machinery
+below is unchanged and still the engine; what changed is the *trigger* and a launcher-owned UI:
+
+- **detect → notify → deploy** is split (`updater.cpp`). In `notify`, `on_update_available` no longer
+  sets `want_update_`; it publishes availability into a shared `UpdateState` (thread-safe: an atomic
+  `available` + `dot_suppressed`, a mutex-guarded remote commit) and waits. Deploy happens only when
+  the user consents, via `Updater::request_update()` (sets an atomic, nudges the loop; the loop — never
+  the caller — issues `Update()`, preserving the no-reentrant-`sd_bus_call` rule). `auto` keeps the old
+  behaviour (deploy on detection). The consent **seed still runs in both** notify and auto, so a
+  user-confirmed notify deploy takes the same no-dialog path as auto (★ SOLUTION below).
+- **UI is launcher-drawn, not YouTube's DOM** (`launcher/src/updateprompt.cpp` + `config/scripts/
+  update_badge*.js`, `update_card*.js`), so a Leanback frontend change can't break it — same principle
+  as the controls card. A small amber **dot** is pinned to the corner (appended to `documentElement`,
+  re-drawn by the navigator's `on_app_loaded` after full reloads). Once per *new* commit an **"Update
+  available" card** auto-shows (modal, owned by the input thread like the onboarding card): fixed
+  buttons **A** = Update now (`request_update()` + "restart to apply" toast), **B** = Not now (keep the
+  dot), **Y** = Ignore this version (hide the dot until a newer commit). The **Menu (☰)** opens the
+  card any time an update exists — reachable even after the dot is dismissed.
+- **Painless + ignorable + reachable** is enforced by two versioned state files in the state dir,
+  keyed on the portal's **remote commit** (precise dedup; version labels are cosmetic to the portal):
+  `update_card_shown_v1` (suppresses the one-time auto card) and `update_dot_dismissed_v1` (hides the
+  dot). `decide_notification()` maps (commit, card_shown, dot_dismissed) → {show_card, show_dot}; a
+  newer commit re-arms both. A manual Desktop-Mode `flatpak update` binds the new commit on next
+  launch → the portal reports nothing → no dot/card, and the card's up-to-date text reads "You're on
+  the latest version".
+- **Changelog is lazy** (`updateprompt.cpp::changelog`): only when the card is displayed does the
+  launcher do one short-timeout libcurl GET of `api.github.com/repos/properrr/deckback/releases`,
+  parse it (`parse_github_releases`), keep versions newer than compiled `kDeckbackVersion`
+  (`compare_versions`), and normalise the Keep-a-Changelog markdown to 10-foot text
+  (`notes_to_plain`). No launch-time network; on any failure the card falls back to a releases link.
+  The release-notes contract the updater depends on (tag `v<X.Y.Z>`, body = the CHANGELOG section) is
+  documented in `RELEASING.md`.
+- **Tests:** pure helpers in `launcher/tests/updateprompt_test.cpp` (version compare, releases parse,
+  changelog summary + markdown normalise, the show-card/show-dot decision incl. a mandatory suppress
+  case, marker round-trip + write-failure tolerance) and `UpdateState`/`request_update` lifecycle in
+  `updater_test.cpp`. On-Deck verification of the card/dot/deploy round-trip is still pending (the
+  portal deploy itself is proven — ★ T1-REPLAY below). **Update 2026-07-14: the notify UI round-trip
+  WAS run on-Deck — the logic fires, but BOTH overlays fail to render on-device; see ★ NOTIFY UI
+  ON-DECK below. ROOT-CAUSED and FIXED 2026-07-14 (★ RENDER FIX below): both bugs were the CSP
+  `style-src` (no `'unsafe-inline'`) silently dropping our inline-style / `<style>` injection — the
+  same block `no_pointer.js` already works around. The overlays now style via CSSOM +
+  `adoptedStyleSheets`, and the card self-heals so it can't strand input. Code + unit tests land here;
+  the on-Deck re-run of the round-trip is the remaining gate (implemented, not yet verified).**
+
+## ★ NOTIFY UI on-Deck 2026-07-14 (OLED, Game Mode) — logic fires, overlays DON'T render (2 bugs)
+
+Ran the notify round-trip against the OLED Deck. Setup: a local archive-z2 staging repo served over
+HTTP from the workstation (`192.168.128.3:8099`, `python -m http.server` on `flatpak/repo`); installed
+a **notify-mode base** (0.0.4, `self_update_mode: notify`) on the Deck from a `--user --no-gpg-verify
+deckback-staging` remote, then published a newer commit (0.0.5) into the same repo. `flatpak update`
+saw it (`u`), confirming detection works at the ostree layer. Because the portal's default check is
+**30 min** (see ★ T1 RESULT) and a `flatpak-portal.service --poll-timeout` drop-in was out of scope,
+the notify UI was triggered with the built-in **`DECKBACK_FAKE_UPDATE`** hook (`main.cpp`) set via
+`flatpak override --user --env=...`, launched through the **Steam shortcut** so gamescope actually
+focuses the window (a bare `flatpak run` / SSH / systemd launch renders off-screen behind the Steam UI
+— it is NOT visible in Game Mode; only `steam://rungameid/<id>` is).
+
+**What WORKS (journal-confirmed, `journalctl --user`):** `startup: self-update mode = notify` · the
+fake-update seed (`DECKBACK_FAKE_UPDATE set — simulating an available update`) · `updater: watching
+for updates … via the Flatpak portal` · the lazy GitHub fetch correctly falling back (`update: could
+not fetch release notes from GitHub — showing a link instead`, since no `v0.0.5` release exists) ·
+`update: 'update available' card shown`. CDP confirmed both nodes were injected into the live Leanback
+DOM.
+
+**BUG 1 — the dot mis-renders.** `#__deckback_update_dot` has computed `display:block` but
+`getBoundingClientRect()` = **1279×0 at (0,799)** — a full-width, zero-height strip at the bottom-left,
+not a 14×14 amber circle top-right. `childCount:0`, `z-index:auto`. The inline styling from
+`config/scripts/update_badge.js` (position/top/right/width/height/border-radius/background/z-index) is
+**not applied**. The controls-card/toast overlays DO render on-Deck, so `update_badge.js` differs from
+`toast.js`/`overlay.js` in how it sets style (likely the style is applied in a form Leanback's CSP /
+Trusted Types strips, or set on the wrong node). Fix by mirroring the proven toast/overlay injection.
+
+**BUG 2 — the card is invisible and traps input.** A composited screenshot showed only the YouTube
+home; the card never visibly painted although its node existed. Moments later the card node was **gone**
+(`getElementById → null`) — removed by a Leanback DOM swap — while the launcher still held
+`card_visible_ = true`, so the input thread kept **swallowing direction presses** (user: "I don't see
+anything and keys doesn't work"). Two defects: (a) the card doesn't paint on-Deck (same class of issue
+as BUG 1 — compare to onboarding `overlay.js`, which does render); (b) `card_visible_` desyncs from the
+DOM — a `documentElement`-appended card does NOT reliably survive Leanback body swaps here, so it must
+be re-injected on `on_app_loaded` (like the dot's redraw) AND/OR removal must reset `card_visible_` so
+input is never trapped.
+
+**Caveat for whoever picks this up:** CDP `Page.captureScreenshot` under gamescope is **unreliable for
+overlay verification** — it returned the YT page WITHOUT the injected nodes even when the DOM confirmed
+them present. Trust DOM assertions (`getBoundingClientRect`, `getComputedStyle`) and a human's eyes,
+not the screenshot, when checking on-Deck overlays.
+
+**Code review (2026-07-14, no device) — the overlays are structurally identical to the working ones,
+so there is NO static defect to fix; the cause is runtime/environmental.** Side by side:
+`update_badge.js` styles via `setAttribute('style', …)` exactly like `toast.js` (which renders);
+`update_card.js` uses a `<style>` block + the memoised `window.__dbTTP` Trusted Types policy exactly
+like `overlay.js` (the controls card, which renders). The injection is the same too — `draw_dot()` /
+`show_card()` call `ScriptLibrary::instance().invoke(client_, …)`, the same path `show_toast` and the
+onboarding card use. The scripts DID run on-Deck (node present, `card shown` logged); only the
+**styling failed to take effect** — the dot's computed `z-index` was `auto`, not `2147483647`, i.e. the
+`style` attribute was dropped. Byte-equivalent-to-working code failing means it is not a source bug.
+
+**Discriminating experiment for the next host (settles it in ~2 min on the live page):** draw a toast
+AND the dot, then compare —
+`getComputedStyle(document.getElementById('__deckback_toast')).zIndex` vs
+`…('__deckback_update_dot').zIndex`, and read
+`document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content` for `style-src`.
+- If BOTH are `auto`: inline styles are now globally CSP-blocked (a Leanback change; the "toast works"
+  claim is stale). Fix = a CSP-exempt style path — inject via CDP `Page.addStyleSheet`, or a
+  constructable `CSSStyleSheet` + `document.adoptedStyleSheets` — NOT inline `style`/`<style>`; and the
+  SAME fix then applies to `toast.js`/`overlay.js`.
+- If only the dot is `auto`: a timing/context race (our overlays are drawn from `tick()` as soon as
+  `UpdateState::available()` flips — with `DECKBACK_FAKE_UPDATE` that is at startup, mid Leanback boot,
+  whereas toast/controls-card only ever show post-load on a user action). Fix = gate the initial
+  draw on `on_app_loaded` and re-inject the CARD on reload (today only the dot has
+  `redraw_dot_on_reload`).
+
+Independently of rendering, BUG 2 has a real code defect: `card_visible_` is never reconciled with the
+card's DOM presence, so a Leanback swap that removes the node leaves the input thread trapping
+direction keys. Whatever fixes rendering must also make card removal reset `card_visible_` (or
+re-inject), so input can never be trapped behind an absent card.
+
+**Next machine:** run the discriminating experiment above, pick the matching fix, then re-run the
+round-trip with *real* portal detection (a `flatpak-portal.service` drop-in
+`ExecStart=/usr/lib/flatpak-portal --poll-timeout=15`, per ★ T1-REPLAY) and drive A=confirm → real
+deploy from staging. The deploy path itself is already proven (★ T1-REPLAY); only the notify UI is the
+gap.
+
+## ★ RENDER FIX 2026-07-14 (no device) — it was the CSP `style-src`, resolved from the touch-lock finding
+
+The discriminating experiment above did not need a device after all: `durable/touch-lock.md` already
+records the answer, verified on-Deck 2026-07-10. On the current pin youtube.com/tv's CSP `style-src`
+has **no `'unsafe-inline'`**, so the browser silently drops **both** an inline `style` attribute
+(`setAttribute('style', …)`, and HTML-parsed `style=""`) **and** a `<style>` element. That is exactly
+why `no_pointer.js` hides the cursor through a **constructable `CSSStyleSheet` + `adoptedStyleSheets`**
+instead of a `<style>` tag. Map it onto the two bugs and both fall out with no ambiguity:
+
+- **BUG 1 (dot):** `update_badge.js` styled via `setAttribute('style', …)` → CSP-dropped → computed
+  `z-index:auto`, an unstyled in-flow block (the 1279×0 strip). ✓
+- **BUG 2a (card invisible):** `update_card.js` styled via a `<style>` block → CSP-dropped → the
+  container had no `position:fixed`/backdrop, so it never painted. ✓
+- The "toast/controls-card render on-Deck" claim that made this look like a dot-only defect is from
+  **m114** (CLAUDE.md attributes it to `m114.md`), i.e. **stale on M138** — `toast.js` used the same
+  blocked `setAttribute('style', …)`, so the feature's own "Updating…" confirm toast was latently
+  broken too. Two exempt paths exist and only these: **CSSOM writes** (`el.style.setProperty`, not
+  subject to CSP) and **`adoptedStyleSheets`**. Both were already proven on-Deck by `no_pointer.js`.
+
+**The fix (shipped in this branch, unit-tested; on-Deck re-run still pending):**
+- `config/scripts/update_badge.js` — every property set via `el.style.setProperty(...)` (CSSOM), no
+  `style` attribute. `config/scripts/toast.js` — same conversion (its fade already used `.style`).
+- `config/scripts/update_card.js` — descendant rules moved into a constructable `CSSStyleSheet` added
+  to `document.adoptedStyleSheets` (memoised on `window.__dbCardSheet`), plus a CSSOM fallback on the
+  container so the dark modal backdrop paints even where constructable sheets are unavailable. The
+  `<style>` block is gone; the Trusted-Types innerHTML for the text content stays.
+- **BUG 2b (input trap), fixed independently of rendering:** a Leanback *in-page* body swap can detach
+  a `documentElement` child, and that swap does **not** fire the navigator's `on_app_loaded` (it only
+  fires when `location.href` re-enters the app needle — SPA route changes keep the same URL). So a
+  shared **keep-alive `MutationObserver`** (`window.__dbKeepAlive`, defined identically in
+  `update_badge.js`/`update_card.js`) re-appends our nodes when detached; the `*_hide` scripts call
+  `window.__dbDropAlive` **first** so a deliberate hide isn't fought. For a *full* navigation (new page
+  global, observer gone) the launcher re-injects: `UpdatePromptController::redraw_card_on_reload()`
+  (navigator thread, own transient `DevToolsClient`, no state/marker side effects) mirrors the dot's
+  `redraw_dot_on_reload()`, wired next to it in `main.cpp`'s `on_app_loaded`. `card_visible_` is now
+  `std::atomic<bool>` for that cross-thread read. Net effect: the card can no longer vanish while
+  `input.cpp` still treats it as modal and swallows direction keys (the "keys don't work" report).
+- **Tests:** `scripts_test.cpp` now asserts the launcher-drawn overlays never regress to the blocked
+  paths (`update_badge`/`toast` use `.setProperty` and never `setAttribute('style'`; `update_card` has
+  no `<style>` and uses `adoptedStyleSheets`) and that the card/dot carry the keep-alive observer while
+  the hide scripts drop from it. `overlay_test.cpp`'s toast-shape assertions updated to the CSSOM form.
+
+**Still TODO (the real gate):** re-run the on-Deck notify round-trip (Steam-shortcut launch,
+`DECKBACK_FAKE_UPDATE`, DOM assertions per the caveat — not the unreliable gamescope screenshot) and
+confirm the amber dot, the modal card, and the confirm toast all paint, and that a Leanback DOM swap
+no longer traps input. **Follow-up (separate, same cause):** `config/scripts/overlay.js` (the
+onboarding controls card) still uses a `<style>` block and is latently broken on M138 the same way —
+it belongs to onboarding, not this branch, but should get the identical `adoptedStyleSheets` treatment.
+
+Everything from here down documents the **portal deploy mechanism** (shared by notify + auto) and its
+on-Deck verification. It predates the notify split; where it says "`self_update=true` auto-deploys",
+read that as **`auto` mode** — the mechanism is identical, only the trigger differs.
+
 **Status:** IMPLEMENTED 2026-07-13, **ON by default as of 2026-07-14** (`app.json: self_update=true`).
 T1 on-Deck 2026-07-14 (OLED, Game Mode) found the portal deploy blocked by the missing Access backend
 (★ T1 RESULT below). **A FIX shipped 2026-07-14 and is VERIFIED on-Deck (★ T1-REPLAY RESULT below):

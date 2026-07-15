@@ -368,6 +368,12 @@ int find_control_for_action(const std::vector<std::pair<std::string, std::string
   return -1;
 }
 
+int control_code(std::string_view name) {
+  for (const ControlCode& c : kControlCodes)
+    if (c.name == name) return c.code;
+  return -1;
+}
+
 std::vector<std::pair<std::string, std::string>> without_action(
     const std::vector<std::pair<std::string, std::string>>& keymap, std::string_view action) {
   std::vector<std::pair<std::string, std::string>> out;

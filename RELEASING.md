@@ -31,6 +31,20 @@ just release-prep 0.0.2        # creates release/v0.0.2, bumps VERSION, rolls CH
 Review the commit; flesh out the `## [0.0.2]` changelog notes with real prose if you like (they become
 the GitHub Release body verbatim).
 
+> **The release notes are a product surface — the in-app updater shows them.** In `notify` mode
+> (the default), Deckback fetches the GitHub Releases of `properrr/deckback` and displays the notes
+> for every version newer than the running one in its "Update available" card
+> (`launcher/src/updateprompt.cpp`, findings `durable/self-update.md`). The contract the updater
+> relies on, all of it already produced by these scripts — keep it intact:
+>
+> - **Tag = `v<X.Y.Z>`** (semantic version; the updater strips the leading `v`). `release-prep`
+>   enforces the `X.Y.Z` shape.
+> - **Body = the `## [X.Y.Z]` CHANGELOG section**, extracted verbatim by `scripts/release.sh`.
+> - **Notes are Keep-a-Changelog markdown** (`### Added` / `### Fixed`, `-` bullets, occasional
+>   `**bold**`/`` `code` ``). The updater normalises that to clean 10-foot text (`notes_to_plain`):
+>   headings lose their hashes, bullets become `•`, emphasis markers drop. So write notes for a
+>   human reading them on a couch — terse, user-facing, no internal jargon — not as raw diff shorthand.
+
 ### 2. Merge to main and tag
 
 ```sh

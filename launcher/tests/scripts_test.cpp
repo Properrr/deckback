@@ -72,6 +72,40 @@ void test_embedded_defaults_present() {
   assert(has(std::string(ScriptLibrary::instance().body("toast")), "__deckback_toast"));
 }
 
+void test_overlays_use_a_csp_safe_style_path() {
+  // youtube.com/tv's CSP style-src has no 'unsafe-inline', so setAttribute('style',…) and <style>
+  // tags are dropped and the overlay renders unstyled (why dot/card/toast failed on-Deck,
+  // self-update.md). Only CSSOM and adoptedStyleSheets are exempt; guard against a regression.
+  for (const char* name : {"update_badge", "toast"}) {
+    const std::string b(ScriptLibrary::instance().body(name));
+    assert(!has(b, "setAttribute('style'"));
+    assert(!has(b, "setAttribute(\"style\""));
+    assert(has(b, ".setProperty("));
+  }
+  // The card's descendant rules need a stylesheet, so the blocked <style> tag becomes an
+  // adoptedStyleSheets sheet; the container keeps a CSSOM fallback so the modal always paints.
+  const std::string card(ScriptLibrary::instance().body("update_card"));
+  assert(!has(card, "<style>"));
+  assert(has(card, "adoptedStyleSheets"));
+  assert(has(card, ".setProperty("));
+}
+
+void test_overlays_self_heal_across_body_swaps() {
+  // A Leanback in-page body swap can detach a documentElement child without firing on_app_loaded,
+  // so the keep-alive observer re-appends the dot/card; the *_hide scripts must drop from the
+  // registry first, or a deliberate hide is fought. A vanished-but-still-modal card was the input
+  // trap.
+  for (const char* name : {"update_badge", "update_card"}) {
+    const std::string b(ScriptLibrary::instance().body(name));
+    assert(has(b, "__dbKeepAlive"));
+    assert(has(b, "MutationObserver"));
+  }
+  for (const char* name : {"update_badge_hide", "update_card_hide"}) {
+    const std::string b(ScriptLibrary::instance().body(name));
+    assert(has(b, "__dbDropAlive"));
+  }
+}
+
 void test_runtime_override_shadows_the_default() {
   namespace fs = std::filesystem;
   const fs::path dir = fs::temp_directory_path() / "deckback_scripts_override_test";
@@ -106,6 +140,8 @@ int main() {
   test_render_appends_params_to_the_body();
   test_render_unknown_is_empty();
   test_embedded_defaults_present();
+  test_overlays_use_a_csp_safe_style_path();
+  test_overlays_self_heal_across_body_swaps();
   // Keep this LAST: it mutates the process-wide singleton (a fresh process per test binary, so this
   // is safe, but ordering it last keeps the earlier assertions against pristine embedded defaults).
   test_runtime_override_shadows_the_default();

@@ -13,6 +13,8 @@
 
 namespace deckback {
 
+class UpdatePromptController;
+
 // Runtime touchscreen-lock policy for the input layer (findings input-ux §4). Sourced from Config.
 struct TouchConfig {
   bool lock_enabled = false;    // whether the chord toggles the touchscreen lock
@@ -43,6 +45,7 @@ struct GamepadOptions {
   const LayerState* layers = nullptr;
   VoiceController* voice = nullptr;
   OnboardingController* onboarding = nullptr;
+  UpdatePromptController* update_prompt = nullptr;  // self-update notify UI; null = feature off
 };
 
 // Phase 3 input (S0.6 mechanism = key injection). Reads the gamepad directly from evdev
@@ -87,6 +90,9 @@ class GamepadInput {
   // While the controls card is up it is modal: it swallows every event, and a button press
   // dismisses it. Returns true when the event was consumed.
   bool handle_onboarding(int type, int code, int value);
+  // While the update card is up it is modal: A confirms the update, B closes it, Y ignores the
+  // version; every other event is swallowed. Returns true when the event was consumed.
+  bool handle_update_card(int type, int code, int value);
   void apply_touch_lock(TouchLockChord::Action a);  // engage/release the grab and report it
   void announce_touch_lock(bool locked);            // toast + rumble; never fails the lock
   Layer layer() const;                              // Browse when no LayerState is attached
@@ -129,6 +135,11 @@ class GamepadInput {
   // First-run controls card (findings input-ux §17). Not owned; may be null.
   OnboardingController* onboarding_ = nullptr;
   int help_code_ = -1;  // the control bound to `show_controls`, or -1
+
+  // Self-update notify UI (findings durable/self-update.md). Not owned; may be null. The card is
+  // modal with fixed buttons (A confirm, B later, Y ignore) independent of the user's keymap.
+  UpdatePromptController* update_prompt_ = nullptr;
+  int upd_a_ = -1, upd_b_ = -1, upd_y_ = -1;
 
   // Directional auto-repeat state. dir_key_ is the *base* arrow (a stable module constant compared
   // by identity); the key actually dispatched is resolved per-repeat, so releasing a modifier or

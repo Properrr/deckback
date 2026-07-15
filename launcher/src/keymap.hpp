@@ -152,6 +152,11 @@ std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arr
 int find_control_for_action(const std::vector<std::pair<std::string, std::string>>& keymap,
                             std::string_view action);
 
+// The evdev EV_KEY code of a Deck control by name ("a", "b", "y", ...), or -1 if no such control.
+// Independent of the user's keymap, so a fixed-button UI (e.g. the update card's A/B/Y) resolves
+// the same physical buttons no matter how app.json is configured.
+int control_code(std::string_view name);
+
 // Drop an entry so build_button_map() does not report it as an unmapped binding. Only correct when
 // the launcher really will handle that action — otherwise the startup warning is the honest output,
 // because the control genuinely does nothing.

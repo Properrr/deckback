@@ -1,10 +1,20 @@
 #pragma once
 #include <optional>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 namespace deckback {
+
+// Self-update policy (findings durable/self-update.md). See Config::self_update_mode.
+enum class SelfUpdateMode { Off, Notify, Auto };
+
+// Parse the `self_update_mode` string ("off" | "notify" | "auto", case-sensitive to match the rest
+// of app.json). Anything unrecognised falls back to Notify — the safe default that never deploys
+// without consent. Pure, unit-tested in config_test.cpp.
+SelfUpdateMode parse_self_update_mode(std::string_view s);
+const char* self_update_mode_name(SelfUpdateMode m);
 
 // Runtime config loaded from config/app.json (doc §6). Kept intentionally flat here — the launcher
 // only needs a handful of fields; the full keymap is forwarded to the input layer (Phase 3).
@@ -124,10 +134,15 @@ struct Config {
   // URLs / auth token. 0 = disabled (always nudge). Duration is measured with CLOCK_BOOTTIME.
   int resume_reload_after_ms = 0;
 
-  // Self-update via the Flatpak portal (findings durable/self-update.md). When on, the launcher
-  // asks the portal to update only this app, from its own `deckback` remote, in the background (no
-  // root, no password); the new version applies on the next launch. Off by default.
-  bool self_update = false;
+  // Self-update policy via the Flatpak portal (findings durable/self-update.md):
+  //   off    — the updater is never constructed; update only via Desktop Mode `flatpak update`.
+  //   notify — DEFAULT. Detect a newer commit and surface a passive indicator + a one-time card,
+  //            but never deploy without the user pressing "Update now".
+  //   auto   — deploy any newer commit in the background; it binds on the next launch (no prompt,
+  //            no couch-reachable rollback). Opt-in.
+  // In every mode the portal updates ONLY this app, from its own `deckback` remote, with no root
+  // and no password. The legacy boolean `self_update` still parses (true -> auto, false -> off).
+  SelfUpdateMode self_update_mode = SelfUpdateMode::Notify;
 
   // Loads and parses the JSON at `path`. Returns nullopt on read/parse failure.
   // NOTE: this is a minimal top-level-key extractor sufficient for app.json's shape; replace with a

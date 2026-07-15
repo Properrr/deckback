@@ -36,8 +36,13 @@ void test_toast_js_shape() {
   assert(has(js, "document.documentElement.appendChild"));
   // Reused by id, so a second toast replaces the first instead of stacking a second <div> forever.
   assert(has(js, "getElementById"));
+  // Styling via CSSOM, NOT setAttribute('style',…): youtube.com/tv's CSP style-src has no
+  // 'unsafe-inline', so the attribute path is dropped and the toast renders unstyled
+  // (self-update.md).
+  assert(!has(js, "setAttribute('style'"));
+  assert(!has(js, "setAttribute(\"style\""));
   // It must never eat a tap meant for the page underneath.
-  assert(has(js, "pointer-events:none"));
+  assert(has(js, "setProperty('pointer-events', 'none')"));
   // The timeout handle is cleared before being re-armed, or a rapid lock/unlock leaves the older
   // timer to hide the newer toast.
   assert(has(js, "clearTimeout(window.__deckbackToastT)"));
@@ -61,8 +66,8 @@ void test_toast_js_escapes_newlines() {
   const std::string js = toast_js("one\ntwo", 100);
   assert(has(js, R"("text":"one\ntwo")"));
   assert(!has(js, "one\ntwo"));  // no raw newline survived into the param
-  // white-space:pre, or the escaped \n renders as a space.
-  assert(has(js, "white-space:pre"));
+  // white-space:pre (via CSSOM), or the escaped \n renders as a space.
+  assert(has(js, "setProperty('white-space', 'pre')"));
 }
 
 void test_toast_js_clamps_negative_duration() {
