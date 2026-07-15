@@ -8,19 +8,37 @@ below is unchanged and still the engine; what changed is the *trigger* and a lau
 
 - **detect → notify → deploy** is split (`updater.cpp`). In `notify`, `on_update_available` no longer
   sets `want_update_`; it publishes availability into a shared `UpdateState` (thread-safe: an atomic
-  `available` + `dot_suppressed`, a mutex-guarded remote commit) and waits. Deploy happens only when
+  `available`, a mutex-guarded remote commit) and waits. Deploy happens only when
   the user consents, via `Updater::request_update()` (sets an atomic, nudges the loop; the loop — never
   the caller — issues `Update()`, preserving the no-reentrant-`sd_bus_call` rule). `auto` keeps the old
   behaviour (deploy on detection). The consent **seed still runs in both** notify and auto, so a
   user-confirmed notify deploy takes the same no-dialog path as auto (★ SOLUTION below).
 - **UI is launcher-drawn, not YouTube's DOM** (`launcher/src/updateprompt.cpp` + `config/scripts/
   update_badge*.js`, `update_card*.js`), so a Leanback frontend change can't break it — same principle
-  as the controls card. A small amber **dot** is pinned to the corner (appended to `documentElement`,
-  re-drawn by the navigator's `on_app_loaded` after full reloads). Once per *new* commit an **"Update
-  available" card** auto-shows (modal, owned by the input thread like the onboarding card): fixed
-  buttons **A** = Update now (`request_update()` + "restart to apply" toast), **B** = Not now (keep the
-  dot), **Y** = Ignore this version (hide the dot until a newer commit). The **Menu (☰)** opens the
-  card any time an update exists — reachable even after the dot is dismissed.
+  as the controls card. The corner indicator is a **pill** — an amber dot + "Update available" + a
+  **☰ keycap** telling the user the card opens from the Menu button — appended to `documentElement`.
+  The input thread's `tick()` reconciles it each poll: shown when an un-dismissed update exists AND
+  no video is up, and **hidden while a video plays** so it never sits over playback; it returns on
+  browse. The watch signal is `LayerState::video_up` (the raw `player_open` bit), deliberately NOT
+  `layer() == Layer::Player`: the OSK outranks the player in `resolve_layer()` while a video can
+  still be playing underneath, so the layer alone would draw the pill over playback during text
+  entry (2026-07-14 review). `tick()` is the **sole owner of the pill DOM** — dismiss handlers only
+  clear `dot_desired_` and let the same-iteration reconcile hide it. `on_page_reloaded()` (navigator
+  thread) flags a full-reload wipe so `tick()` redraws it (playback-aware) and only the input
+  thread's `client_` ever touches it. Two accepted timing windows (both bounded by polls, judged
+  imperceptible-to-minor): the pill can sit over a just-started video for up to one player-poll
+  interval (`devtools_poll_ms`, 1000 ms) because `#/watch` is an SPA route change the poll must
+  observe, and after a full reload the redraw waits for the input loop's next poll wake (≤1–2 s).
+  Once per *new* commit an **"Update available" card** auto-shows (modal, owned by the input thread
+  like the onboarding card) — **also gated off playback**: the card is modal (it swallows direction
+  keys), so `want_card_` stays armed while a video is up and the card pops only once the user leaves
+  the watch view (2026-07-14 review; before that only the pill was gated). Fixed buttons **A** =
+  Update now (`request_update()` + "restart to apply" toast), **B** = Not now (keep the dot), **Y**
+  = Ignore this version (hide the dot until a newer commit — persisted solely in the
+  `update_dot_dismissed_v1` marker; the old in-memory `UpdateState::dot_suppressed_` lost its last
+  reader in the pill rework and was deleted). The **Menu (☰)** opens the card any time an update
+  exists — reachable even after the dot is dismissed, and deliberately allowed over playback because
+  it is user-initiated.
 - **Painless + ignorable + reachable** is enforced by two versioned state files in the state dir,
   keyed on the portal's **remote commit** (precise dedup; version labels are cosmetic to the portal):
   `update_card_shown_v1` (suppresses the one-time auto card) and `update_dot_dismissed_v1` (hides the

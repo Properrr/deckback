@@ -96,9 +96,13 @@ class UpdatePromptController {
   ~UpdatePromptController();  // joins the changelog-fetch thread
 
   // Called on each input-thread tick. Cheap when nothing changed; on the first tick after a newer
-  // commit becomes available it draws the dot, kicks the (async) changelog fetch, and — once the
-  // notes are ready — auto-shows the one-time card. Never blocks the input thread on the network.
-  void tick();
+  // commit becomes available it kicks the (async) changelog fetch and auto-shows the one-time card
+  // once the notes are ready. Reconciles the indicator pill each tick: it shows when an
+  // un-dismissed update exists AND `on_watch` is false. `on_watch` is the raw watch-view signal
+  // (LayerState::video_up, i.e. player_open — NOT `layer() == Layer::Player`, which the OSK can
+  // mask while a video plays underneath); while it is set, neither the pill nor the auto-card is
+  // drawn, so nothing ever sits over a playing video. Never blocks the input thread on the network.
+  void tick(bool on_watch);
 
   bool card_visible() const { return card_visible_.load(std::memory_order_acquire); }
   bool update_available() const;  // for the Menu row: is there anything to offer?
@@ -112,14 +116,12 @@ class UpdatePromptController {
   // auto-shown. No-op (returns false) if no update is available.
   bool open_from_menu();
 
-  // Re-draw the dot after a full page reload. Safe to call from the navigator thread: it uses its
-  // own transient DevToolsClient and reads only the shared, thread-safe UpdateState.
-  void redraw_dot_on_reload();
-
-  // Re-inject the card after a full page reload if it was open. A full navigation discards the page
-  // global (the keep-alive observer only recovers in-page swaps), so without this the card is gone
-  // while card_visible_ stays true and input.cpp keeps swallowing keys (the on-Deck input trap).
-  void redraw_card_on_reload();
+  // Called by the navigator on a full page reload (documentElement torn down). Navigator thread:
+  // flags the dot for the input thread to redraw (playback-aware, so it never reappears over a
+  // video), and re-injects the card if it was open — a full navigation discards the page global, so
+  // otherwise the card is gone while card_visible_ stays true and input.cpp keeps swallowing keys
+  // (the on-Deck input trap).
+  void on_page_reloaded();
 
  private:
   void show_card();
@@ -137,8 +139,17 @@ class UpdatePromptController {
   UpdatePromptConfig cfg_;
   DevToolsClient client_;    // input-thread only
   std::string last_commit_;  // last commit tick() reacted to (edge detection)
+  // Indicator pill state (input-thread only). dot_desired_ = an un-dismissed update exists (set by
+  // the notification decision, cleared on A/Y); dot_shown_ = the pill is currently in the DOM.
+  // tick() reconciles the two against the watch-view signal.
+  bool dot_desired_ = false;
+  bool dot_shown_ = false;
+  // Set by the navigator thread in on_page_reloaded(); tick() consumes it to know documentElement
+  // was wiped (so the pill must be redrawn) without the navigator touching the input thread's DOM
+  // state.
+  std::atomic<bool> reloaded_{false};
   // Atomic: written by the input thread (show/hide), read by the navigator thread in
-  // redraw_card_on_reload().
+  // on_page_reloaded().
   std::atomic<bool> card_visible_{false};
   bool want_card_ = false;  // auto-card requested, waiting on the async changelog before it shows
 

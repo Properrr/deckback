@@ -372,25 +372,40 @@ bool UpdatePromptController::update_available() const {
   return cfg_.state != nullptr && cfg_.state->available();
 }
 
-void UpdatePromptController::tick() {
+void UpdatePromptController::tick(bool on_watch) {
   if (!cfg_.state || !cfg_.state->available()) {
     return;
   }
+  // A full reload wiped documentElement, so the pill is gone even if we thought it was shown.
+  if (reloaded_.exchange(false, std::memory_order_acquire)) dot_shown_ = false;
+
   const std::string commit = cfg_.state->commit();
   if (!commit.empty() && commit != last_commit_) {
     last_commit_ = commit;
     const NotifyDecision d =
         decide_notification(commit, read_update_marker(update_card_marker_path(cfg_.state_dir)),
                             read_update_marker(update_dot_marker_path(cfg_.state_dir)));
-    if (d.show_dot) draw_dot();
+    dot_desired_ = d.show_dot;
     if (d.show_card) {
       kick_changelog();  // fetch off-thread; the card shows once the notes are ready (below)
       want_card_ = true;
     }
   }
+  // Reconcile the pill: shown when an un-dismissed update exists, hidden while a video is up so it
+  // never sits over playback (durable/self-update.md). Only touches the DOM on a change; this is
+  // the only place that draws or hides the pill.
+  const bool want_dot = dot_desired_ && !on_watch;
+  if (want_dot && !dot_shown_)
+    draw_dot();
+  else if (!want_dot && dot_shown_)
+    hide_dot();
+
   // Deferred auto-card: show it once the async changelog is ready, without ever blocking this
-  // thread.
-  if (want_card_ && !card_visible_ && fetch_state_.load(std::memory_order_acquire) == 2) {
+  // thread — and never over a playing video. The card is modal (input.cpp swallows direction keys
+  // while it is up), so it must respect the watch view even more than the pill does; want_card_
+  // stays armed until the user leaves playback.
+  if (want_card_ && !card_visible_ && !on_watch &&
+      fetch_state_.load(std::memory_order_acquire) == 2) {
     want_card_ = false;
     show_card();
   }
@@ -462,31 +477,34 @@ void UpdatePromptController::hide_card() {
 
 void UpdatePromptController::draw_dot() {
   ScriptLibrary::instance().invoke(client_, "update_badge", ScriptParams());
+  dot_shown_ = true;
 }
 
 void UpdatePromptController::hide_dot() {
   ScriptLibrary::instance().invoke(client_, "update_badge_hide");
+  dot_shown_ = false;
 }
 
 void UpdatePromptController::confirm_update() {
   hide_card();
-  hide_dot();
+  // The update is being applied; the pill has nothing left to offer. tick() — the sole owner of
+  // the pill DOM — reconciles it away in this same input-loop iteration.
+  dot_desired_ = false;
   if (cfg_.updater) cfg_.updater->request_update();
   show_toast(client_, "Updating\xE2\x80\xA6 it will apply the next time you open Deckback.", 6000);
   info("update: user confirmed — deploy requested");
 }
 
 void UpdatePromptController::dismiss_later() {
-  hide_card();  // the dot stays; the Menu route remains reachable
+  hide_card();  // the dot stays (dot_desired_ unchanged); the Menu route remains reachable
   info("update: user chose 'Not now' — the dot stays");
 }
 
 void UpdatePromptController::ignore_version() {
   hide_card();
-  hide_dot();
+  dot_desired_ = false;  // tick() hides the pill; a newer commit re-arms it via the dot marker
   if (cfg_.state) {
     write_update_marker(update_dot_marker_path(cfg_.state_dir), cfg_.state->commit());
-    cfg_.state->suppress_dot();
   }
   info("update: user ignored this version — dot hidden until a newer release");
 }
@@ -494,23 +512,20 @@ void UpdatePromptController::ignore_version() {
 bool UpdatePromptController::open_from_menu() {
   if (!update_available()) return false;
   kick_changelog();  // ensure the fetch is under way; the card shows the link if it isn't ready yet
-  show_card();
+  want_card_ = false;  // an explicit open satisfies any pending auto-show; don't re-pop on dismiss
+  show_card();         // user-initiated: deliberately allowed even over playback
   return true;
 }
 
-void UpdatePromptController::redraw_dot_on_reload() {
-  if (!cfg_.state || !cfg_.state->available() || cfg_.state->dot_suppressed()) return;
-  if (cfg_.cdp_port <= 0) return;
-  // Own client: this runs on the navigator thread, so it must not touch the input thread's client_.
-  DevToolsClient c(cfg_.cdp_host, cfg_.cdp_port);
-  ScriptLibrary::instance().invoke(c, "update_badge", ScriptParams());
-}
-
-void UpdatePromptController::redraw_card_on_reload() {
+void UpdatePromptController::on_page_reloaded() {
+  // Dot: flag the wipe; the input thread's tick() redraws it (playback-aware), so it never
+  // reappears over a video and only client_ ever touches the pill.
+  reloaded_.store(true, std::memory_order_release);
+  // Card: re-inject here if it was open. Navigator thread, so use an own client (not client_);
+  // draw_card() has no state/marker side effects, so re-injecting into the reloaded page is
+  // idempotent.
   if (!card_visible_.load(std::memory_order_acquire)) return;
   if (cfg_.cdp_port <= 0) return;
-  // Navigator thread: own client (not the input thread's client_). draw_card() has no state/marker
-  // side effects, so re-injecting into the reloaded page is idempotent.
   DevToolsClient c(cfg_.cdp_host, cfg_.cdp_port);
   draw_card(c);
 }

@@ -479,9 +479,10 @@ void GamepadInput::loop() {
       for (size_t k = 0; k < count; ++k) handle_event(evs[k].type, evs[k].code, evs[k].value);
     }
 
-    // Self-update notify UI: cheap on every tick (an atomic read of the shared state), draws the
-    // dot / auto-shows the one-time card only on the edge where a newer commit first appears.
-    if (update_prompt_) update_prompt_->tick();
+    // Self-update notify UI: cheap on every tick (an atomic read of the shared state). Passes the
+    // raw watch signal so the pill/card stay off a live video — not `layer() == Layer::Player`,
+    // because the OSK outranks the player while a video can still be playing underneath.
+    if (update_prompt_) update_prompt_->tick(layers_ && layers_->video_up());
 
     // Either card is modal, and a direction held when it appeared would keep auto-repeating into
     // the page behind it. Dropping the direction also releases the right-stick scroll.

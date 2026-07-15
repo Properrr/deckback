@@ -387,12 +387,9 @@ int main(int argc, char** argv) {
     if (onboarding || update_prompt)
       navigator->set_on_app_loaded([&onboarding, &update_prompt] {
         if (onboarding) onboarding->show(/*first_run_only=*/true);
-        // Re-draw the dot and re-inject the card (if open) after a full reload tore down
+        // Redraw the dot and re-inject the card (if open) after a full reload tore down
         // documentElement — else a navigation strands the card and traps input (self-update.md).
-        if (update_prompt) {
-          update_prompt->redraw_dot_on_reload();
-          update_prompt->redraw_card_on_reload();
-        }
+        if (update_prompt) update_prompt->on_page_reloaded();
       });
     navigator->start();
     // Phase 3 input: gamepad evdev -> DOM key events over CDP (S0.6 mechanism), bindings from

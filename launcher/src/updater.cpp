@@ -80,10 +80,7 @@ const char* update_permission_name(UpdatePermission p) {
 void UpdateState::set_available(bool available, std::string commit) {
   {
     std::lock_guard<std::mutex> lk(m_);
-    if (commit != commit_) {
-      commit_ = std::move(commit);
-      dot_suppressed_.store(false, std::memory_order_relaxed);  // a newer version re-arms the dot
-    }
+    commit_ = std::move(commit);
   }
   available_.store(available, std::memory_order_relaxed);
 }

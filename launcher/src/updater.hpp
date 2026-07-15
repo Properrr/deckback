@@ -9,26 +9,20 @@
 namespace deckback {
 
 // Shared, thread-safe hand-off from the updater thread (which detects an available update) to the
-// UI threads (input thread draws the one-time card + amber dot; navigator re-draws the dot after a
-// full page reload). Mirrors the relaxed-atomic OverlayState/LayerState pattern. Keyed on the
-// portal's remote ostree commit — the precise dedup key (version labels are cosmetic to the portal,
-// durable/self-update.md).
+// input thread (which draws the one-time card + amber pill). Mirrors the relaxed-atomic
+// OverlayState/LayerState pattern. Keyed on the portal's remote ostree commit — the precise dedup
+// key (version labels are cosmetic to the portal, durable/self-update.md).
 class UpdateState {
  public:
-  // Publish "a newer commit R is available" (updater thread). A commit change re-arms the dot even
-  // if the user had dismissed the previous one — a newer version is worth surfacing again.
+  // Publish "a newer commit R is available" (updater thread). Dismissal ("ignore this version") is
+  // keyed to the commit via the on-disk dot marker (decide_notification), so a newer commit
+  // naturally re-arms the pill — this state carries only availability + the commit.
   void set_available(bool available, std::string commit);
   bool available() const { return available_.load(std::memory_order_relaxed); }
   std::string commit() const;  // the short remote commit, mutex-guarded
 
-  // The user chose "ignore this version": stop drawing the dot until a different commit arrives
-  // (input thread). The Menu route stays reachable regardless.
-  void suppress_dot() { dot_suppressed_.store(true, std::memory_order_relaxed); }
-  bool dot_suppressed() const { return dot_suppressed_.load(std::memory_order_relaxed); }
-
  private:
   std::atomic<bool> available_{false};
-  std::atomic<bool> dot_suppressed_{false};
   mutable std::mutex m_;
   std::string commit_;
 };

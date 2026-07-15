@@ -36,8 +36,15 @@ class LayerState {
   // Returns true when the layer actually changed (callers log on the edge, not every tick).
   bool set(Layer l) { return layer_.exchange(l, std::memory_order_relaxed) != l; }
 
+  // The raw watch-view signal, independent of which layer owns the keys: the OSK outranks the
+  // player in resolve_layer() while a video can still be playing underneath, so overlays that must
+  // stay off playback (the update pill/card) key off this, never off `get() == Layer::Player`.
+  bool video_up() const { return video_up_.load(std::memory_order_relaxed); }
+  void set_video_up(bool v) { video_up_.store(v, std::memory_order_relaxed); }
+
  private:
   std::atomic<Layer> layer_{Layer::Browse};
+  std::atomic<bool> video_up_{false};
 };
 
 }  // namespace deckback

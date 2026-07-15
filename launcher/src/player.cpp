@@ -76,6 +76,7 @@ bool PlayerController::poll_once() {
     warned_synthetic_ = true;
   }
   if (layers_) {
+    layers_->set_video_up(s.player_open);
     const Layer l = resolve_layer(s.player_open, s.text_input_focused);
     if (layers_->set(l)) info(std::format("player: input layer -> {}", layer_name(l)));
   }

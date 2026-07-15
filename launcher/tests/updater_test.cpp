@@ -90,21 +90,16 @@ int main() {
   up3->start();
   up3->stop();
 
-  // UpdateState is the updater->UI hand-off. A commit change re-arms the dot even after the user
-  // dismissed the previous one — a newer version is worth surfacing again (durable/self-update.md).
+  // UpdateState is the updater->UI hand-off: availability + the commit, nothing else. Dismissal
+  // ("ignore this version") is keyed to the commit via the on-disk dot marker
+  // (decide_notification), so a newer commit re-arms the pill without any state here.
   UpdateState state;
   assert(!state.available());
   assert(state.commit().empty());
-  assert(!state.dot_suppressed());
   state.set_available(true, "aaaa1111");
   assert(state.available());
   assert(state.commit() == "aaaa1111");
-  state.suppress_dot();
-  assert(state.dot_suppressed());
-  state.set_available(true, "aaaa1111");  // same commit: suppression sticks
-  assert(state.dot_suppressed());
-  state.set_available(true, "bbbb2222");  // a newer commit re-arms the dot
-  assert(!state.dot_suppressed());
+  state.set_available(true, "bbbb2222");
   assert(state.commit() == "bbbb2222");
 
   std::puts("updater: lifecycle ok");
