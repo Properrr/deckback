@@ -8,25 +8,19 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.4] - 2026-07-14
+
 ### Added
-- **Self-update** (`self_update_mode`: `notify` | `auto` | `off`, **default `notify`**): updates are
-  **detected but never enforced without consent**. In `notify` mode the launcher watches the Flatpak
-  portal for a newer commit and surfaces it painlessly — a small amber dot pinned to the corner and,
-  once per new version, an "Update available" card showing the version and the changelog (fetched
-  from this repo's GitHub Releases). Nothing installs until you choose **Update now** (A); **Not now**
-  (B) keeps the dot, **Ignore this version** (Y) hides the dot until a newer release, and the update
-  is reachable any time from the **Menu (☰)**. The card and dot are launcher-drawn overlays (like the
-  controls card), so a YouTube frontend change can't break them. If you'd rather it update silently,
-  set `self_update_mode: "auto"`; `off` disables it entirely and you update from Desktop Mode. In
-  every mode the portal updates **only Deckback**, from its own `deckback` remote — no root, no
-  password — and the new version applies on the next launch; keeping the runtime and other apps
-  current is still a separate `flatpak update`. Backed by an sd-bus session-bus client to
-  `org.freedesktop.portal.Flatpak`; because SteamOS Game Mode has no Access-portal backend for the
-  portal's consent dialog, the launcher pre-records the consent in the permission store
-  (`flatpak`/`updates`=`yes`), respecting an explicit host-side `no`. The legacy boolean
-  `self_update` still parses (`true`→`auto`, `false`→`off`). Also: `--version`/startup report the
-  real version (compiled in from `VERSION`), and `--selftest-update` / `--selftest-deploy[-seed]`
-  probe the portal. See `.internal/findings/durable/self-update.md`.
+- **Self-update, notify-first** (`self_update_mode`: `notify` | `auto` | `off`, **default
+  `notify`**). Deckback now tells you when a new version is out instead of updating behind your back.
+  A small **"Update available" pill** sits in the top-right corner with a **☰** hint — open it from
+  the Menu button any time — and once per version an **Update available** card shows what's new, with
+  colour-coded buttons: **A** Update now (green), **B** Not now (red), **Y** Ignore this version
+  (yellow). Nothing installs until you press **A**; the update then applies the next time you open
+  Deckback. The pill stays out of the way during video playback. Prefer silent updates? Set
+  `self_update_mode: "auto"`; `"off"` disables it and you update from Desktop Mode. Updates touch
+  **only Deckback**, from its own repo — no root, no password; keeping the runtime and other apps
+  current is still a separate `flatpak update`. See `.internal/findings/durable/self-update.md`.
 
 ## [0.0.3] - 2026-07-13
 
@@ -87,7 +81,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.3...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.4...HEAD
+[0.0.4]: https://github.com/properrr/deckback/releases/tag/v0.0.4
 [0.0.3]: https://github.com/properrr/deckback/releases/tag/v0.0.3
 [0.0.2]: https://github.com/properrr/deckback/releases/tag/v0.0.2
 [0.0.1]: https://github.com/properrr/deckback/releases/tag/v0.0.1
