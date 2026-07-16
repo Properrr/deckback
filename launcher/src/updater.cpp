@@ -15,6 +15,7 @@
 
 #include <atomic>
 #include <climits>
+#include <csignal>
 #include <cstdint>
 #include <cstring>
 #include <fstream>
@@ -140,9 +141,19 @@ class StubUpdater final : public Updater {
     error("selftest-deploy: no libsystemd backend compiled in");
     return 1;
   }
+  int selftest_watch(int) override {
+    error("selftest-watch: no libsystemd backend compiled in");
+    return 1;
+  }
 };
 
 #if DECKBACK_HAVE_SDBUS
+
+// Set by SIGINT/SIGTERM during --selftest-watch so the bounded watch loop stops promptly and
+// cleanly (the sim harness ends the drive with a signal once it has observed the reconnect it was
+// testing).
+volatile std::sig_atomic_t g_watch_stop = 0;
+void watch_on_signal(int) { g_watch_stop = 1; }
 
 constexpr const char* kPortal = "org.freedesktop.portal.Flatpak";
 constexpr const char* kPortalPath = "/org/freedesktop/portal/Flatpak";
@@ -343,6 +354,39 @@ class PortalUpdater final : public Updater {
         error("selftest-deploy: unexpected terminal state");
         return 1;
     }
+  }
+
+  // --selftest-watch <secs>: run the real updater loop (start()) for a bounded window so an
+  // external actor can drop the bus or restart flatpak-portal and the reconnect handling logs case
+  // A/B. In notify mode with no consent nothing is deployed — the loop only watches. SIGINT/SIGTERM
+  // ends the window early (the sim signals once it has seen the reconnect it was testing), which
+  // also exercises the stop()/join path. See durable/dbus-reconnect.md, durable/test-sim.md.
+  int selftest_watch(int secs) override {
+    if (!live_) {
+      error("selftest-watch: no live session bus");
+      return 1;
+    }
+    if (secs <= 0) secs = 1;
+    info("selftest-watch: running the updater loop for up to " + std::to_string(secs) +
+         "s (portal reconnect drive; Ctrl-C / SIGTERM to stop early)");
+    g_watch_stop = 0;
+    struct sigaction sa {};
+    sa.sa_handler = &watch_on_signal;
+    sigaction(SIGINT, &sa, nullptr);
+    sigaction(SIGTERM, &sa, nullptr);
+    start();
+    const long deadline = mono_ms() + static_cast<long>(secs) * 1000;
+    while (mono_ms() < deadline && g_watch_stop == 0) {
+      struct timespec ts {
+        0, 200L * 1000L * 1000L
+      };
+      nanosleep(&ts, nullptr);  // EINTR on a signal → the g_watch_stop check ends the loop at once
+    }
+    info(std::string("selftest-watch: stopping (") +
+         (g_watch_stop ? "signalled" : "window elapsed") + ")");
+    stop();
+    info("selftest-watch: done");
+    return 0;
   }
 
  private:

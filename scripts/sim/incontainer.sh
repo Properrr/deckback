@@ -93,14 +93,149 @@ run_portal() {
   fi
 }
 
+# Wait up to $3 seconds for the literal substring $2 to appear in file $1. 0 if seen, 1 on timeout.
+wait_log() {
+  local f="$1" pat="$2" secs="$3" i
+  for ((i = 0; i < secs * 5; i++)); do
+    grep -qF -- "$pat" "$f" 2>/dev/null && return 0
+    sleep 0.2
+  done
+  return 1
+}
+
+# Start a session dbus-daemon at a FIXED socket path (so the reconnect drive can drop and restore the
+# bus at the same address, which is what case A needs). Sets DBUS_PID. 0 once the socket is listening.
+start_bus() {
+  dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --nofork --nopidfile >/tmp/dbus.log 2>&1 &
+  DBUS_PID=$!
+  local i
+  for i in $(seq 1 50); do
+    [ -S "${XDG_RUNTIME_DIR}/bus" ] && return 0
+    sleep 0.1
+  done
+  return 1
+}
+
+# Run the real updater loop as a flatpak instance (bwrap with a synthetic /.flatpak-info, so the portal
+# treats us as a flatpak app and CreateUpdateMonitor succeeds) for up to $1 seconds, logging to /tmp/
+# watch.log. Sets WATCH_PID. No --unshare-pid: the portal reads /proc/<pid>/root/.flatpak-info, so our
+# pid must stay visible in the container's pid namespace.
+start_watch() {
+  : >/tmp/watch.log
+  bwrap --unshare-user --uid 0 --gid 0 \
+    --ro-bind /usr /usr --ro-bind /etc /etc \
+    --symlink usr/lib /lib --symlink usr/lib /lib64 --symlink usr/bin /bin --symlink usr/bin /sbin \
+    --proc /proc --dev /dev --tmpfs /tmp \
+    --ro-bind /tmp/lbuild /opt/lbuild \
+    --ro-bind /tmp/fpi/flatpak-info /.flatpak-info \
+    --bind "$XDG_RUNTIME_DIR" "$XDG_RUNTIME_DIR" \
+    --setenv XDG_RUNTIME_DIR "$XDG_RUNTIME_DIR" \
+    --setenv DBUS_SESSION_BUS_ADDRESS "$DBUS_SESSION_BUS_ADDRESS" \
+    --setenv HOME /tmp \
+    -- /opt/lbuild/deckback-launcher --selftest-watch "$1" >/tmp/watch.log 2>&1 &
+  WATCH_PID=$!
+}
+
+cleanup_reconnect() {
+  [ -n "${WATCH_PID:-}" ] && kill "$WATCH_PID" 2>/dev/null
+  [ -n "${DBUS_PID:-}" ] && kill "$DBUS_PID" 2>/dev/null
+  pkill -f flatpak-portal 2>/dev/null || true
+}
+
+# The heart of Phase 2: drive the launcher's D-Bus reconnect logic (durable/dbus-reconnect.md) off
+# hardware. Case B = flatpak-portal restarts (our bus survives, the orphaned monitor is rebuilt via
+# NameOwnerChanged); case A = the session bus itself drops and returns. This is the real PortalUpdater
+# loop, not a stub — it retires the on-Deck reconnect drive that a sleeping Deck kept blocking.
+run_reconnect() {
+  note "suite: reconnect — drive the updater's D-Bus reconnect (case A bus drop, case B portal restart)"
+  if [ ! -x /tmp/lbuild/deckback-launcher ]; then
+    if ! cmake -S "$SRC/launcher" -B /tmp/lbuild -G Ninja -DCMAKE_BUILD_TYPE=Release >/tmp/cmake.log 2>&1 ||
+      ! cmake --build /tmp/lbuild >/tmp/build.log 2>&1; then
+      tail -20 /tmp/build.log 2>/dev/null
+      bad "launcher build (reconnect prerequisite)"
+      return
+    fi
+  fi
+  # A libsystemd-less build compiles the StubUpdater, whose watch does nothing — that would fake a pass.
+  if /tmp/lbuild/deckback-launcher --selftest-watch 1 2>&1 | grep -q "no libsystemd backend compiled in"; then
+    bad "launcher built WITHOUT sd-bus — the reconnect path is not compiled (need systemd-libs headers)"
+    return
+  fi
+
+  export XDG_RUNTIME_DIR=/tmp/xrd
+  mkdir -p "$XDG_RUNTIME_DIR"
+  chmod 700 "$XDG_RUNTIME_DIR"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+  if ! start_bus; then
+    bad "session bus did not come up"
+    return
+  fi
+
+  mkdir -p /tmp/fpi
+  printf '%s\n' '[Application]' 'name=io.github.properrr.deckback' '' \
+    '[Instance]' 'instance-id=deckback-sim' 'flatpak-version=1.15.0' >/tmp/fpi/flatpak-info
+
+  start_watch 60
+
+  # Positive control: without an accepted flatpak-instance caller the monitor never comes up and the
+  # whole drive proves nothing (a NON-flatpak caller is what the `portal` suite already rejects).
+  if wait_log /tmp/watch.log "watching for updates to this app" 15; then
+    ok "positive control: portal accepted the flatpak-instance caller, monitor up"
+  else
+    sed 's/^/    /' /tmp/watch.log
+    bad "monitor never came up (bwrap/flatpak-info positive control)"
+    cleanup_reconnect
+    return
+  fi
+
+  # ---- Case B: flatpak-portal restarts. The session bus survives; the orphaned monitor is rebuilt. --
+  pkill -f flatpak-portal 2>/dev/null
+  sleep 0.5
+  # Reactivate the portal from ANY caller so NameOwnerChanged(new owner) broadcasts to our watcher.
+  gdbus call --session --dest org.freedesktop.portal.Flatpak \
+    --object-path /org/freedesktop/portal/Flatpak \
+    --method org.freedesktop.portal.Flatpak.CreateUpdateMonitor '{}' >/dev/null 2>&1 || true
+  if wait_log /tmp/watch.log "flatpak-portal restarted" 15; then
+    ok "case B: portal restart detected — monitor re-created (NameOwnerChanged path)"
+  else
+    sed 's/^/    /' /tmp/watch.log
+    bad "case B: portal restart did not trigger a monitor rebuild"
+  fi
+
+  # ---- Case A: the session bus itself drops, then returns at the SAME address. --------------------
+  kill "$DBUS_PID" 2>/dev/null
+  wait "$DBUS_PID" 2>/dev/null
+  if wait_log /tmp/watch.log "session bus error" 15; then
+    ok "case A: bus drop detected (attempting to reconnect)"
+  else
+    sed 's/^/    /' /tmp/watch.log
+    bad "case A: bus drop was not detected"
+  fi
+  if ! start_bus; then
+    bad "case A: could not restart the session bus"
+    cleanup_reconnect
+    return
+  fi
+  if wait_log /tmp/watch.log "reconnected to the Flatpak portal" 30; then
+    ok "case A: reconnected after the bus returned — watching again"
+  else
+    sed 's/^/    /' /tmp/watch.log
+    bad "case A: never reconnected after the bus returned"
+  fi
+
+  cleanup_reconnect
+}
+
 case "$suite" in
 launcher) run_launcher ;;
 shortcut) run_shortcut ;;
 portal) run_portal ;;
+reconnect) run_reconnect ;;
 all)
   run_launcher
   run_shortcut
   run_portal
+  run_reconnect
   ;;
 *)
   echo "unknown suite '$suite'" >&2

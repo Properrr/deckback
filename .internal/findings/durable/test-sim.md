@@ -1,22 +1,34 @@
 # Containerized test sim (SteamOS/gamescope-in-Docker)
 
-## Status: Phase 1 PARTIALLY LANDED (2026-07-15) — `just sim` runs three GPU-independent suites green in Docker
+## Status: Phase 2 (reconnect drive) LANDED 2026-07-16 — `just sim` runs four GPU-independent suites green in Docker
 
 Landed and green (`just sim`, `docker/sim.Dockerfile` + `scripts/sim/run.sh` + `incontainer.sh`):
 - **`launcher`** — the out-of-tree launcher builds + all 21 L0 tests pass on **Arch** (not just the
-  repo's Debian toolchain), proving it isn't distro-locked.
+  repo's Debian toolchain), proving it isn't distro-locked. Arch's `systemd-libs` ships `sd-bus.h` +
+  `libsystemd.pc`, so this build is **with** sd-bus — the real `PortalUpdater`, not the stub.
 - **`shortcut`** — the installer's Steam-tile writing (`steam_shortcuts.py add` + `art`) produces a
   correct `shortcuts.vdf` entry + the five `grid/<crc-appid>*.png` files against a synthetic Steam
   userdata layout. This is the "prove the installer with steamlauncher" ask — faithful, no Deck.
 - **`portal`** — `flatpak-portal` + the PermissionStore activate and enforce their caller contract
   (the self-update / reconnect foundation).
+- **`reconnect`** (Phase 2, 2026-07-16) — drives the launcher's real D-Bus reconnect logic
+  (`durable/dbus-reconnect.md`) off hardware. A bounded `deckback-launcher --selftest-watch <secs>`
+  runs the actual `PortalUpdater` loop **inside a bwrap flatpak-instance** (synthetic
+  `/.flatpak-info` → the portal accepts `CreateUpdateMonitor`; a self-managed `dbus-daemon` at a
+  FIXED socket path so the bus can be dropped and restored at the same address). Four asserts, all
+  green and stable across 3 runs: **positive control** (monitor comes up — the flatpak-instance
+  caller is accepted; a non-flatpak caller is what `portal` rejects), **case B** (`pkill
+  flatpak-portal` + reactivate → `NameOwnerChanged` → "flatpak-portal restarted — re-creating the
+  update monitor"), **case A drop** (`kill` the daemon → "session bus error — attempting to
+  reconnect"), **case A recover** (restart the daemon at the same address → "reconnected to the
+  Flatpak portal"). It refuses to pass a libsystemd-less (stub) build. **This retires the on-Deck
+  reconnect drive** — the drive that a sleeping Deck kept blocking now runs in CI-reachable software.
 - **Guardrail** — `just sim vaapi|power|soak|resume|…` exits **6 (UNSUPPORTED-IN-SIM)**, pinned by
   `tests/harness/test_sim_guardrail.sh` so the honesty rule can't rot.
 
-Still Phase 2 (needs a flatpak-instance caller — `flatpak run` of a minimal app, or a bwrap
-`/.flatpak-info` wrapper): the full self-update **deploy** round-trip and the D-Bus **reconnect**
-case A/B drive (a new bounded `deckback-launcher --selftest-watch`), plus the `sim-gamescope`
-overlay-render + uinput tier.
+Still ahead: the full self-update **deploy** round-trip (a real staging-repo commit to Update() to
+Done — needs an ostree repo fixture), and the `sim-gamescope` overlay-render + uinput tier (Phase 2b
+below).
 
 ## Why, and the one rule that makes it safe
 

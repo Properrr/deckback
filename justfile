@@ -44,9 +44,9 @@ test-harness:
     ./tests/harness/run.sh
 
 # Containerized test sim: the GPU-INDEPENDENT layers only (launcher build, installer Steam-tile
-# writing, the Flatpak-portal self-update foundation). REFUSES hardware gates (vaapi/power/soak/…)
-# with exit 6 — never fakes a pass. Needs Docker. See findings/durable/test-sim.md.
-# suite: all (default) | launcher | shortcut | portal.
+# writing, the Flatpak-portal self-update foundation, the D-Bus reconnect drive). REFUSES hardware
+# gates (vaapi/power/soak/…) with exit 6 — never fakes a pass. Needs Docker. See test-sim.md.
+# suite: all (default) | launcher | shortcut | portal | reconnect.
 sim suite="all":
     ./scripts/sim/run.sh "{{suite}}"
 

@@ -3,7 +3,7 @@
 # inside it against the bind-mounted (read-only) source. Runs the GPU-INDEPENDENT layers only and, by
 # construction, REFUSES to run — let alone green — a hardware gate.
 #
-#   scripts/sim/run.sh [suite]   suite: all (default) | launcher | shortcut | portal
+#   scripts/sim/run.sh [suite]   suite: all (default) | launcher | shortcut | portal | reconnect
 #
 # Exit (harness §1 + sim): 0 ok · 2 assert · 3 env (no docker) · 5 usage · 6 UNSUPPORTED-IN-SIM
 # (a hardware-only gate was asked of the sim — it is not, and can never be, a pass here).

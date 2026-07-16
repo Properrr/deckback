@@ -139,6 +139,7 @@ void print_usage() {
       "  --selftest-update  Probe the Flatpak update portal (run inside the flatpak) and exit\n"
       "  --selftest-deploy  Drive one portal Update cycle (RAW permission) and report; exit\n"
       "  --selftest-deploy-seed  As above, but pre-grant self-update consent first\n"
+      "  --selftest-watch <s>  Run the updater loop for <s>s (portal reconnect drive); exit\n"
       "  --version          Print version and exit\n"
       "  -h, --help         Print this help and exit\n"
       "\n"
@@ -160,6 +161,8 @@ int main(int argc, char** argv) {
   bool selftest_update = false;
   bool selftest_deploy = false;
   bool selftest_deploy_seed = false;
+  bool selftest_watch = false;
+  int selftest_watch_secs = 0;
 
   for (int i = 1; i < argc; ++i) {
     const std::string_view a = argv[i];
@@ -180,6 +183,13 @@ int main(int argc, char** argv) {
     } else if (a == "--selftest-deploy-seed") {
       selftest_deploy = true;
       selftest_deploy_seed = true;
+    } else if (a == "--selftest-watch" && i + 1 < argc) {
+      selftest_watch = true;
+      selftest_watch_secs = std::atoi(argv[++i]);
+    } else if (a == "--selftest-watch") {
+      error("--selftest-watch requires a duration in seconds");
+      print_usage();
+      return 2;
     } else if (a == "--config" && i + 1 < argc) {
       config_path = argv[++i];
     } else if (a == "--config") {
@@ -216,6 +226,15 @@ int main(int argc, char** argv) {
     // selftest_deploy drives one portal Update cycle explicitly; auto_deploy/state are irrelevant
     // to it (it uses the `seed` argument), so a default config is correct here.
     return Updater::create(UpdaterConfig{})->selftest_deploy(selftest_deploy_seed);
+  }
+
+  if (selftest_watch) {
+    info(std::string("selftest-watch: backend ") +
+         (Updater::backend_available() ? "libsystemd" : "stub (no libsystemd)"));
+    // Default config = notify mode with no consent: the loop watches but never deploys. The point
+    // is to keep the reconnect handling alive for the sim's case-A/case-B drive
+    // (durable/test-sim.md).
+    return Updater::create(UpdaterConfig{})->selftest_watch(selftest_watch_secs);
   }
 
   const std::string runtime_dir = env_or("XDG_RUNTIME_DIR", "/tmp");
