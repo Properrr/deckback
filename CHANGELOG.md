@@ -8,6 +8,8 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.5] - 2026-07-15
+
 ### Fixed
 - **Settings menu no longer traps input after sleep/resume.** If you opened the menu and the Deck
   slept (or the page reloaded for any reason), the menu could linger on screen while your controller
@@ -23,8 +25,7 @@ minor versions may include breaking changes.
   up to date or has the changelog and actions for a new release. Open it with **Menu (☰)**; navigate
   with the **D-pad** (and the right stick to scroll), **A** to select, **B** to go back/close, and
   **L1/R1** to switch tabs. On the Updates tab, **A** on *Update now* installs (applies next launch)
-  and **Y** ignores a version. An amber dot on the button flags an available update. See
-  `.internal/osd-menu-plan.md`.
+  and **Y** ignores a version. An amber dot on the button flags an available update.
 - **Settings ▸ Keys** now lists the **L2 / R2** chapter-seek controls (Previous / Next chapter).
   They were being dropped because the launcher didn't recognise the chapter/skip seeks as controls
   it performs itself. The Updates tab's status and changelog text is also larger and better spaced.
@@ -107,7 +108,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.4...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.5...HEAD
+[0.0.5]: https://github.com/properrr/deckback/releases/tag/v0.0.5
 [0.0.4]: https://github.com/properrr/deckback/releases/tag/v0.0.4
 [0.0.3]: https://github.com/properrr/deckback/releases/tag/v0.0.3
 [0.0.2]: https://github.com/properrr/deckback/releases/tag/v0.0.2
