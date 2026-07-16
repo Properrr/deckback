@@ -1,6 +1,22 @@
 # Containerized test sim (SteamOS/gamescope-in-Docker)
 
-## Status: DESIGN + Phase-1 feasibility spike (2026-07-15)
+## Status: Phase 1 PARTIALLY LANDED (2026-07-15) — `just sim` runs three GPU-independent suites green in Docker
+
+Landed and green (`just sim`, `docker/sim.Dockerfile` + `scripts/sim/run.sh` + `incontainer.sh`):
+- **`launcher`** — the out-of-tree launcher builds + all 21 L0 tests pass on **Arch** (not just the
+  repo's Debian toolchain), proving it isn't distro-locked.
+- **`shortcut`** — the installer's Steam-tile writing (`steam_shortcuts.py add` + `art`) produces a
+  correct `shortcuts.vdf` entry + the five `grid/<crc-appid>*.png` files against a synthetic Steam
+  userdata layout. This is the "prove the installer with steamlauncher" ask — faithful, no Deck.
+- **`portal`** — `flatpak-portal` + the PermissionStore activate and enforce their caller contract
+  (the self-update / reconnect foundation).
+- **Guardrail** — `just sim vaapi|power|soak|resume|…` exits **6 (UNSUPPORTED-IN-SIM)**, pinned by
+  `tests/harness/test_sim_guardrail.sh` so the honesty rule can't rot.
+
+Still Phase 2 (needs a flatpak-instance caller — `flatpak run` of a minimal app, or a bwrap
+`/.flatpak-info` wrapper): the full self-update **deploy** round-trip and the D-Bus **reconnect**
+case A/B drive (a new bounded `deckback-launcher --selftest-watch`), plus the `sim-gamescope`
+overlay-render + uinput tier.
 
 ## Why, and the one rule that makes it safe
 

@@ -107,6 +107,7 @@ This is the harness's least obvious property. Three different machines are invol
 | `just build [preset]` | `autoninja content_shell` + the launcher | tree, ctr | | | | 1,3 |
 | `just launcher [build\|test]` | build/test **only** the launcher | *nothing* | | | ~ | 1,5 |
 | `just test-harness` | L0 tests of the harness's own shell/awk/python logic | *nothing* | | | ~ | 1 |
+| `just sim [launcher\|shortcut\|portal\|all]` | containerized **GPU-independent** sim: launcher build on Arch, installer Steam-tile writing, Flatpak-portal self-update foundation; **refuses** hardware gates (vaapi/power/soak/…) with exit **6**, never fakes a pass | Docker (`--security-opt seccomp=unconfined`) | | | | 0,2,3,5,6 |
 | `just test-deck [args]` | **L2**: pytest drives the Deck over SSH + a CDP tunnel (+uinput) | Deck **running the app**, `pytest` on the workstation | | ~ (uinput taps/presses) | ✓ `artifacts/` on failure | 2,3,4 |
 | `just compdb` | `compile_commands.json` for clangd | tree, ctr, `out/dev` | | | ✓ | 1 |
 | `just fmt` | clang-format launcher + tree; `gn format`; `shfmt` | optional ctr | | ✓ writes files | | 1 |

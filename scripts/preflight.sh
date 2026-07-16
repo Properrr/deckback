@@ -45,7 +45,7 @@ run_gn() {
 run_shell() {
   local bad=0 sc
   sc="$(pinned_tool shellcheck shellcheck shellcheck-py)"
-  "$sc" -S warning scripts/*.sh tests/harness/*.sh || bad=1
+  "$sc" -S warning scripts/*.sh scripts/sim/*.sh tests/harness/*.sh || bad=1
   # The harness suite includes test_cdp_lib.py / test_video_corruption.py, which import Pillow. A
   # missing Pillow ERRORs the run — surface it as an environment gap, not a mystery test failure.
   python3 -c 'import PIL' 2>/dev/null || die_env "the harness suite needs Pillow (CI: python3-pil). Install it: pip install Pillow"

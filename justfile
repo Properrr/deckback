@@ -43,6 +43,13 @@ preflight target="all":
 test-harness:
     ./tests/harness/run.sh
 
+# Containerized test sim: the GPU-INDEPENDENT layers only (launcher build, installer Steam-tile
+# writing, the Flatpak-portal self-update foundation). REFUSES hardware gates (vaapi/power/soak/…)
+# with exit 6 — never fakes a pass. Needs Docker. See findings/durable/test-sim.md.
+# suite: all (default) | launcher | shortcut | portal.
+sim suite="all":
+    ./scripts/sim/run.sh "{{suite}}"
+
 # Unattended on-Deck run: deploy -> launch -> gate -> cert, then tear down. `--full` adds probe,
 # power and soak. A run that adjudicates nothing exits 3, never 0. `just deck-ci --dry-run` to look.
 deck-ci *args:
