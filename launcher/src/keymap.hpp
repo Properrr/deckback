@@ -145,10 +145,9 @@ std::string resolve_button(const Keymaps& maps, int code, Layer layer, bool lt_h
 std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arrow, Layer layer,
                                   bool lt_held, bool rt_held);
 
-// The evdev EV_KEY code of the control bound to `action`, or -1 when nothing is. Some actions have
-// no DOM key by design — `voice_search` (input-ux §8.2) and `show_controls` are performed by the
-// launcher itself — so they never appear in the button map, and the input layer intercepts their
-// press edges directly.
+// The evdev EV_KEY code of the control bound to `action`, or -1 when nothing is. `voice_search` has
+// no DOM key by design and is intercepted by the launcher. `show_controls` remains supported here
+// solely to read old configs; the OSD uses the fixed physical Menu button instead.
 int find_control_for_action(const std::vector<std::pair<std::string, std::string>>& keymap,
                             std::string_view action);
 

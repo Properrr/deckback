@@ -36,15 +36,18 @@ constexpr Label kActionLabels[] = {
     {"scrub_fwd", "Scrub forward"},
     {"seek_back_10", "Scrub back"},  // deprecated aliases still resolve, so they still print
     {"seek_fwd_10", "Scrub forward"},
+    {"chapter_back", "Previous chapter"},
+    {"chapter_fwd", "Next chapter"},
+    {"skip_back", "Skip back"},
+    {"skip_fwd", "Skip forward"},
     {"voice_search", "Hold to speak"},
-    {"show_controls", "These controls"},
 };
 
-// The `voice_search` and `show_controls` actions have no DOM key by design — the launcher performs
-// them itself (input-ux §13, §7). `resolve_binding` correctly reports them as unmapped, so they
-// must be recognised here or they would be dropped from a card that is supposed to explain them.
+// Actions the launcher performs itself over CDP, with no DOM key: voice_search and the chapter/skip
+// seeks (LT/RT). `show_controls` is a retired compatibility action; Menu is fixed to Settings and
+// is appended below, independent of the keymap.
 bool is_launcher_action(std::string_view value) {
-  return value == "voice_search" || value == "show_controls";
+  return value == "voice_search" || skip_action_sign(value) != 0 || chapter_action_sign(value) != 0;
 }
 
 }  // namespace
@@ -70,7 +73,7 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx) {
     // The D-pad is not a button binding; it is described below alongside the sticks. Only the name
     // is checked: a `"navigate"` *value* on some other control already resolves to no key and is
     // dropped by the guard further down, so testing for it here would be a check that cannot fail.
-    if (name == "dpad") continue;
+    if (name == "dpad" || name == "start" || value == "show_controls") continue;
     const std::string control = control_label(name);
     if (control.empty()) continue;  // a control this hardware does not have
 
@@ -87,6 +90,7 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx) {
   }
 
   // Controls the launcher owns rather than the keymap.
+  rows.push_back({"Menu (☰)", "Settings"});
   rows.push_back({"D-pad / Left stick", "Move focus"});
   if (ctx.right_stick_scroll) rows.push_back({"Right stick", "Fast scroll"});
 

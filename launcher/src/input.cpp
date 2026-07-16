@@ -12,6 +12,7 @@
 #include <format>
 
 #include "log.hpp"
+#include "osdmenu.hpp"
 #include "overlay.hpp"
 #include "scripts.hpp"
 #include "updateprompt.hpp"
@@ -56,6 +57,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       hold_(opts.voice ? opts.voice->hold_ms() : 0),
       onboarding_(opts.onboarding),
       update_prompt_(opts.update_prompt),
+      osd_(opts.osd),
       fast_cfg_(opts.fast_scroll) {
   KeymapConfig& keymap = opts.keymap;
   // Voice is not a DOM key. When it is enabled, take its control out of the button map so it is not
@@ -71,20 +73,23 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
                        voice_->hold_ms()));
     keymap.base = without_action(keymap.base, "voice_search");
   }
-  // `show_controls` is a launcher action too: it has no DOM key, and re-opens the controls card.
-  if (onboarding_) {
-    help_code_ = find_control_for_action(keymap.base, "show_controls");
-    if (help_code_ >= 0)
-      info(std::format("input: controls card re-opens on evdev code {}", help_code_));
+  // Menu is the OSD's fixed physical entry point, not a `show_controls` keymap action. The OSD
+  // must remain reachable after a hot-swapped keymap removes or repurposes that legacy action.
+  // Drop the old action anywhere it occurs so it can neither dispatch nor be reported as unmapped.
+  if (osd_) {
+    menu_code_ = control_code("start");
+    info(std::format("input: Menu (code {}) opens the settings menu", menu_code_));
     keymap.base = without_action(keymap.base, "show_controls");
   }
-  // Update card buttons are FIXED (A/B/Y), independent of the user's keymap: the card teaches those
-  // exact glyphs, and the tool that offers an update must not depend on a keymap the user may have
-  // rebound. Only meaningful while the card is up, so the base map is left untouched.
-  if (update_prompt_) {
-    upd_a_ = control_code("a");
-    upd_b_ = control_code("b");
-    upd_y_ = control_code("y");
+  // OSD nav buttons are FIXED (A select, B back, L1/R1 switch tab), independent of the user's
+  // keymap: a settings menu whose own navigation could be rebound by the config it edits is
+  // unusable.
+  if (osd_) {
+    osd_a_ = control_code("a");
+    osd_b_ = control_code("b");
+    osd_y_ = control_code("y");
+    osd_lb_ = control_code("lb");
+    osd_rb_ = control_code("rb");
   }
   if (opts.touch.lock_enabled) {
     const auto [a, b] = parse_chord(opts.touch.chord);
@@ -211,12 +216,41 @@ void GamepadInput::rescan_devices() {
   if (fds_.empty()) info("input: no gamepad device found yet (will retry)");
 }
 
+namespace {
+const char* arrow_focus_cmd(const char* arrow) {
+  std::string_view a(arrow ? arrow : "");
+  if (a == "ArrowUp") return "up";
+  if (a == "ArrowDown") return "down";
+  if (a == "ArrowLeft") return "left";
+  if (a == "ArrowRight") return "right";
+  return nullptr;
+}
+}  // namespace
+
 void GamepadInput::dispatch_key(const char* base_arrow) {
+  // While the OSD is open, D-pad/left-stick directions move menu focus, not Leanback's.
+  if (osd_ && osd_->open()) {
+    if (const char* c = arrow_focus_cmd(base_arrow)) osd_->exec(c);
+    return;
+  }
   // Resolved per dispatch, not once per press: releasing a modifier or opening the player mid-hold
   // takes effect on the next repeat without the user re-pressing the stick.
   const std::string key = resolve_direction_key(maps_, base_arrow, layer(), lt_down_, rt_down_);
   if (key.empty()) return;  // absorbed by a held modifier layer that does not bind this direction
   client_.dispatch_key(key);
+}
+
+void GamepadInput::dispatch_scroll(const char* base_arrow) {
+  // Right stick: scrolls the focused OSD region when the menu is open, else the normal fast-scroll.
+  if (osd_ && osd_->open()) {
+    std::string_view a(base_arrow ? base_arrow : "");
+    if (a == "ArrowUp")
+      osd_->exec("scroll_up");
+    else if (a == "ArrowDown")
+      osd_->exec("scroll_down");
+    return;
+  }
+  dispatch_key(base_arrow);
 }
 
 void GamepadInput::dispatch_direction() {
@@ -241,17 +275,16 @@ void GamepadInput::set_direction(const char* key) {
 }
 
 void GamepadInput::update_fast_scroll() {
-  // A held D-pad/left-stick direction suppresses the right stick entirely — and so does either
-  // modal card, which would otherwise scroll Leanback's focus behind itself.
-  const bool blocked = dir_key_ || (onboarding_ && onboarding_->visible()) ||
-                       (update_prompt_ && update_prompt_->card_visible());
+  // A held D-pad/left-stick direction suppresses the right stick entirely — and so does the modal
+  // first-run card, which would otherwise scroll Leanback's focus behind itself. The OSD is NOT
+  // blocked here: while it is open the right stick scrolls the menu (dispatch_scroll routes it).
+  const bool blocked = dir_key_ || (onboarding_ && onboarding_->visible());
   const FastScrollTick t =
       blocked ? FastScrollTick{nullptr, 0} : fast_scroll(rstick_x_, rstick_y_, fast_cfg_);
   if (t.key == fast_key_) return;  // pointer identity: same direction, only the rate moved
   fast_key_ = t.key;
   if (!fast_key_) return;
-  info(std::format("input: {} (right stick)", fast_key_));
-  dispatch_key(fast_key_);  // the first step lands on the push, not after a delay
+  dispatch_scroll(fast_key_);  // the first step lands on the push, not after a delay
   fast_next_ms_ = mono_ms() + t.interval_ms;
 }
 
@@ -319,50 +352,93 @@ bool GamepadInput::handle_voice(int code, int value) {
   return true;  // the voice button is ours; never also dispatch it as a mapped button
 }
 
-bool GamepadInput::handle_update_card(int type, int code, int value) {
-  if (!update_prompt_ || !update_prompt_->card_visible()) return false;
-  // Modal, like the controls card, but with three distinct actions instead of "any button
-  // dismisses" — so the fixed A/B/Y are read directly here. Every other event is swallowed.
-  if (type == EV_KEY && value == 1) {
-    if (code == upd_a_ && upd_a_ >= 0)
-      update_prompt_->confirm_update();
-    else if (code == upd_b_ && upd_b_ >= 0)
-      update_prompt_->dismiss_later();
-    else if (code == upd_y_ && upd_y_ >= 0)
-      update_prompt_->ignore_version();
+void GamepadInput::osd_event(int type, int code, int value) {
+  if (type == EV_KEY) {
+    if (value == 1) {  // press edge; fixed nav buttons
+      if (code == osd_a_ && osd_a_ >= 0)
+        osd_->exec("select");
+      else if ((code == osd_b_ && osd_b_ >= 0) || (code == menu_code_ && menu_code_ >= 0))
+        osd_->exec("back");
+      else if (code == osd_y_ && osd_y_ >= 0)
+        osd_->exec("ignore");
+      else if (code == osd_lb_ && osd_lb_ >= 0)
+        osd_->exec("tab_prev");
+      else if (code == osd_rb_ && osd_rb_ >= 0)
+        osd_->exec("tab_next");
+    }
+    // Modal capture must not freeze physical state machines that started before the menu opened.
+    // In particular, swallowing the voice-button release leaves the page mic pressed and its
+    // playback ducked; swallowing a trigger release leaves its next press dead or its modifier
+    // layer stuck. Presses still stay modal — only release bookkeeping is allowed through.
+    if (value == 0) {
+      handle_chord(code, value);
+      handle_voice(code, value);
+    }
+    return;  // swallow every button while the menu is up
   }
-  return true;
+  if (type != EV_ABS) return;
+  switch (code) {
+    case ABS_HAT0X:
+      hat_x_ = (value < 0) ? -1 : (value > 0 ? 1 : 0);
+      break;
+    case ABS_HAT0Y:
+      hat_y_ = (value < 0) ? -1 : (value > 0 ? 1 : 0);
+      break;
+    case ABS_X:
+      stick_x_ = (value < -kStickDeadzone) ? -1 : (value > kStickDeadzone ? 1 : 0);
+      break;
+    case ABS_Y:
+      stick_y_ = (value < -kStickDeadzone) ? -1 : (value > kStickDeadzone ? 1 : 0);
+      break;
+    case ABS_RX:
+      rstick_x_ = value;
+      update_fast_scroll();
+      return;
+    case ABS_RY:
+      rstick_y_ = value;
+      update_fast_scroll();
+      return;
+    case ABS_Z:
+      // Keep the physical trigger latch honest without firing a seek under the modal menu.
+      lt_down_ = trigger_pressed(value, lt_down_);
+      return;
+    case ABS_RZ:
+      rt_down_ = trigger_pressed(value, rt_down_);
+      return;
+    default:
+      return;  // triggers etc. do nothing while the menu is open
+  }
+  // dispatch_key / dispatch_scroll are OSD-aware, so this drives menu focus + scroll with the same
+  // auto-repeat machinery Leanback navigation uses.
+  set_direction(resolve_direction(hat_x_, hat_y_, stick_x_, stick_y_));
 }
 
-bool GamepadInput::handle_onboarding(int type, int code, int value) {
-  if (!onboarding_) return false;
-
-  if (onboarding_->visible()) {
-    // Modal. Every event is swallowed, or the D-pad would move Leanback's focus behind a card the
-    // user cannot see through — and the first thing they would do after dismissing it is wonder
-    // where they are.
-    //
-    // Only a *button* dismisses, never a stick or D-pad: an analog stick at rest drifts, and a card
-    // dismissed by a resting thumb before it is read is a card that was never shown.
-    if (type == EV_KEY && value == 1) onboarding_->hide();
-    return true;
-  }
-
-  // Re-open on the Menu button. Deliberate, so it is a press edge and never an auto-repeat. When an
-  // update is available it takes priority — this is the "reach the update from the Menu at any
-  // time" path (durable/self-update.md), reachable even after the ambient dot was dismissed;
-  // otherwise the controls card opens as usual.
-  if (type == EV_KEY && value == 1 && code == help_code_ && help_code_ >= 0) {
-    if (update_prompt_ && update_prompt_->open_from_menu()) return true;
-    onboarding_->show(/*first_run_only=*/false);
+bool GamepadInput::osd_open_edge(int type, int code, int value) {
+  if (!osd_ || osd_->open()) return false;
+  if (type == EV_KEY && value == 1 && code == menu_code_ && menu_code_ >= 0) {
+    if (layers_ && layers_->video_up())
+      return false;  // Menu keeps its normal meaning over playback
+    osd_->open_menu();
     return true;
   }
   return false;
 }
 
+bool GamepadInput::handle_onboarding(int type, int /*code*/, int value) {
+  if (!onboarding_ || !onboarding_->visible()) return false;
+  // Modal first-run card: any button press dismisses it; sticks/D-pad are swallowed (a resting
+  // thumb must not dismiss it, and the D-pad must not move focus behind it).
+  if (type == EV_KEY && value == 1) onboarding_->hide();
+  return true;
+}
+
 void GamepadInput::handle_event(int type, int code, int value) {
-  if (handle_update_card(type, code, value)) return;
+  if (osd_ && osd_->open()) {
+    osd_event(type, code, value);
+    return;
+  }
   if (handle_onboarding(type, code, value)) return;
+  if (osd_open_edge(type, code, value)) return;
   if (type == EV_KEY) {
     if (handle_chord(code, value)) return;
     if (handle_voice(code, value)) return;
@@ -479,16 +555,17 @@ void GamepadInput::loop() {
       for (size_t k = 0; k < count; ++k) handle_event(evs[k].type, evs[k].code, evs[k].value);
     }
 
-    // Self-update notify UI: cheap on every tick (an atomic read of the shared state). Passes the
-    // raw watch signal so the pill/card stay off a live video — not `layer() == Layer::Player`,
-    // because the OSK outranks the player while a video can still be playing underneath.
-    if (update_prompt_) update_prompt_->tick(layers_ && layers_->video_up());
+    // Feed the OSD update state, then reconcile the Settings button (drawn off playback). Cheap on
+    // every tick (atomic reads + change-gated CDP). The raw watch signal is video_up, not
+    // `layer() == Layer::Player`, because the OSK outranks the player while a video plays
+    // underneath.
+    const bool on_watch = layers_ && layers_->video_up();
+    if (update_prompt_) update_prompt_->tick(on_watch);
+    if (osd_) osd_->tick(on_watch);
 
-    // Either card is modal, and a direction held when it appeared would keep auto-repeating into
-    // the page behind it. Dropping the direction also releases the right-stick scroll.
-    if ((onboarding_ && onboarding_->visible()) ||
-        (update_prompt_ && update_prompt_->card_visible()))
-      set_direction(nullptr);
+    // The first-run card is modal; a direction held when it appeared would keep auto-repeating into
+    // the page behind it. Not the OSD: while it is open a held direction drives the menu.
+    if (onboarding_ && onboarding_->visible()) set_direction(nullptr);
 
     // Hold-to-talk matures on a timer, not on an event.
     if (hold_.pending() && hold_.on_tick(mono_ms()) == HoldToTalk::Action::Start) voice_->start();
@@ -510,7 +587,7 @@ void GamepadInput::loop() {
       if (t.key != fast_key_) {
         update_fast_scroll();  // the stick crossed into another direction between polls
       } else {
-        dispatch_key(fast_key_);
+        dispatch_scroll(fast_key_);
         fast_next_ms_ = mono_ms() + t.interval_ms;
       }
     }

@@ -14,9 +14,12 @@
     <p>Built for the couch, not the desktop:</p>
     <ul>
       <li>Controller-native — every button is mapped at the launcher, no touchscreen required</li>
+      <li>Chapter seeking — jump between chapters with the L2 and R2 triggers</li>
       <li>Hardware VP9 decode for cool, battery-friendly 720p60 playback</li>
       <li>Suspend and resume with the power button; audio and video restored on wake</li>
       <li>Launches straight into Game Mode with a persistent sign-in</li>
+      <li>Built-in updates — Deckback notices new versions and can update itself</li>
+      <li>Actively developed — more couch-friendly features are on the way</li>
     </ul>
     <p>
       This is an independent project and is not affiliated with, endorsed by, or sponsored by Google

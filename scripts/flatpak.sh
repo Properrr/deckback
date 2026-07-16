@@ -66,10 +66,13 @@ info "Building Flatpak in the pack container (runtime ${runtime_version}, staged
 COBALT_COMMIT="$(deps_pin)" "$CONTAINER_ENGINE" compose run --rm \
   -e DB_APP="$app" -e DB_MANIFEST="$manifest" -e DB_RUNTIME="$runtime_version" pack bash -c '
   set -euo pipefail
+  # Build every module in parallel: flatpak-builder otherwise serialises to one job in the pack
+  # image, and the manifest zypak module keys its `make -j` off FLATPAK_BUILDER_N_JOBS (default 4).
+  export FLATPAK_BUILDER_N_JOBS="$(nproc)"
   flathub=https://dl.flathub.org/repo/flathub.flatpakrepo
   flatpak --user remote-add --if-not-exists flathub "$flathub"
-  flatpak-builder --user --install-deps-from=flathub --disable-rofiles-fuse --force-clean \
-    --repo=flatpak/repo flatpak/build-dir "$DB_MANIFEST"
+  flatpak-builder --user --jobs="$FLATPAK_BUILDER_N_JOBS" --install-deps-from=flathub \
+    --disable-rofiles-fuse --force-clean --repo=flatpak/repo flatpak/build-dir "$DB_MANIFEST"
 
   # Static deltas turn an update into a delta instead of a full re-download; --prune drops the
   # objects the last --force-clean orphaned. Repo hygiene; neither changes the app.

@@ -107,6 +107,17 @@ class FakeServer {
   void clear_error_page() { error_page_up_.store(false); }
   bool saw_reload() const { return saw_reload_.load(); }  // was a Page.reload request received?
 
+  // What osd.js `op:"state"` returns: a live "tab=..;idx=.." string, "detached" (a keep-alive'd
+  // node momentarily off-DOM), or "gone" (JS context wiped by a full reload). Drives the OSD
+  // reconciler.
+  void set_osd_state(std::string s) {
+    std::lock_guard lk(req_mu_);
+    osd_state_ = std::move(s);
+  }
+  // Whether the persistent Settings button is still painted. Lets the OSD unit test model a
+  // same-URL document reload: the old local `button_shown_` flag survives, the DOM does not.
+  void set_osd_button_present(bool present) { osd_button_present_.store(present); }
+
   // Every CDP text frame the client sent, in order. Lets a test assert on the *wire format* of an
   // Input.dispatchKeyEvent rather than on our own return value (TEST-PLAN §0: never assert on a
   // value we chose). `take_requests` drains, so each test starts from a clean slate.
@@ -181,7 +192,20 @@ class FakeServer {
         result = err.empty() ? "\"result\":{\"frameId\":\"F\",\"loaderId\":\"L\"}"
                              : "\"result\":{\"frameId\":\"F\",\"loaderId\":\"L\",\"errorText\":\"" +
                                    err + "\"}";
-      } else if (e.find("WANT_EXC") != std::string::npos)
+      } else if (e.find("/*osd-button-state*/") != std::string::npos) {
+        result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
+                 (osd_button_present_.load() ? "true" : "false") + "}}";
+      } else if (e.find("\\\"op\\\":\\\"state\\\"") != std::string::npos) {
+        // The osd.js expression is JSON-escaped into the CDP frame, so the {"op":"state"} arg
+        // arrives as \"op\":\"state\". Match that, and reply with whatever paint state the test
+        // set.
+        std::lock_guard lk(req_mu_);
+        result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"" + osd_state_ + "\"}}";
+      } else if (e.find("\\\"op\\\":\\\"open\\\"") != std::string::npos)
+        result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"ok\"}}";
+      else if (e.find("\\\"op\\\":\\\"close\\\"") != std::string::npos)
+        result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"closed\"}}";
+      else if (e.find("WANT_EXC") != std::string::npos)
         result = "\"exceptionDetails\":{\"text\":\"boom\"}";
       // The voice mic-button probe. `mic_present_` models the V0 question: Leanback may not render
       // a soft-mic button at all under our Cobalt UA, and the launcher must handle that without
@@ -247,7 +271,9 @@ class FakeServer {
   std::atomic<bool> mic_present_{true};
   std::atomic<bool> retry_flag_{false};
   std::atomic<bool> error_page_up_{false};
-  std::string nav_error_;  // guarded by req_mu_
+  std::atomic<bool> osd_button_present_{true};
+  std::string nav_error_;                          // guarded by req_mu_
+  std::string osd_state_ = "tab=settings;idx=-1";  // guarded by req_mu_
   std::atomic<bool> saw_reload_{false};
   std::mutex req_mu_;
   std::vector<std::string> reqs_;

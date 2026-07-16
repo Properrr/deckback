@@ -11,6 +11,7 @@
 #include <optional>
 
 #include "log.hpp"
+#include "osdmenu.hpp"
 #include "overlay.hpp"
 #include "scripts.hpp"
 #include "updater.hpp"
@@ -27,6 +28,13 @@ namespace {
 
 constexpr std::size_t kMaxNotesLen = 4000;
 constexpr long kReleasesTimeoutSec = 6;
+constexpr std::string_view kCheckingStatus = "Checking for updates…";
+constexpr std::string_view kIgnoredStatus =
+    "This available version is ignored. A newer version will appear here.";
+constexpr std::string_view kRequestedStatus =
+    "Update requested. It will apply the next time you open Deckback.";
+constexpr std::string_view kReleaseNotesFallback =
+    "Release notes: github.com/properrr/deckback/releases";
 
 // Split "v0.0.10" into {0,0,10}. `valid` is false if any field is empty or non-numeric — a
 // malformed string (e.g. a "-rc1" pre-release suffix) must never read as newer than a real release.
@@ -165,7 +173,7 @@ size_t curl_sink(char* ptr, size_t size, size_t nmemb, void* user) {
   return size * nmemb;
 }
 
-// GET a GitHub API URL into `out`. Short timeout so a slow/absent network never stalls the card.
+// GET a GitHub API URL into `out`. Short timeout so a slow/absent network never stalls the menu.
 bool github_get(const std::string& url, std::string& out) {
   CURL* c = curl_easy_init();
   if (!c) return false;
@@ -373,42 +381,39 @@ bool UpdatePromptController::update_available() const {
 }
 
 void UpdatePromptController::tick(bool on_watch) {
+  (void)on_watch;
+  if (!cfg_.osd) return;
   if (!cfg_.state || !cfg_.state->available()) {
+    feed(false, std::string(kCheckingStatus), "");
     return;
   }
-  // A full reload wiped documentElement, so the pill is gone even if we thought it was shown.
-  if (reloaded_.exchange(false, std::memory_order_acquire)) dot_shown_ = false;
-
   const std::string commit = cfg_.state->commit();
   if (!commit.empty() && commit != last_commit_) {
     last_commit_ = commit;
     const NotifyDecision d =
         decide_notification(commit, read_update_marker(update_card_marker_path(cfg_.state_dir)),
                             read_update_marker(update_dot_marker_path(cfg_.state_dir)));
-    dot_desired_ = d.show_dot;
-    if (d.show_card) {
-      kick_changelog();  // fetch off-thread; the card shows once the notes are ready (below)
-      want_card_ = true;
-    }
+    notify_ = d.show_dot;  // an un-ignored update is available
+    hidden_status_ = notify_ ? "" : std::string(kIgnoredStatus);
+    if (notify_) kick_changelog();
   }
-  // Reconcile the pill: shown when an un-dismissed update exists, hidden while a video is up so it
-  // never sits over playback (durable/self-update.md). Only touches the DOM on a change; this is
-  // the only place that draws or hides the pill.
-  const bool want_dot = dot_desired_ && !on_watch;
-  if (want_dot && !dot_shown_)
-    draw_dot();
-  else if (!want_dot && dot_shown_)
-    hide_dot();
+  if (!notify_) {
+    feed(false, hidden_status_.empty() ? std::string(kCheckingStatus) : hidden_status_, "");
+    return;
+  }
+  const ChangelogView cv = current_changelog();
+  feed(true, osd_status_line(cfg_.local_version, cv.available_version, true),
+       cv.notes.empty() ? std::string(kReleaseNotesFallback) : cv.notes);
+}
 
-  // Deferred auto-card: show it once the async changelog is ready, without ever blocking this
-  // thread — and never over a playing video. The card is modal (input.cpp swallows direction keys
-  // while it is up), so it must respect the watch view even more than the pill does; want_card_
-  // stays armed until the user leaves playback.
-  if (want_card_ && !card_visible_ && !on_watch &&
-      fetch_state_.load(std::memory_order_acquire) == 2) {
-    want_card_ = false;
-    show_card();
-  }
+void UpdatePromptController::feed(bool has_update, const std::string& status,
+                                  const std::string& notes) {
+  if (fed_valid_ && has_update == fed_has_ && status == fed_status_ && notes == fed_notes_) return;
+  fed_valid_ = true;
+  fed_has_ = has_update;
+  fed_status_ = status;
+  fed_notes_ = notes;
+  if (cfg_.osd) cfg_.osd->set_update_model(has_update, status, notes);
 }
 
 void UpdatePromptController::kick_changelog() {
@@ -432,102 +437,24 @@ void UpdatePromptController::kick_changelog() {
 
 ChangelogView UpdatePromptController::current_changelog() const {
   if (fetch_state_.load(std::memory_order_acquire) == 2) return cached_;
-  return {};  // not ready yet: the card falls back to the releases link
-}
-
-bool UpdatePromptController::draw_card(DevToolsClient& client) {
-  const ChangelogView cv = current_changelog();
-  const std::string version =
-      cv.available_version.empty()
-          ? std::format("A newer version is available. You have v{}.", cfg_.local_version)
-          : std::format("v{} is available. You have v{}.", cv.available_version,
-                        cfg_.local_version);
-  const std::string notes =
-      cv.notes.empty() ? "Release notes: github.com/properrr/deckback/releases" : cv.notes;
-
-  return ScriptLibrary::instance().invoke(
-      client, "update_card",
-      ScriptParams()
-          .set("heading", "Update available")
-          .set("version", version)
-          .set("notes", notes)
-          // A/B/Y hotkeys as [key, label] pairs so the page can colour each glyph via its CSP-safe
-          // stylesheet (an inline colour would be dropped; durable/self-update.md).
-          .set("buttons", std::vector<std::pair<std::string, std::string>>{
-                              {"A", "Update now"}, {"B", "Not now"}, {"Y", "Ignore version"}}));
-}
-
-void UpdatePromptController::show_card() {
-  if (!draw_card(client_)) {
-    warn("update: could not draw the update card (engine unreachable)");
-    return;
-  }
-  card_visible_ = true;
-  // Recorded on show (like the onboarding card): a crash while the card is up must not re-nag.
-  if (cfg_.state)
-    write_update_marker(update_card_marker_path(cfg_.state_dir), cfg_.state->commit());
-  info("update: 'update available' card shown");
-}
-
-void UpdatePromptController::hide_card() {
-  if (!card_visible_) return;
-  ScriptLibrary::instance().invoke(client_, "update_card_hide");
-  card_visible_ = false;
-}
-
-void UpdatePromptController::draw_dot() {
-  ScriptLibrary::instance().invoke(client_, "update_badge", ScriptParams());
-  dot_shown_ = true;
-}
-
-void UpdatePromptController::hide_dot() {
-  ScriptLibrary::instance().invoke(client_, "update_badge_hide");
-  dot_shown_ = false;
+  return {};  // not ready yet: the menu shows the releases-link fallback
 }
 
 void UpdatePromptController::confirm_update() {
-  hide_card();
-  // The update is being applied; the pill has nothing left to offer. tick() — the sole owner of
-  // the pill DOM — reconciles it away in this same input-loop iteration.
-  dot_desired_ = false;
+  notify_ = false;
+  hidden_status_ = std::string(kRequestedStatus);
+  feed(false, hidden_status_, "");
   if (cfg_.updater) cfg_.updater->request_update();
   show_toast(client_, "Updating\xE2\x80\xA6 it will apply the next time you open Deckback.", 6000);
   info("update: user confirmed — deploy requested");
 }
 
-void UpdatePromptController::dismiss_later() {
-  hide_card();  // the dot stays (dot_desired_ unchanged); the Menu route remains reachable
-  info("update: user chose 'Not now' — the dot stays");
-}
-
 void UpdatePromptController::ignore_version() {
-  hide_card();
-  dot_desired_ = false;  // tick() hides the pill; a newer commit re-arms it via the dot marker
-  if (cfg_.state) {
-    write_update_marker(update_dot_marker_path(cfg_.state_dir), cfg_.state->commit());
-  }
-  info("update: user ignored this version — dot hidden until a newer release");
-}
-
-bool UpdatePromptController::open_from_menu() {
-  if (!update_available()) return false;
-  kick_changelog();  // ensure the fetch is under way; the card shows the link if it isn't ready yet
-  want_card_ = false;  // an explicit open satisfies any pending auto-show; don't re-pop on dismiss
-  show_card();         // user-initiated: deliberately allowed even over playback
-  return true;
-}
-
-void UpdatePromptController::on_page_reloaded() {
-  // Dot: flag the wipe; the input thread's tick() redraws it (playback-aware), so it never
-  // reappears over a video and only client_ ever touches the pill.
-  reloaded_.store(true, std::memory_order_release);
-  // Card: re-inject here if it was open. Navigator thread, so use an own client (not client_);
-  // draw_card() has no state/marker side effects, so re-injecting into the reloaded page is
-  // idempotent.
-  if (!card_visible_.load(std::memory_order_acquire)) return;
-  if (cfg_.cdp_port <= 0) return;
-  DevToolsClient c(cfg_.cdp_host, cfg_.cdp_port);
-  draw_card(c);
+  notify_ = false;
+  hidden_status_ = std::string(kIgnoredStatus);
+  feed(false, hidden_status_, "");
+  if (cfg_.state) write_update_marker(update_dot_marker_path(cfg_.state_dir), cfg_.state->commit());
+  info("update: user ignored this version — hidden until a newer release");
 }
 
 }  // namespace deckback

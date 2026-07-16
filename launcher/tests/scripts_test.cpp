@@ -76,18 +76,20 @@ void test_overlays_use_a_csp_safe_style_path() {
   // youtube.com/tv's CSP style-src has no 'unsafe-inline', so setAttribute('style',…) and <style>
   // tags are dropped and the overlay renders unstyled (why dot/card/toast failed on-Deck,
   // self-update.md). Only CSSOM and adoptedStyleSheets are exempt; guard against a regression.
-  for (const char* name : {"update_badge", "toast"}) {
+  for (const char* name : {"toast", "osd_button"}) {
     const std::string b(ScriptLibrary::instance().body(name));
     assert(!has(b, "setAttribute('style'"));
     assert(!has(b, "setAttribute(\"style\""));
     assert(has(b, ".setProperty("));
   }
-  // The card's descendant rules need a stylesheet, so the blocked <style> tag becomes an
-  // adoptedStyleSheets sheet; the container keeps a CSSOM fallback so the modal always paints.
-  const std::string card(ScriptLibrary::instance().body("update_card"));
-  assert(!has(card, "<style>"));
-  assert(has(card, "adoptedStyleSheets"));
-  assert(has(card, ".setProperty("));
+  // A modal overlay's descendant rules need a stylesheet, so the blocked <style> tag becomes an
+  // adoptedStyleSheets sheet; the container keeps a CSSOM fallback so it always paints.
+  {
+    const std::string b(ScriptLibrary::instance().body("osd"));
+    assert(!has(b, "<style>"));
+    assert(has(b, "adoptedStyleSheets"));
+    assert(has(b, ".setProperty("));
+  }
 }
 
 void test_overlays_self_heal_across_body_swaps() {
@@ -95,12 +97,12 @@ void test_overlays_self_heal_across_body_swaps() {
   // so the keep-alive observer re-appends the dot/card; the *_hide scripts must drop from the
   // registry first, or a deliberate hide is fought. A vanished-but-still-modal card was the input
   // trap.
-  for (const char* name : {"update_badge", "update_card"}) {
+  for (const char* name : {"osd", "osd_button"}) {
     const std::string b(ScriptLibrary::instance().body(name));
     assert(has(b, "__dbKeepAlive"));
     assert(has(b, "MutationObserver"));
   }
-  for (const char* name : {"update_badge_hide", "update_card_hide"}) {
+  for (const char* name : {"osd_button_hide"}) {
     const std::string b(ScriptLibrary::instance().body(name));
     assert(has(b, "__dbDropAlive"));
   }

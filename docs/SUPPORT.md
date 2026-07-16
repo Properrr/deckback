@@ -16,34 +16,57 @@ Deckback is controller-first (a 10-foot / "Leanback" TV layout). The default map
 | **X** | Play / pause |
 | **L1 / R1** | Scrub back / forward in the player (see note) |
 | **View (⧉)** | Toggle captions |
-| **Menu (☰)** | Show this controls card again |
+| **Menu (☰)** | Open the **Settings** menu (see below) |
 
-The first time Deckback starts, it shows this same table on screen. Press any button to dismiss it,
-and **Menu (☰)** to bring it back. The on-screen card is generated from your `app.json`, so if you
-rebind a control it will say what the control actually does — and it leaves out anything that does
-nothing. (Set `first_run_overlay: false` to skip it, or delete
-`~/.local/state/deckback/first_run_v1` to see it again on the next launch.)
+The first time Deckback starts, it shows this controls table on screen as a one-time card. Press any
+button to dismiss it. The card is generated from your `app.json`, so if you rebind a control it will
+say what the control actually does — and it leaves out anything that does nothing. (Set
+`first_run_overlay: false` to skip it, or delete `~/.local/state/deckback/first_run_v1` to see it
+again on the next launch.) After that, the same list lives in the **Settings** menu's **Keys** tab.
+
+## Settings menu
+
+A small **Settings** button sits in the top-right corner (except while a video is playing). Press
+**Menu (☰)** to open the on-screen menu. It has these tabs:
+
+- **Settings ▸ Keys** — the controller hot-keys currently in use, read live from your `app.json` (so
+  it always matches your real mapping). More settings arrive here over time.
+- **Updates** — the configured update policy and its current status. In notify mode, a new release
+  shows what's new and the actions to take; the screen does not claim your version is current before
+  the portal has reported an update state.
+- **About** — what Deckback is, its features, the version you're running, and links to the project
+  and this support page.
+
+Navigate with the **D-pad** (the **right stick** scrolls a long list), **A** to select, **B** to go
+back or close, and **L1 / R1** to switch tabs. When an update is available a small amber dot appears
+on the Settings button; on the **Updates** tab, **A** on *Update now* installs it (it applies the
+next time you open Deckback) and **Y** ignores that version. Nothing installs on its own in the
+default `notify` mode — see [Updates](#updates).
 
 > **Note on seeking.** L1/R1 send the player's arrow keys, which *scrub* the progress bar — the same
 > model the console YouTube apps use. They are **not** a fixed ±10 second jump. YouTube's TV
 > interface publishes no keyboard shortcut for a fixed-interval seek, and Deckback will not guess at
 > one. (Earlier versions of this page described L1/R1 as "seek 10s". That was wrong.)
 
-**Y** (voice search), **Start** (player menu), and **L2 / R2** (scan rewind / fast-forward) are
-deliberately unbound, and for two different reasons:
-
-- **Y — voice search is not a keyboard key at all.** The TV interface reaches voice through a
-  platform service this build does not have. The supported path is to move focus onto the on-screen
-  microphone button and press **A**.
-- **Start, L2 / R2** — no keyboard key for these actions has been verified against the TV interface
-  yet, and Deckback refuses to guess.
-
-All of them are listed as unmapped in the startup log.
+**Y** (voice search) is deliberately unbound: voice search is not a keyboard key at all — the TV
+interface reaches it through a platform service this build does not have, so the supported path is to
+move focus onto the on-screen microphone button and press **A**. It is listed as unmapped in the
+startup log. (**Menu (☰)** opens the Settings menu; **L2 / R2** jump to the previous/next chapter.)
 
 The mapping lives in `app.json` (`keymap`) and is hot-swappable — a server-side Leanback change can
 be worked around by editing config, without reinstalling. Each button maps to a semantic action or a
 DOM key dispatched verbatim; an unmapped entry is logged at startup rather than silently doing
 nothing.
+
+## Updates
+
+By default (`self_update_mode: "notify"` in `app.json`) Deckback **tells you** when a new version is
+out but never installs it behind your back. A new release shows up as an amber dot on the Settings
+button and, on the **Updates** tab, the changelog with **Update now** / **Ignore this version**.
+Choosing *Update now* downloads only Deckback, from its own repo — no root, no password — and it
+applies the next time you open the app. Prefer silent updates? Set `self_update_mode: "auto"`.
+`"off"` disables it and you update from Desktop Mode with `flatpak update`. Keeping the runtime and
+your other Flatpaks current is always a separate `flatpak update`.
 
 ## Audio
 

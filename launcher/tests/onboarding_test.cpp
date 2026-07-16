@@ -47,8 +47,8 @@ OverlayContext shipped() {
       {"y", "voice_search"},
       {"lb", "scrub_back"},
       {"rb", "scrub_fwd"},
-      {"lt", "scan_rewind"},
-      {"rt", "scan_forward"},
+      {"lt", "chapter_back"},
+      {"rt", "chapter_fwd"},
       {"start", "show_controls"},
       {"select", "toggle_captions"},
   };
@@ -73,6 +73,10 @@ void test_action_labels_pass_unknown_keys_through() {
   assert(action_label("toggle_captions") == "Captions");
   // Deprecated aliases still resolve, so they must still print something truthful.
   assert(action_label("seek_back_10") == "Scrub back");
+  // Launcher-performed seeks (LT/RT) have no DOM key but must read as a real feature, not vanish.
+  assert(action_label("chapter_back") == "Previous chapter");
+  assert(action_label("chapter_fwd") == "Next chapter");
+  assert(action_label("skip_back") == "Skip back");
   // A raw DOM key from a hot-swapped config: print it rather than invent a phrase. The user who
   // wrote it knows what it means; we do not.
   assert(action_label("MediaTrackNext") == "MediaTrackNext");
@@ -89,25 +93,32 @@ void test_rows_from_the_shipped_keymap() {
   assert(row_for(rows, "View (⧉)", &a) && a == "Captions");
   assert(row_for(rows, "L1", &a) && a == "Scrub back");
   assert(row_for(rows, "R1", &a) && a == "Scrub forward");
+  // LT/RT are launcher-performed chapter seeks (no DOM key), so they must still be listed.
+  assert(row_for(rows, "L2", &a) && a == "Previous chapter");
+  assert(row_for(rows, "R2", &a) && a == "Next chapter");
 }
 
 void test_rows_omit_controls_that_do_nothing() {
-  const auto rows = controls_overlay_rows(shipped());
-  // L2/R2 -> scan_rewind/scan_forward resolve to no DOM key, so those buttons are dead. Printing
-  // them on the card is the dead-button failure: it teaches the user the app is broken rather than
+  // A control bound to a keyless, non-launcher action (scan_rewind resolves to no DOM key and the
+  // launcher cannot perform it) is dead. Printing it teaches the user the app is broken rather than
   // that the feature is absent.
-  assert(!row_for(rows, "L2", nullptr));
-  assert(!row_for(rows, "R2", nullptr));
+  OverlayContext dead_trigger = shipped();
+  dead_trigger.keymap = {{"lt", "scan_rewind"}, {"rt", "scan_forward"}, {"a", "select"}};
+  const auto trig_rows = controls_overlay_rows(dead_trigger);
+  assert(!row_for(trig_rows, "L2", nullptr));
+  assert(!row_for(trig_rows, "R2", nullptr));
+
+  const auto rows = controls_overlay_rows(shipped());
   // Y -> voice_search, and voice ships disabled. Advertising "Hold to speak" on a build where the
   // mic button was never found is the same failure.
   assert(!row_for(rows, "Y", nullptr));
 
-  // Same for any other keyless action: `player_menu` was Menu's binding until it was replaced,
-  // precisely because it dispatched nothing.
+  // A keymap value on Menu cannot hide the fixed Settings entry point.
   OverlayContext dead = shipped();
   dead.keymap = {{"start", "player_menu"}, {"a", "select"}};
   const auto dead_rows = controls_overlay_rows(dead);
-  assert(!row_for(dead_rows, "Menu (☰)", nullptr));
+  std::string menu_action;
+  assert(row_for(dead_rows, "Menu (☰)", &menu_action) && menu_action == "Settings");
   assert(row_for(dead_rows, "A", nullptr));
 }
 
@@ -120,13 +131,22 @@ void test_voice_row_appears_only_when_voice_is_enabled() {
   assert(row_for(rows, "Y", &a) && a == "Hold to speak");
 }
 
-void test_show_controls_action_is_listed_even_though_it_has_no_dom_key() {
-  // `show_controls` is performed by the launcher, so resolve_binding() correctly reports no key for
-  // it. If the card dropped every keyless action it would omit the row explaining how to reopen
-  // itself — the one row a user who dismissed it by accident needs most.
+void test_menu_is_a_fixed_settings_row_not_a_keymap_action() {
+  // Menu always opens Settings now, even when a hot-swapped map removes/repurposes the legacy
+  // show_controls action. The controls surface must teach that fixed route, not the retired card.
   std::string a;
   const auto rows = controls_overlay_rows(shipped());
-  assert(row_for(rows, "Menu (☰)", &a) && a == "These controls");
+  assert(row_for(rows, "Menu (☰)", &a) && a == "Settings");
+
+  OverlayContext remapped = shipped();
+  remapped.keymap = {{"start", "MediaPlayPause"}, {"a", "select"}};
+  const auto remapped_rows = controls_overlay_rows(remapped);
+  assert(row_for(remapped_rows, "Menu (☰)", &a) && a == "Settings");
+  // It appears exactly once rather than once for the map and once for the fixed OSD entry point.
+  size_t menu_rows = 0;
+  for (const ControlRow& r : remapped_rows)
+    if (r.control == "Menu (☰)") ++menu_rows;
+  assert(menu_rows == 1);
 }
 
 // The tests above use a hand-written copy of the keymap, which cannot catch app.json drifting away
@@ -153,8 +173,12 @@ void test_shipped_app_json_produces_no_dead_rows() {
   // Voice ships disabled, so the card must not promise voice search.
   assert(cfg->voice_enabled == false);
   assert(!any_action(rows, "Hold to speak"));
-  // ...and the card must explain how to get itself back.
-  assert(any_action(rows, "These controls"));
+  // ...and the card must explain how to reach the fixed settings surface.
+  assert(any_action(rows, "Settings"));
+  // LT/RT ship bound to chapter seek — a launcher action with no DOM key. It must be listed, not
+  // silently dropped as an unmapped binding (the "L2/R2 missing from the menu" regression).
+  assert(any_action(rows, "Previous chapter"));
+  assert(any_action(rows, "Next chapter"));
 }
 
 void test_rows_follow_a_hot_swapped_keymap() {
@@ -370,7 +394,7 @@ int main() {
   test_rows_from_the_shipped_keymap();
   test_rows_omit_controls_that_do_nothing();
   test_voice_row_appears_only_when_voice_is_enabled();
-  test_show_controls_action_is_listed_even_though_it_has_no_dom_key();
+  test_menu_is_a_fixed_settings_row_not_a_keymap_action();
   test_shipped_app_json_produces_no_dead_rows();
   test_rows_follow_a_hot_swapped_keymap();
   test_dpad_entry_never_becomes_a_button_row();

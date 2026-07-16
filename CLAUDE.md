@@ -57,7 +57,10 @@ here. **All agent/planning docs live under `.internal/`** (design doc,
 `.internal/TASKS.md` execution checklist, `.internal/TEST-PLAN.md` test tiers + honest
 tested/untested matrix, `.internal/HARNESS.md` the build/deploy/test command surface + exit-code
 taxonomy, `.internal/findings/` registered findings, `.internal/MIGRATION.md`,
-`.internal/configurator-plan.md` the design for the not-yet-built "Deckback Settings" companion app);
+`.internal/osd-menu-plan.md` the design for the not-yet-built in-app **OSD Settings menu** (the
+single settings surface: read-only Keys + Updates in v1, writable settings later — this SUPERSEDES
+`.internal/configurator-plan.md`, the now-abandoned separate "Deckback Settings" companion app, kept
+for history only));
 `docs/` holds public deliverables (`HOW-IT-WORKS.md` the built-state/how-it-works overview,
 `SUPPORT.md`, `legal.md`).
 

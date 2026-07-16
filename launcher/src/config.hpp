@@ -64,8 +64,8 @@ struct Config {
   bool touch_lock_haptic = true;
 
   // First-run controls overlay (findings input-ux §17). `View (⧉)` = captions and `L3+R3` = touch
-  // lock are unguessable, and SUPPORT.md is invisible from Game Mode. Shown once, then whenever the
-  // control bound to the `show_controls` action is pressed.
+  // lock are unguessable, and SUPPORT.md is invisible from Game Mode. Shown once; the same rows
+  // remain available in Settings ▸ Keys via the fixed Menu button.
   bool first_run_overlay = true;
 
   // Right-stick fast list traversal (findings input-ux §7/§15). The second axis is otherwise

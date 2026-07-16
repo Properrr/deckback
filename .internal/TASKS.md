@@ -339,6 +339,20 @@ The design doc is the source of truth; this file tracks *what to do next* and *w
       *show*, versioned (`first_run_v1`), in `$XDG_STATE_HOME/deckback/`.
       **⚠ Unverified**: that the card renders over Leanback, and that swallowing evdev events really
       freezes focus behind it. Both are L2: show card, press D-pad, assert `activeElement` unmoved.
+- [x] **OSD Settings menu + self-update fold. DONE 2026-07-15** (`.internal/osd-menu-plan.md`).
+      In-app, controller-driven Settings menu (`launcher/src/osdmenu.{hpp,cpp}`, `config/scripts/
+      osd.js` + `osd_button.js`), opened from a persistent top-right Settings button via Menu (☰),
+      off playback. Two tabs: **Settings ▸ Keys** (live keymap, reuses `controls_overlay_rows`) and
+      **Updates**. JS owns focus/tab/scroll; `input.cpp` captures the pad modally and forwards
+      commands, reusing the auto-repeat + right-stick machinery. Invariant *capture ⇔ paint* fixes the
+      old update-card input-trap class. **Self-update UI folded in**: `updateprompt.cpp` feeds the
+      Updates tab + button badge (no more pill/card); `update_badge*`/`update_card*` scripts and
+      `handle_update_card` removed; the Flatpak-portal detect/deploy engine is unchanged. Also
+      supersedes the separate configurator app (`configurator-plan.md`).
+      L0: `osdmenu_test` + extended `scripts_test`. **⚠ Unverified on hardware**: the L2 two-bug
+      regression suite `tests/deck/test_osd.py` exists (render, focus/verdicts, body-swap survival,
+      Menu opens/closes, input restored after close) but has **not** run on a Deck. Docs updated
+      (SUPPORT.md, HOW-IT-WORKS.md, CHANGELOG, self-update.md).
 
 **Gate:** every Leanback surface controller-drivable; latency ≤ PS5 app; OSK works.
 *(buttons + hotplug verified on-Deck 2026-07-09; OSK and latency still unmeasured)*
@@ -827,6 +841,14 @@ before the grab test passes: it is built entirely on the assumption that grabbin
       `2808:1015` (FTS3528) comes from a **blog post about an LCD Deck**, not from our unit — dropping
       LCD concentrates this risk rather than removing it (`findings/durable/hardware.md`).
 - [ ] Small beta group before Flathub; fix window.
+- [ ] **Migrate the pinned clang-format 18 → 21 (tree-wide).** Our own pin, not forced by GitHub
+      (CI `apt-get install clang-format-18` explicitly; `preflight-parity.md`). Bump it *everywhere*
+      in one change so local and CI can't drift: `.github/workflows/lint.yml` (apt pkg),
+      `scripts/preflight.sh`, `scripts/fmt.sh`, `scripts/lib.sh` (`pinned_tool` refs + the pip
+      fallback `clang-format==18.1.8` → the 21.x point release), and the comments/notes that name 18
+      (`preflight-parity.md`, `CLAUDE.md`). Then **reformat `launcher/` once with 21 as a standalone
+      commit** (v21 differs from v18 — e.g. `struct sigaction sa {}` → `sa{}`), separate from any
+      feature branch so the diff is pure formatting. Verify CI (v21) and `just fmt` agree.
 
 ## Phase 10 — Flathub submission & maintenance  (3–4 ED + ongoing)
 

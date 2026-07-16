@@ -12,12 +12,13 @@ namespace deckback {
 
 class UpdateState;
 class Updater;
+class OsdMenuController;
 
-// The "notify" side of self-update (findings durable/self-update.md): turn the updater's "a newer
-// commit is available" signal into a painless, launcher-owned UI — a passive amber dot plus a
-// one-time card — that never deploys without the user pressing "Update now", and that is reachable
-// from the Menu forever. Detection and the actual deploy stay in updater.cpp; this owns only the UI
-// and the dismissal state.
+// The "notify" side of self-update (findings durable/self-update.md, osd-menu-plan.md §11).
+// Detection (updater.cpp) publishes availability into UpdateState; this turns it into the OSD
+// Updates model (status + changelog) via OsdMenuController::set_update_model, and owns the
+// deploy-consent + ignore actions the OSD calls back into. The UI itself is the OSD; this no longer
+// draws anything.
 
 // ---- pure helpers (unit-tested in updateprompt_test.cpp) ----------------------------------------
 
@@ -86,8 +87,9 @@ struct UpdatePromptConfig {
   std::string local_version;  // compiled kDeckbackVersion, e.g. "0.0.4"
   // GitHub releases API for the changelog. Overridable so a test can point at a fixture/none.
   std::string releases_url = "https://api.github.com/repos/properrr/deckback/releases";
-  UpdateState* state = nullptr;  // shared availability, written by the updater. Not owned.
-  Updater* updater = nullptr;    // request_update() on confirm. Not owned.
+  UpdateState* state = nullptr;      // shared availability, written by the updater. Not owned.
+  Updater* updater = nullptr;        // request_update() on confirm. Not owned.
+  OsdMenuController* osd = nullptr;  // the Updates-tab UI + button badge. Not owned.
 };
 
 class UpdatePromptController {
@@ -95,67 +97,35 @@ class UpdatePromptController {
   explicit UpdatePromptController(UpdatePromptConfig cfg);
   ~UpdatePromptController();  // joins the changelog-fetch thread
 
-  // Called on each input-thread tick. Cheap when nothing changed; on the first tick after a newer
-  // commit becomes available it kicks the (async) changelog fetch and auto-shows the one-time card
-  // once the notes are ready. Reconciles the indicator pill each tick: it shows when an
-  // un-dismissed update exists AND `on_watch` is false. `on_watch` is the raw watch-view signal
-  // (LayerState::video_up, i.e. player_open — NOT `layer() == Layer::Player`, which the OSK can
-  // mask while a video plays underneath); while it is set, neither the pill nor the auto-card is
-  // drawn, so nothing ever sits over a playing video. Never blocks the input thread on the network.
+  // Each input-thread tick: feed the OSD the current update state (status + changelog), kicking the
+  // async changelog fetch on the first tick a newer un-ignored commit appears. Never blocks on the
+  // network. `on_watch` is accepted for signature symmetry; the OSD button owns playback gating.
   void tick(bool on_watch);
 
-  bool card_visible() const { return card_visible_.load(std::memory_order_acquire); }
-  bool update_available() const;  // for the Menu row: is there anything to offer?
+  bool update_available() const;
 
-  // Card actions (input thread), each closes the card:
-  void confirm_update();  // A: consent to deploy, hide dot + card, toast "Updating…"
-  void dismiss_later();   // B: close, leave the dot for later
-  void ignore_version();  // Y: close, hide the dot until a newer commit arrives
-
-  // Open the card deliberately from the Menu, even if the dot was dismissed or the card was already
-  // auto-shown. No-op (returns false) if no update is available.
-  bool open_from_menu();
-
-  // Called by the navigator on a full page reload (documentElement torn down). Navigator thread:
-  // flags the dot for the input thread to redraw (playback-aware, so it never reappears over a
-  // video), and re-injects the card if it was open — a full navigation discards the page global, so
-  // otherwise the card is gone while card_visible_ stays true and input.cpp keeps swallowing keys
-  // (the on-Deck input trap).
-  void on_page_reloaded();
+  // OSD action callbacks (input thread).
+  void confirm_update();  // consent to deploy + toast; clears the badge until a newer commit
+  void ignore_version();  // hide the badge until a newer commit (persisted marker)
 
  private:
-  void show_card();
-  bool draw_card(DevToolsClient& client);  // inject the card DOM; no state/marker side effects
-  void hide_card();
-  void draw_dot();
-  void hide_dot();
-  // Start the one-shot background changelog fetch (idempotent): a libcurl GET of releases_url off
-  // the input thread, so a slow network never freezes gamepad input. Result lands in cached_.
   void kick_changelog();
-  // The fetched changelog if ready, else an empty view (the card then shows the fallback link).
-  // Safe to read from the input thread: gated on the acquire-loaded fetch_state_.
   ChangelogView current_changelog() const;
+  void feed(bool has_update, const std::string& status, const std::string& notes);
 
   UpdatePromptConfig cfg_;
-  DevToolsClient client_;    // input-thread only
+  DevToolsClient client_;    // input-thread only (the confirm toast)
   std::string last_commit_;  // last commit tick() reacted to (edge detection)
-  // Indicator pill state (input-thread only). dot_desired_ = an un-dismissed update exists (set by
-  // the notification decision, cleared on A/Y); dot_shown_ = the pill is currently in the DOM.
-  // tick() reconciles the two against the watch-view signal.
-  bool dot_desired_ = false;
-  bool dot_shown_ = false;
-  // Set by the navigator thread in on_page_reloaded(); tick() consumes it to know documentElement
-  // was wiped (so the pill must be redrawn) without the navigator touching the input thread's DOM
-  // state.
-  std::atomic<bool> reloaded_{false};
-  // Atomic: written by the input thread (show/hide), read by the navigator thread in
-  // on_page_reloaded().
-  std::atomic<bool> card_visible_{false};
-  bool want_card_ = false;  // auto-card requested, waiting on the async changelog before it shows
+  bool notify_ = false;      // an un-ignored update is available
+  std::string hidden_status_ = "Checking for updates…";
 
-  // Changelog fetch: 0 idle, 1 fetching, 2 done. cached_ is written by fetch_thread_ and published
-  // by the release-store of fetch_state_ = 2; the input thread reads it only after an acquire-load
-  // sees 2, so the two never touch cached_ concurrently.
+  // Last values fed to the OSD, so tick() only calls set_update_model on a change.
+  bool fed_has_ = false;
+  bool fed_valid_ = false;
+  std::string fed_status_, fed_notes_;
+
+  // Changelog fetch: 0 idle, 1 fetching, 2 done. cached_ is published by the release-store of
+  // fetch_state_ = 2; the input thread reads it only after an acquire-load sees 2.
   std::atomic<int> fetch_state_{0};
   ChangelogView cached_;
   std::thread fetch_thread_;

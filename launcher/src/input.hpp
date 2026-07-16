@@ -14,6 +14,7 @@
 namespace deckback {
 
 class UpdatePromptController;
+class OsdMenuController;
 
 // Runtime touchscreen-lock policy for the input layer (findings input-ux §4). Sourced from Config.
 struct TouchConfig {
@@ -45,7 +46,8 @@ struct GamepadOptions {
   const LayerState* layers = nullptr;
   VoiceController* voice = nullptr;
   OnboardingController* onboarding = nullptr;
-  UpdatePromptController* update_prompt = nullptr;  // self-update notify UI; null = feature off
+  UpdatePromptController* update_prompt = nullptr;  // feeds the OSD Updates tab; null = feature off
+  OsdMenuController* osd = nullptr;                 // in-app Settings menu; null = feature off
 };
 
 // Phase 3 input (S0.6 mechanism = key injection). Reads the gamepad directly from evdev
@@ -82,7 +84,8 @@ class GamepadInput {
   void dispatch_direction();  // resolve dir_key_ under the current layer/modifiers and send
   void dispatch_key(
       const char* base_arrow);  // resolve one arrow under the layer/modifiers and send
-  void update_fast_scroll();    // re-evaluate the right stick after an axis change
+  void dispatch_scroll(const char* base_arrow);  // right-stick step: OSD scroll when open, else key
+  void update_fast_scroll();                     // re-evaluate the right stick after an axis change
   bool handle_chord(int code,
                     int value);  // track/toggle the touch-lock chord; true = event consumed
   // Press/hold/release for hold-to-talk; true = the event was the voice button and is consumed.
@@ -90,9 +93,11 @@ class GamepadInput {
   // While the controls card is up it is modal: it swallows every event, and a button press
   // dismisses it. Returns true when the event was consumed.
   bool handle_onboarding(int type, int code, int value);
-  // While the update card is up it is modal: A confirms the update, B closes it, Y ignores the
-  // version; every other event is swallowed. Returns true when the event was consumed.
-  bool handle_update_card(int type, int code, int value);
+  // While the OSD menu is open it is modal: buttons/D-pad/sticks map to menu commands and every
+  // event is swallowed. Returns true when the event was consumed.
+  void osd_event(int type, int code, int value);
+  // When the menu is closed, open it on the Menu press edge (off playback). True = consumed.
+  bool osd_open_edge(int type, int code, int value);
   void apply_touch_lock(TouchLockChord::Action a);  // engage/release the grab and report it
   void announce_touch_lock(bool locked);            // toast + rumble; never fails the lock
   Layer layer() const;                              // Browse when no LayerState is attached
@@ -134,12 +139,18 @@ class GamepadInput {
 
   // First-run controls card (findings input-ux §17). Not owned; may be null.
   OnboardingController* onboarding_ = nullptr;
-  int help_code_ = -1;  // the control bound to `show_controls`, or -1
+  // Physical Menu (Start): fixed off-playback OSD entry. It deliberately does not come from the
+  // hot-swappable keymap, or a broken/remapped `show_controls` value could strand the only
+  // controller route to a pointer-disabled settings surface.
+  int menu_code_ = -1;
 
-  // Self-update notify UI (findings durable/self-update.md). Not owned; may be null. The card is
-  // modal with fixed buttons (A confirm, B later, Y ignore) independent of the user's keymap.
+  // Self-update: feeds the OSD Updates tab each tick. Not owned; may be null.
   UpdatePromptController* update_prompt_ = nullptr;
-  int upd_a_ = -1, upd_b_ = -1, upd_y_ = -1;
+
+  // In-app OSD Settings menu (osd-menu-plan.md). Not owned; may be null. Its nav buttons are fixed
+  // (keymap-independent, resolved via control_code), like the old update card's.
+  OsdMenuController* osd_ = nullptr;
+  int osd_a_ = -1, osd_b_ = -1, osd_y_ = -1, osd_lb_ = -1, osd_rb_ = -1;
 
   // Directional auto-repeat state. dir_key_ is the *base* arrow (a stable module constant compared
   // by identity); the key actually dispatched is resolved per-repeat, so releasing a modifier or

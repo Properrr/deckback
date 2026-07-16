@@ -23,7 +23,7 @@ steam_bin="$(deck_ssh "$DECK_HOST" 'ls "$HOME/.local/share/Steam/ubuntu12_32/ste
 
 # Steam stores a 32-bit shortcut id in shortcuts.vdf, but rungameid needs the full URI id:
 # (shortcut_id << 32) | 0x02000000. Pick the newest Deckback entry after an app update.
-shortcut_id="$(deck_ssh "$DECK_HOST" "python3 -c 'import glob,re; p=glob.glob(\"\$HOME/.local/share/Steam/userdata/*/config/shortcuts.vdf\")[0]; b=open(p,\"rb\").read(); m=list(re.finditer(b\"\\x02appid\\x00(.{4})\\x01appname\\x00Deckback\\x00\",b)); print(int.from_bytes(m[-1].group(1),\"little\") if m else \"\")'" 2>/dev/null || true)"
+shortcut_id="$(deck_ssh "$DECK_HOST" "python3 -c 'import os,glob,re; ps=glob.glob(os.path.expanduser(\"~/.local/share/Steam/userdata/*/config/shortcuts.vdf\")) or glob.glob(os.path.expanduser(\"~/.steam/steam/userdata/*/config/shortcuts.vdf\")); b=open(ps[0],\"rb\").read() if ps else b\"\"; m=list(re.finditer(b\"\\x02appid\\x00(.{4})\\x01appname\\x00Deckback\\x00\",b)); print(int.from_bytes(m[-1].group(1),\"little\") if m else \"\")'" 2>/dev/null || true)"
 [ -n "$shortcut_id" ] || die_env "Deckback Steam shortcut not found on ${DECK_HOST} (run 'just install' on the Deck first)"
 steam_uri_id="$(python3 -c "print(($shortcut_id << 32) | 0x02000000)")"
 

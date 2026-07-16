@@ -121,6 +121,7 @@ The unit tests are good tests of the wrong layer. Each of these is **unproven wh
 | `fast_scroll` (`input_test`) | direction, dominant-axis tie-break, analog rate curve, axis saturation, the CDP repeat floor, hostile configs | that the pad emits `ABS_RX`/`ABS_RY` at all, or that Leanback keeps up with a 45 ms arrow cadence |
 | Error page (`errorpage_test`) | a failed `Page.navigate` is *seen* as failed; backoff saturates instead of overflowing; the classifier refuses to guess; hot-swapped text is escaped | that the injected page renders under gamescope, or that an injected Enter reaches its Retry button |
 | Controls card (`onboarding_test`) | rows are derived from the shipped app.json, dead controls are omitted, disabled features are not advertised, the marker is one-shot and versioned | that the card renders over Leanback, or that swallowing evdev events freezes focus behind it |
+| OSD Settings menu (`osdmenu_test`, `scripts_test`) | status line / action-button set / verdict parser are correct; `osd.js`/`osd_button.js` use only the CSP-safe style path + keep-alive observer | that the menu renders and navigates over Leanback, that *capture ⇔ paint* holds under a real body swap, and that input is restored after the menu closes — the two-bug L2 suite (`tests/deck/test_osd.py`) exists but has **not** run on a Deck |
 | `devtools_test` | RFC6455 codec against a loopback CDP server | a real Cobalt target |
 
 ### C. Implemented, **zero verification** — highest risk

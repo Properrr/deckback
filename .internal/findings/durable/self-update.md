@@ -1,5 +1,19 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★ UI MOVED INTO THE OSD (2026-07-15) — see osd-menu-plan.md
+
+The standalone notify overlays described below (the amber **pill** and the modal **card**,
+`update_badge*.js`/`update_card*.js`, and `input.cpp::handle_update_card`) are **removed**. The
+detect/deploy engine (`updater.cpp`, `UpdateState`) and `updateprompt.cpp`'s
+detection/changelog/consent logic are **unchanged and still the source of truth** — but the UI is now
+the in-app **OSD Settings menu** (`.internal/osd-menu-plan.md`): `updateprompt.cpp::tick` feeds
+`OsdMenuController::set_update_state`, which draws the amber badge on the Settings button and the
+**Updates** tab; `confirm_update()`/`ignore_version()` are OSD action callbacks (A on *Update now* /
+Y / focused *Ignore*). This also fixes BUG 2b structurally (capture ⇔ paint, `osd-menu-plan.md` §2).
+Everything below about the portal deploy, the permission-store seed, and the on-Deck T1 results still
+holds verbatim; only the notify *surface* changed. The on-Deck notify round-trip is still pending —
+now via `tests/deck/test_osd.py` + the update round-trip, not the deleted pill/card.
+
 ## ★ NOTIFY MODE is the default (2026-07-14) — detect, don't enforce
 
 The config key is now **`self_update_mode`: `notify` | `auto` | `off`, default `notify`** (the legacy

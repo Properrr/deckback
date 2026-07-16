@@ -551,7 +551,7 @@ class PortalUpdater final : public Updater {
       // notify mode: publish availability for the UI threads; the deploy waits for
       // request_update().
       if (self->cfg_.state) self->cfg_.state->set_available(true, short_commit);
-      info("updater: notify mode — awaiting user confirmation (Menu ☰ or the update card)");
+      info("updater: notify mode — awaiting user confirmation in Settings ▸ Updates");
     }
     return 0;
   }

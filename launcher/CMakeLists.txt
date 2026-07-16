@@ -138,6 +138,8 @@ add_executable(deckback-launcher
   src/overlay.cpp
   src/haptic.cpp
   src/onboarding.cpp
+  src/osdmenu.cpp
+  src/about.cpp
   src/touch.cpp
   src/touchmode.cpp
   src/netprobe.cpp
@@ -245,7 +247,7 @@ if(BUILD_TESTING)
   # config.cpp to cover the keymap object parser.
   add_executable(input_test tests/input_test.cpp src/input.cpp src/keymap.cpp src/layers.cpp
                             src/touch.cpp src/voice.cpp src/overlay.cpp src/haptic.cpp
-                            src/onboarding.cpp src/updateprompt.cpp src/updater.cpp
+                            src/onboarding.cpp src/osdmenu.cpp src/updateprompt.cpp src/updater.cpp
                             src/devtools.cpp src/scripts.cpp src/config.cpp src/log.cpp)
   target_include_directories(input_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
   target_link_libraries(input_test PRIVATE Threads::Threads)
@@ -266,6 +268,7 @@ if(BUILD_TESTING)
   # compare, GitHub-releases parse, changelog summary, the show-card/show-dot decision, and the
   # dismissal state files. The portal deploy is verified separately on a Deck (durable/self-update.md).
   add_executable(updateprompt_test tests/updateprompt_test.cpp src/updateprompt.cpp src/updater.cpp
+                                   src/osdmenu.cpp src/onboarding.cpp src/keymap.cpp src/layers.cpp
                                    src/overlay.cpp src/scripts.cpp src/devtools.cpp src/log.cpp)
   target_include_directories(updateprompt_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
   target_link_libraries(updateprompt_test PRIVATE Threads::Threads)
@@ -315,6 +318,19 @@ if(BUILD_TESTING)
     DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
   add_test(NAME onboarding_test COMMAND onboarding_test)
 
+  # OSD menu pure helpers (osdmenu.cpp): status line, action-button set, verdict parser.
+  add_executable(osdmenu_test tests/osdmenu_test.cpp src/osdmenu.cpp src/onboarding.cpp
+                              src/keymap.cpp src/layers.cpp src/overlay.cpp src/scripts.cpp
+                              src/devtools.cpp src/log.cpp)
+  target_include_directories(osdmenu_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
+  target_link_libraries(osdmenu_test PRIVATE Threads::Threads)
+  add_test(NAME osdmenu_test COMMAND osdmenu_test)
+
+  # About tab: the metainfo -> AboutInfo parser (pure; the tab is single-sourced from that XML).
+  add_executable(about_test tests/about_test.cpp src/about.cpp)
+  target_include_directories(about_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
+  add_test(NAME about_test COMMAND about_test)
+
   # Touch-lock feedback: the CDP-injected toast (escaping is the whole risk) and the FF_RUMBLE
   # effect construction. The rumble ioctls themselves need a real pad and belong to the on-Deck tier.
   add_executable(overlay_test tests/overlay_test.cpp src/overlay.cpp src/haptic.cpp
@@ -345,7 +361,7 @@ if(BUILD_TESTING)
   # Tests assert() their invariants. CI builds Release, which defines NDEBUG and would both compile
   # the assertions out (tests silently pass) and trip -Werror=unused-variable. Force NDEBUG off for
   # test targets so assertions stay live regardless of the build type.
-  foreach(t config_test log_test devtools_test player_test watchdog_test updater_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test cdm_fetcher_test touchmode_test util_test navigator_test scripts_test)
+  foreach(t config_test log_test devtools_test player_test watchdog_test updater_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test osdmenu_test about_test cdm_fetcher_test touchmode_test util_test navigator_test scripts_test)
     target_compile_options(${t} PRIVATE -UNDEBUG)
   endforeach()
 endif()

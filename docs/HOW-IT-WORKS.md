@@ -224,12 +224,27 @@ deep links rewrite to a Leanback watch route (*verified 2026-07-08*).
 
 ### First-run controls card + toast/haptic 🟡 Implemented
 `onboarding.cpp` injects a one-shot DOM card listing the control mapping, **derived from the live
-`app.json`** so it never advertises a control that does nothing; re-openable via Menu. `overlay.cpp`
+`app.json`** so it never advertises a control that does nothing; shown once at first run. `overlay.cpp`
 injects a DOM toast; `haptic.cpp` uploads an `FF_RUMBLE` effect via `EVIOCSFF`. The card/toast were
 CDP-injected over real Leanback and needed a **Trusted Types policy** to render (bare `innerHTML` is
 a silent no-op on youtube.com/tv) — that part is verified; the toast/haptic were built for the now-
 dead touch lock and are effectively orphaned. Unit-tested; the DOM-survival and rumble paths have
 not run on a Deck.
+
+### Settings menu (OSD) + self-update 🟡 Implemented — not yet on a Deck
+`osdmenu.cpp` + `config/scripts/osd.js` are an in-app, controller-driven **Settings** menu, opened
+from a persistent top-right button (Menu ☰) — the app's engineering surface. Two tabs: **Settings ▸
+Keys** (the live keymap, reusing the controls-card derivation so the two can't disagree) and
+**Updates**. The focus/tab/scroll state lives in the injected JS; `input.cpp` captures the pad
+modally and forwards discrete commands (`up/down/select/back/tab_next/scroll_*`), reusing the
+existing auto-repeat + right-stick machinery. It is CSP-safe (`adoptedStyleSheets` + CSSOM, no
+`<style>`, no `innerHTML`) and keep-alive'd against Leanback body swaps. Its invariant is *capture ⇔
+paint*: a wiped overlay either re-injects or drops modal capture, so keys are never swallowed behind
+a menu that isn't on screen (the failure mode of the old update card). **Self-update folds in here:**
+`updater.cpp` (Flatpak-portal detect/deploy, verified on-Deck) still runs, and `updateprompt.cpp`
+feeds the Updates tab + the button's amber badge instead of drawing its own pill/card. L0-tested
+(controller helpers, verdict parser, CSP-safe scripts); an L2 regression suite
+(`tests/deck/test_osd.py`) guards the two prior input bugs but has **not** run on hardware yet.
 
 ### Error page + netprobe 🟡 Implemented
 `errorpage.cpp` replaces Chromium's controller-unfocusable error screen with a kiosk **Try again**

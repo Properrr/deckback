@@ -8,6 +8,32 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Settings menu no longer traps input after sleep/resume.** If you opened the menu and the Deck
+  slept (or the page reloaded for any reason), the menu could linger on screen while your controller
+  drove the YouTube UI behind it — or the reverse, the menu could keep swallowing input with nothing
+  on screen. The launcher now continuously reconciles "menu captured" with "menu actually painted",
+  so a reload can never leave the two out of sync.
+
+### Changed
+- **Settings menu (OSD).** The self-update pill/card are replaced by an in-app **Settings** menu:
+  a persistent top-right button (active everywhere except during video playback) opens a
+  controller-driven overlay with tabs. **Settings ▸ Keys** shows the controller hot-keys
+  currently in use (read from your live config, never hardcoded). **Updates** shows whether you're
+  up to date or has the changelog and actions for a new release. Open it with **Menu (☰)**; navigate
+  with the **D-pad** (and the right stick to scroll), **A** to select, **B** to go back/close, and
+  **L1/R1** to switch tabs. On the Updates tab, **A** on *Update now* installs (applies next launch)
+  and **Y** ignores a version. An amber dot on the button flags an available update. See
+  `.internal/osd-menu-plan.md`.
+- **Settings ▸ Keys** now lists the **L2 / R2** chapter-seek controls (Previous / Next chapter).
+  They were being dropped because the launcher didn't recognise the chapter/skip seeks as controls
+  it performs itself. The Updates tab's status and changelog text is also larger and better spaced.
+
+### Added
+- **About tab** in the Settings menu: what Deckback is, its feature list, version, author, and
+  project/support links — all read from the app's own store metadata (one source, so the in-app
+  page can't drift from the Flathub listing).
+
 ## [0.0.4] - 2026-07-14
 
 ### Added

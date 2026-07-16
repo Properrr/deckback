@@ -1,9 +1,18 @@
 # Deckback Configurator — design doc
 
-Status: **DESIGN — nothing implemented.** Companion to `.internal/steamdeck-cobalt-youtube-plan.md`
-(the main plan wins on conflict for everything about the YT app itself; this doc owns the
-configurator). Written 2026-07-10 against launcher/config state at commit `1af3e6b` and
-`config/app.json` schema_version 1.
+> **SUPERSEDED 2026-07-15 by `.internal/osd-menu-plan.md` (user decision).** The separate "Deckback
+> Settings" companion app is not being built; its role is absorbed by the **in-app OSD Settings
+> menu**. The load-bearing decisions here — the sparse `user.json` overlay (C2), the rule that user
+> config must not shadow the shipped R1 hotfix keys (`url`/`user_agent`/`cobalt_flags`/`cdm_*`/
+> `remote_debugging_port`), button-remap conflict/lockout protection, no per-direction-D-pad / no
+> rear-grip remap, the warned hardware-decode toggle, and reset-to-defaults — are migrated into the
+> OSD plan's writable-settings roadmap (osd-menu-plan.md §11, O10). This document is kept for history
+> and rationale only; do not implement from it.
+
+Status: **DESIGN — SUPERSEDED (do not implement).** Companion to
+`.internal/steamdeck-cobalt-youtube-plan.md` (the main plan wins on conflict for everything about the
+YT app itself; this doc owned the configurator). Written 2026-07-10 against launcher/config state at
+commit `1af3e6b` and `config/app.json` schema_version 1.
 
 ## 1. What and why
 

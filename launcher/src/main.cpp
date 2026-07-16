@@ -12,6 +12,7 @@
 #include <string_view>
 #include <vector>
 
+#include "about.hpp"
 #include "audio.hpp"
 #include "cdm_fetcher.hpp"
 #include "config.hpp"
@@ -19,6 +20,7 @@
 #include "log.hpp"
 #include "navigator.hpp"
 #include "onboarding.hpp"
+#include "osdmenu.hpp"
 #include "platform.hpp"
 #include "player.hpp"
 #include "profile.hpp"
@@ -43,6 +45,20 @@ void on_signal(int) { Watchdog::request_shutdown(); }
 std::string env_or(const char* key, std::string fallback) {
   const char* v = std::getenv(key);
   return v ? std::string(v) : std::move(fallback);
+}
+
+// UpdateMonitor only reports positive availability, so the OSD must present each configured policy
+// directly instead of treating an absent signal as proof that the installed version is latest.
+std::string update_policy_status(SelfUpdateMode mode) {
+  switch (mode) {
+    case SelfUpdateMode::Off:
+      return "Updates are off. Update Deckback in Discover or run flatpak update.";
+    case SelfUpdateMode::Notify:
+      return "Checking for updates…";
+    case SelfUpdateMode::Auto:
+      return "Automatic updates are enabled. New versions install when they are available.";
+  }
+  return "Update status is not available.";
 }
 
 // Single-instance lock: flock a file in the runtime dir. Held for the process lifetime.
@@ -310,7 +326,7 @@ int main(int argc, char** argv) {
   args.push_back(cdp_nav ? "about:blank" : url);
 
   // First-run controls card (findings input-ux §17). Drawn once the TV app has actually loaded —
-  // there is no document to draw on before that — and re-openable from the `show_controls` action.
+  // there is no document to draw on before that. After dismissal, Menu opens Settings instead.
   //
   // Declared BEFORE the navigator and the gamepad: the navigator's thread captures it by reference
   // and the input thread holds a pointer to it, so it must outlive both. Both are stopped
@@ -324,6 +340,7 @@ int main(int argc, char** argv) {
   UpdateState update_state;
   std::unique_ptr<Updater> updater;
   std::optional<UpdatePromptController> update_prompt;
+  std::optional<OsdMenuController> osd;
   std::optional<Navigator> navigator;
   std::optional<GamepadInput> gamepad;
   // Phase 5 voice search. Disabled by default: voice cannot be a keypress on this engine, and
@@ -348,6 +365,28 @@ int main(int argc, char** argv) {
                        first_run_marker_path(resolve_state_dir(runtime_dir)));
   }
 
+  // In-app OSD Settings menu (osd-menu-plan.md): the single settings surface, always available off
+  // playback. Constructed whenever CDP is up, independent of self-update. The update callbacks
+  // route to update_prompt, which is emplaced below and feeds the OSD Updates tab.
+  if (cdp_nav) {
+    osd.emplace(OsdMenuConfig{
+        .cdp_host = "127.0.0.1",
+        .cdp_port = cfg->remote_debugging_port,
+        .local_version = kDeckbackVersion,
+        .overlay = OverlayContext{cfg->keymap, cfg->voice_enabled, cfg->right_stick_scroll,
+                                  cfg->touch_lock_enabled, cfg->touch_lock_chord},
+        .about = parse_metainfo(load_metainfo().value_or("")),
+        .on_update_confirm =
+            [&update_prompt] {
+              if (update_prompt) update_prompt->confirm_update();
+            },
+        .on_update_ignore =
+            [&update_prompt] {
+              if (update_prompt) update_prompt->ignore_version();
+            }});
+    osd->set_update_model(false, update_policy_status(cfg->self_update_mode), "");
+  }
+
   // Self-update. Detection (portal UpdateMonitor) runs in notify + auto; 'off' never constructs the
   // updater. auto_deploy distinguishes them: auto deploys on detection, notify only publishes
   // availability into update_state and waits for the user's "Update now" via update_prompt.
@@ -363,7 +402,8 @@ int main(int argc, char** argv) {
                                                .state_dir = resolve_state_dir(runtime_dir),
                                                .local_version = kDeckbackVersion,
                                                .state = &update_state,
-                                               .updater = updater.get()});
+                                               .updater = updater.get(),
+                                               .osd = osd ? &*osd : nullptr});
       // Test aid: force the notify UI (dot + one-time card + changelog) without waiting for the
       // portal's ~30-min poll. DECKBACK_FAKE_UPDATE=<any-commit-string> publishes availability at
       // launch. Confirming the update still routes through the real portal deploy.
@@ -384,12 +424,12 @@ int main(int argc, char** argv) {
         "127.0.0.1", cfg->remote_debugging_port, cfg->user_agent, url, cfg->devtools_poll_ms,
         NavPolicy{cfg->steer_av1, cfg->mic_autogrant, cfg->error_page, cfg->error_retry_min_ms,
                   cfg->error_retry_max_ms, cfg->error_title, cfg->error_hint, cfg->disable_touch});
-    if (onboarding || update_prompt)
-      navigator->set_on_app_loaded([&onboarding, &update_prompt] {
+    if (onboarding || osd)
+      navigator->set_on_app_loaded([&onboarding, &osd] {
         if (onboarding) onboarding->show(/*first_run_only=*/true);
-        // Redraw the dot and re-inject the card (if open) after a full reload tore down
-        // documentElement — else a navigation strands the card and traps input (self-update.md).
-        if (update_prompt) update_prompt->on_page_reloaded();
+        // Redraw the Settings button and re-inject the menu (if open) after a full reload tore down
+        // documentElement — else a navigation strands the menu and traps input (osd-menu-plan.md).
+        if (osd) osd->on_page_reloaded();
       });
     navigator->start();
     // Phase 3 input: gamepad evdev -> DOM key events over CDP (S0.6 mechanism), bindings from
@@ -410,6 +450,7 @@ int main(int argc, char** argv) {
     gp.voice = voice ? &*voice : nullptr;
     gp.onboarding = onboarding ? &*onboarding : nullptr;
     gp.update_prompt = update_prompt ? &*update_prompt : nullptr;
+    gp.osd = osd ? &*osd : nullptr;
     gamepad.emplace("127.0.0.1", cfg->remote_debugging_port, std::move(gp));
     gamepad->start();
   } else {
