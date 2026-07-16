@@ -13,8 +13,9 @@
 
 An **unofficial** client for YouTube's TV interface (Leanback), built on the open-source
 Chromium-based [Cobalt](https://github.com/youtube/cobalt) engine, for the **Steam Deck** in
-**Game Mode**. Console-grade controller navigation and clean sleep/resume — aiming for PS5-app
-parity on a handheld.
+**Game Mode**. It launches straight from your Steam library like a console app: full controller
+navigation, hardware-decoded playback, and clean sleep/resume — aiming for PS5-app parity on a
+handheld.
 
 <p align="center">
   <img src="flatpak/assets/screenshots/01-home.png" alt="Home screen" width="32%">
@@ -25,6 +26,26 @@ parity on a handheld.
 
 > Not affiliated with, endorsed by, or supported by Google or YouTube. Like VacuumTube and Kodi's
 > YouTube plugins, Deckback depends on Google continuing to serve its TV interface to this client.
+
+## ✨ Features
+
+- **Console-style controller navigation** — the whole TV UI driven from the gamepad (A select,
+  B back, D-pad navigate, LB/RB seek ∓10 s, sticks scroll), mapped at the embedder layer, not
+  fragile page scripting.
+- **Hardware-decoded video** — VP9 through VA-API on the Deck's APU, measured at **~5.6 W** under
+  1080p playback (well under the ≤9 W target); H.264/AAC fallback built in, AV1 steered away from.
+- **Clean sleep/resume** — suspends and wakes with the app alive, playback and audio intact — no
+  black screen, no relaunch.
+- **In-app Settings (OSD)** — a controller-driven overlay (Menu button) for key hints, an About
+  panel, and self-update status — drawn by the launcher, so a YouTube UI change can't break it.
+- **Self-update, opt-in and painless** — detects a new release from our Flatpak repo and offers to
+  install it from inside the app (notify mode; verified end-to-end on both OLED and LCD APUs).
+- **Handheld-appropriate touch** — the touchscreen is made inert by default so a stray palm tap
+  never yanks you out of what you're watching.
+- **Persistent sign-in**, deep-link/launch integration, single-instance locking, and a TV user-agent
+  so YouTube serves the real 10-foot interface.
+- **Sandboxed & self-hosted** — ships as a Flatpak (zypak sandbox, not `--no-sandbox`); no DRM is
+  ever bundled (Widevine is user-supplied, best-effort L3).
 
 ## ⚠️ Disclaimer
 
@@ -69,7 +90,8 @@ parity on a handheld.
 ### 1 · Install (Desktop Mode)
 
 Switch to **Desktop Mode** and open **Konsole**. The **recommended** way adds our repo so you get
-**automatic updates** — or use the one-click installer at **<https://properrr.github.io/deckback/>**:
+**automatic updates** (a one-command installer that also sets up the Steam tile + artwork is on the
+way — see [`.internal/findings/durable/one-line-install.md`](.internal/findings/durable/one-line-install.md)):
 
 ```sh
 flatpak remote-add --if-not-exists deckback \

@@ -258,6 +258,84 @@ def cmd_art(args):
     return 0
 
 
+def _new_shortcut_entry(appid, appname, exe, start_dir, icon, launch_opts):
+    """A shortcuts.vdf entry with the field set Steam writes for a non-Steam game.
+
+    We set `appid` explicitly to grid_id(exe, appname) so both Steam AND our `art` command name the
+    grid files with the SAME id — the whole reason `add` exists (a `steamos-add-to-steam` shortcut
+    gets a Steam-assigned appid our crc can't reproduce, so its art can't be applied in one shot).
+    appid is stored as an unsigned int32 (tag 0x02); art_id reads it back unsigned, matching grid_id.
+    """
+    return [
+        (0x02, "appid", appid & 0xFFFFFFFF),
+        (0x01, "AppName", appname),
+        (0x01, "Exe", exe),
+        (0x01, "StartDir", start_dir),
+        (0x01, "icon", icon),
+        (0x01, "ShortcutPath", ""),
+        (0x01, "LaunchOptions", launch_opts),
+        (0x02, "IsHidden", 0),
+        (0x02, "AllowDesktopConfig", 1),
+        (0x02, "AllowOverlay", 1),
+        (0x02, "OpenVR", 0),
+        (0x02, "Devkit", 0),
+        (0x01, "DevkitGameID", ""),
+        (0x02, "DevkitOverrideAppID", 0),
+        (0x02, "LastPlayTime", 0),
+        (0x01, "FlatpakAppID", ""),
+        (0x00, "tags", []),
+    ]
+
+
+def _fresh_shortcuts_vdf_path():
+    """A path to create shortcuts.vdf under when a Deck has never added a non-Steam game. Uses the
+    first existing Steam `userdata/<id>/config/` dir (Steam has run at least once)."""
+    for pat in (os.path.expanduser("~/.local/share/Steam/userdata/*/config"),
+                os.path.expanduser("~/.steam/steam/userdata/*/config")):
+        dirs = sorted(glob.glob(pat))
+        if dirs:
+            return os.path.join(dirs[0], "shortcuts.vdf")
+    return ""
+
+
+def cmd_add(args):
+    # Steam rewrites shortcuts.vdf from memory on exit, so an edit made while it runs is lost. Refuse,
+    # like `remove` does, unless forced.
+    if _steam_running() and not args.force:
+        print("Steam is running — close it first (edits are lost when Steam exits), or pass --force",
+              file=sys.stderr)
+        return 3
+    vdfs = _find_shortcuts_vdf(args.vdf)
+    created = False
+    if not vdfs:
+        # A Deck that never added a non-Steam game has no shortcuts.vdf yet — create one.
+        path = args.vdf or _fresh_shortcuts_vdf_path()
+        if not path:
+            print("no Steam userdata found — has Steam ever run on this Deck?", file=sys.stderr)
+            return 3
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        root_key, items = "shortcuts", []
+        created = True
+        vdfs = [path]
+    else:
+        root_key, items = load_shortcuts(vdfs[0])
+
+    path = vdfs[0]
+    appid = grid_id(args.exe, args.appname)
+    entry = _new_shortcut_entry(appid, args.appname, args.exe, args.start_dir, args.icon,
+                                args.launch_options)
+    # Drop any prior entries with our AppName so re-running is idempotent (no duplicate tiles).
+    kept = [(t, k, e) for (t, k, e) in items if not _matches(e, args.appname)]
+    kept.append((0x00, str(len(kept)), entry))
+    reindexed = [(t, str(i), e) for i, (t, _k, e) in enumerate(kept)]
+    if not created and not os.path.exists(path + ".deckback.bak"):
+        shutil.copy2(path, path + ".deckback.bak")
+    dump_shortcuts(path, root_key, reindexed)
+    print(f"{path}: added '{args.appname}' (appid {appid}) exe={args.exe!r} opts={args.launch_options!r}"
+          + ("" if created else f" (backup: {path}.deckback.bak)"))
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -274,6 +352,16 @@ def main():
     a.add_argument("--assets", required=True, help="dir with capsule/hero/logo/header/icon .png")
     a.add_argument("--vdf", default="")
     a.set_defaults(func=cmd_art)
+    d = sub.add_parser("add", help="write the Deckback shortcut with a crc appid (Steam must be off)")
+    d.add_argument("--appname", default="Deckback")
+    d.add_argument("--exe", default="/usr/bin/flatpak")
+    d.add_argument("--launch-options", default="run io.github.properrr.deckback")
+    d.add_argument("--start-dir", default=os.path.expanduser("~/"))
+    d.add_argument("--icon", default="")
+    d.add_argument("--force", action="store_true",
+                   help="edit even if Steam is running (the edit will be lost when Steam exits)")
+    d.add_argument("--vdf", default="")
+    d.set_defaults(func=cmd_add)
     args = ap.parse_args()
     return args.func(args)
 
