@@ -8,6 +8,8 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-07-15
+
 ### Fixed
 - **Settings ▸ Updates** no longer sits on "Checking for updates…" forever when you're already on
   the latest version. That text implied a check that never finishes; it now shows a resolved
@@ -114,7 +116,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.5...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.6...HEAD
+[0.0.6]: https://github.com/properrr/deckback/releases/tag/v0.0.6
 [0.0.5]: https://github.com/properrr/deckback/releases/tag/v0.0.5
 [0.0.4]: https://github.com/properrr/deckback/releases/tag/v0.0.4
 [0.0.3]: https://github.com/properrr/deckback/releases/tag/v0.0.3
