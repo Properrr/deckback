@@ -50,6 +50,15 @@ cp flatpak/assets/branding/readme-banner.png         "$site/banner.png"
 mkdir -p "$site/screenshots"
 cp flatpak/assets/screenshots/*.png                  "$site/screenshots/"
 
+# The one-line "smart install" (findings/durable/one-line-install.md): the curl|bash orchestrator is
+# published AS install.sh, alongside the Steam-tile helper and the five grid PNGs it fetches at
+# runtime. Keep these names in sync with the fetch URLs in scripts/web-install.sh.
+cp scripts/web-install.sh                            "$site/install.sh"
+cp scripts/steam_shortcuts.py                        "$site/steam_shortcuts.py"
+mkdir -p "$site/steam"
+cp flatpak/assets/steam/capsule.png flatpak/assets/steam/header.png flatpak/assets/steam/hero.png \
+   flatpak/assets/steam/logo.png flatpak/assets/steam/icon.png "$site/steam/"
+
 # If signed, export the public key and inline it (base64) into the ref files so a fresh install
 # verifies signatures. `sed` appends after the commented placeholder line.
 if [ -n "${DECKBACK_GPG_KEY:-}" ]; then
@@ -67,6 +76,7 @@ cat >&2 <<EOF
 
 Site staged in ${site}/ :
   index.html · deckback.flatpakrepo · ${app}.flatpakref · repo/ · icon.png · banner.png · screenshots/
+  install.sh · steam_shortcuts.py · steam/ (one-line "smart install")
 
 Test it locally:
   (cd ${site} && python3 -m http.server 8000)

@@ -1,6 +1,24 @@
 # One-line "smart install" for a new Deck (design)
 
-## Status: DESIGN + core landed (2026-07-15). Hosted one-liner assembly + on-Deck smoke PENDING (Deck asleep).
+## Status: hosted one-liner LANDED + file-logic smoke PASSED on-Deck (2026-07-16). Game-Mode launch+art visual confirm STILL PENDING (needs a destructive real-library run + a human in Game Mode).
+
+### 2026-07-16 progress
+- **`scripts/web-install.sh`** (new) — the standalone `curl|bash` orchestrator, published AS
+  `install.sh`. Adds the flathub + `deckback` `--user` remotes, `flatpak install --user`, confirms
+  evdev (`input`) access, fetches `steam_shortcuts.py` + the five `steam/*.png`, and — **Steam-off**
+  (asks + waits, never force-kills) — runs `add` + `art`. Reversible (`.deckback.bak` + `remove`).
+- **`scripts/publish-repo.sh`** now stages `install.sh` + `steam_shortcuts.py` + `steam/*.png` onto
+  the Pages site (the release workflow calls this script, so CI publishes them too). URLs in
+  `web-install.sh` are kept in sync with the staged paths.
+- **On-Deck file-logic smoke PASSED (non-destructive)** — `add` + `art` run against a *copy* of the
+  Deck's real `shortcuts.vdf` (32 shortcuts): the Deckback tile is written with
+  `Exe=/usr/bin/flatpak`, `LaunchOptions=run io.github.properrr.deckback`, `appid == grid_id`
+  (2214955871), all five grid PNGs land, the pre-existing 31 non-Deckback shortcuts are preserved,
+  and the old desktop-file Deckback entry is deduped/replaced. This proves the vdf layer on real
+  Steam data without touching the library.
+- **STILL PENDING** (the three OPEN items below): a real edit to the live `shortcuts.vdf` + a Steam
+  restart + a human confirming in **Game Mode** that the crc-appid tile *launches* and *shows its
+  art*. Until that passes, the README is NOT flipped to lead with the one-liner.
 
 ## Goal
 
