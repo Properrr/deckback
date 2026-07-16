@@ -1,6 +1,14 @@
 # One-line "smart install" for a new Deck (design)
 
-## Status: hosted one-liner LANDED + file-logic smoke PASSED on-Deck (2026-07-16). Game-Mode launch+art visual confirm STILL PENDING (needs a destructive real-library run + a human in Game Mode).
+## Status: ★ RESOLVED / SHIPPING (2026-07-16). Hosted one-liner landed, verified end-to-end on-Deck, README leads with it.
+
+The last gate — does Game-Mode Steam launch the crc-appid tile and show its art — **PASSED on
+hardware (2026-07-16, OLED)**: the real-library `add`+`art` was written to the live `shortcuts.vdf`
+(Steam off), the user returned to Game Mode, and the Deckback tile **both launched** (`/usr/bin/flatpak
+run io.github.properrr.deckback`) **and showed the full artwork** (capsule/hero/logo keyed to appid
+2214955871). All three OPEN items below are therefore settled: the Exe/LaunchOptions launch, the
+Steam-off lifecycle around the edit, and the crc appid being honoured for both launch and art lookup.
+README §1 now leads with `curl -fsSL https://properrr.github.io/deckback/install.sh | bash`.
 
 ### 2026-07-16 progress
 - **`scripts/web-install.sh`** (new) — the standalone `curl|bash` orchestrator, published AS
@@ -51,20 +59,20 @@ appear. This is what the new `steam_shortcuts.py add` does.
    with the existing `art` command, which already keys off `art_id() == grid_id` when no Steam-assigned
    appid is present — writing `appid = grid_id` makes that match exact and Steam-stable.
 
-2. **Hosted `install.sh`** (PENDING on-Deck) — the curl|bash orchestrator, published to the Pages
-   site next to the repo. Steps: `flatpak remote-add` the `deckback` repo + `flatpak install --user`
-   (so auto-update works); verify the `input` device permission (reuse `install.sh`'s gate); fetch
-   `steam_shortcuts.py` + the five `steam/*.png` from the Pages site into a tmpdir; then, Steam-off,
-   `add` the shortcut + `art` the tiles; finally relaunch Steam / prompt to return to Game Mode.
+2. **Hosted `install.sh`** (LANDED — `scripts/web-install.sh`, published AS `install.sh`) — the
+   curl|bash orchestrator. Adds the flathub + `deckback` `--user` remotes + `flatpak install --user`
+   (so auto-update works); verifies the `input` device permission; fetches `steam_shortcuts.py` +
+   the five `steam/*.png` from the Pages site into a tmpdir; then, Steam-off (asks + waits, never
+   force-kills), `add` the shortcut + `art` the tiles; finally prompts to return to Game Mode.
 
-3. **Publish wiring** — `scripts/publish-repo.sh` (+ the release workflow) stages `install.sh`,
-   `steam_shortcuts.py`, and `flatpak/assets/steam/*.png` into the site so the one-liner's fetches
-   resolve.
+3. **Publish wiring** (LANDED) — `scripts/publish-repo.sh` (called by the release workflow) stages
+   `install.sh`, `steam_shortcuts.py`, and the five `steam/*.png` into the site so the one-liner's
+   fetches resolve.
 
-4. **README** — the one-liner becomes the top "recommended" install; the manual steps stay as the
-   fallback.
+4. **README** (LANDED) — §1 leads with the one-liner ("recommended"); the manual repo/bundle steps
+   are the collapsed fallback.
 
-## OPEN — must be settled on a real Deck before advertising the one-liner
+## OPEN items — ALL RESOLVED on-Deck 2026-07-16 (see the ★ status note at the top)
 
 - The shortcut's **`Exe` / `LaunchOptions` / `StartDir`** that actually launch the `--user` flatpak
   in Game Mode (e.g. `Exe="/usr/bin/flatpak"`, `LaunchOptions="run io.github.properrr.deckback"`).

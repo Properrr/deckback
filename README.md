@@ -87,44 +87,57 @@ handheld.
 > **Pre-alpha.** You install this yourself, at your own risk (see the disclaimer above). Deckback
 > never bundles or downloads any DRM module; free content needs nothing extra.
 
-### 1 · Install (Desktop Mode)
+### 1 · Install — one command (recommended)
 
-Switch to **Desktop Mode** and open **Konsole**. The **recommended** way adds our repo so you get
-**automatic updates** (a one-command installer that also sets up the Steam tile + artwork is on the
-way — see [`.internal/findings/durable/one-line-install.md`](.internal/findings/durable/one-line-install.md)):
+Switch to **Desktop Mode**, open **Konsole**, and paste:
 
 ```sh
-flatpak remote-add --if-not-exists deckback \
-  https://properrr.github.io/deckback/deckback.flatpakrepo
-flatpak install deckback io.github.properrr.deckback
+curl -fsSL https://properrr.github.io/deckback/install.sh | bash
 ```
 
-Prefer a single file with no auto-update? Grab the bundle from the
-[**Releases**](https://github.com/properrr/deckback/releases) page instead:
+That installs Deckback from our repo (so it **auto-updates**), grants the gamepad the access it
+needs, and adds the **Steam tile with full library artwork** — no manual steps. It will ask you to
+**fully close Steam** for the library edit (it waits, and backs up your shortcuts first). When it
+finishes, return to Game Mode and Deckback is in your library. *(Verified end-to-end on-device.)*
+
+- Needs **flatpak ≥ 1.16** (SteamOS 3.5+ ships it); the installer checks and stops early otherwise.
+- First run pulls the `org.freedesktop.Platform` 25.08 runtime from Flathub (a few minutes).
+
+<details>
+<summary><b>Prefer to do it by hand?</b> (or install a single-file bundle)</summary>
+
+**From our repo (auto-updates):**
+
+```sh
+flatpak remote-add --user --if-not-exists deckback \
+  https://properrr.github.io/deckback/deckback.flatpakrepo
+flatpak install --user deckback io.github.properrr.deckback
+```
+
+**Or a single `.flatpak` file** (no auto-update) from the
+[**Releases**](https://github.com/properrr/deckback/releases) page:
 
 ```sh
 flatpak install --user -y io.github.properrr.deckback.flatpak
 ```
 
-- Needs **flatpak ≥ 1.16** (SteamOS 3.5+ ships it) — the bundle refuses older hosts rather than
-  handing you a dead gamepad.
-- On first install it offers to pull the `org.freedesktop.Platform` 25.08 runtime from Flathub.
-- Sanity check: `flatpak info --show-permissions io.github.properrr.deckback | grep devices` should
-  list `input` (the gamepad) and `dri` (the GPU).
+Sanity check: `flatpak info --show-permissions io.github.properrr.deckback | grep devices` should
+list `input` (the gamepad) and `dri` (the GPU).
 
-### 2 · Add it to the Steam library (still in Desktop Mode)
+**Then add it to Steam** (still in Desktop Mode — there is no "Add a Non-Steam Game" in Game Mode):
 
 ```sh
 steamos-add-to-steam \
   "$(flatpak info --show-location io.github.properrr.deckback)/export/share/applications/io.github.properrr.deckback.desktop"
 ```
 
-…or do it by hand in the **desktop Steam client** — **Games → Add a Non-Steam Game to My Library →
-Deckback**. Note this menu exists **only in Desktop Mode**; there is no "Add a Non-Steam Game" option
-in Game Mode, so add the shortcut here (either command above or this menu) *before* switching back.
-The app icon comes across automatically from the Flatpak.
+To also skin the tile with the shipped capsule/hero/logo/header/icon art, copy
+[`flatpak/assets/steam/`](flatpak/assets/steam/) + `scripts/steam_shortcuts.py` to the Deck and,
+**with Steam closed**, run `python3 steam_shortcuts.py art --appname Deckback --assets <that folder>`.
 
-### 3 · Controller layout (Game Mode)
+</details>
+
+### 2 · Controller layout (Game Mode)
 
 Back in **Game Mode**, open the **Deckback** shortcut → the gamepad (controller) settings → and apply
 the community **Deckback** layout (mirrors [`config/steam_input.vdf`](config/steam_input.vdf)) so the
@@ -137,19 +150,9 @@ standard buttons reach the in-app input layer:
 | **X** | Details | **Y** | Voice / search |
 | **View** | Toggle controls card | **Menu** | Home |
 
-### 4 · Fancy library artwork (optional)
-
-The repo ships capsule / hero / logo / header / icon art under
-[`flatpak/assets/steam/`](flatpak/assets/steam/) (catalogue art lives in Steam's per-user `grid/`
-folder, not inside the Flatpak). To skin the Steam tile with it, copy that folder and
-`scripts/steam_shortcuts.py` to the Deck and, **with Steam closed**, run:
-
-```sh
-python3 scripts/steam_shortcuts.py art --appname Deckback --assets flatpak/assets/steam
-```
-
-> ℹ️ Steam only exposes a **name and icon** for non-Steam shortcuts — there is no *description* field
-> to fill in, so that part of a store listing simply doesn't exist for a sideloaded app.
+> ℹ️ The one-line installer already sets the library artwork. Steam only exposes a **name and icon**
+> for non-Steam shortcuts — there is no *description* field — so that part of a store listing simply
+> doesn't exist for a sideloaded app.
 
 ## Updating
 
