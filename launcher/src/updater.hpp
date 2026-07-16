@@ -44,6 +44,18 @@ const char* update_permission_name(UpdatePermission p);
 // App id from /.flatpak-info text (`[Application]` section, `name=` key); empty when not sandboxed.
 std::string parse_flatpak_app_id(const std::string& text);
 
+// Session-bus reconnect backoff (durable/dbus-reconnect.md). When the updater's session-bus
+// connection drops mid-session, or flatpak-portal restarts and orphans the monitor, the loop
+// re-establishes instead of going inert until relaunch. Pure + always compiled so the schedule is
+// L0-tested where the sd-bus loop compiles out.
+//
+// reconnect_delay_ms: exponential backoff from 1s, doubling, capped at 60s; the shift is clamped so
+// any attempt index is defined (0→1000, 1→2000, … 5→32000, ≥6→60000).
+std::uint64_t reconnect_delay_ms(unsigned attempt);
+// reconnect_should_give_up: after this many consecutive failed (re)connect attempts (~6–7 min of
+// backoff) the watcher goes inert until the next launch — the connect-once floor, just deferred.
+bool reconnect_should_give_up(unsigned consecutive_failures);
+
 // Self-update through the Flatpak portal (`org.freedesktop.portal.Flatpak`'s UpdateMonitor).
 //
 // A sandboxed app cannot run `flatpak update`; instead it asks the portal to update the app on its

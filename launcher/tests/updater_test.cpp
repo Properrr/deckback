@@ -58,6 +58,24 @@ int main() {
   assert(parse_flatpak_app_id("name=orphan-before-any-section\n").empty());
   assert(parse_flatpak_app_id("").empty());
 
+  // Reconnect backoff (durable/dbus-reconnect.md): exponential from 1s, doubling, capped at 60s.
+  // The shift is clamped so a large attempt index is defined, not UB (review N9).
+  assert(reconnect_delay_ms(0) == 1000);
+  assert(reconnect_delay_ms(1) == 2000);
+  assert(reconnect_delay_ms(2) == 4000);
+  assert(reconnect_delay_ms(3) == 8000);
+  assert(reconnect_delay_ms(4) == 16000);
+  assert(reconnect_delay_ms(5) == 32000);
+  assert(reconnect_delay_ms(6) == 60000);  // 64000 clamped to the 60s cap
+  assert(reconnect_delay_ms(7) == 60000);
+  assert(reconnect_delay_ms(100) == 60000);  // no shift overflow at large attempt indices
+
+  // Give up (go inert until relaunch) only after 12 consecutive failures (~6-7 min of backoff).
+  assert(!reconnect_should_give_up(0));
+  assert(!reconnect_should_give_up(11));
+  assert(reconnect_should_give_up(12));
+  assert(reconnect_should_give_up(13));
+
   // create() always yields a usable object: the real backend where sd-bus is compiled in, else a
   // stub.
   auto up = Updater::create(UpdaterConfig{});
