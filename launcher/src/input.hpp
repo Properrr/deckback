@@ -8,7 +8,6 @@
 #include "layers.hpp"
 #include "onboarding.hpp"
 #include "touch.hpp"
-#include "voice.hpp"
 #include "worker.hpp"
 
 namespace deckback {
@@ -34,9 +33,6 @@ struct TouchConfig {
 //   fast_scroll  right-stick fast list traversal (input-ux §7).
 //   layers       context source (browse/player/osk), written by PlayerController's poll thread;
 //                nullptr pins the input to the Browse layer. Not owned.
-//   voice        enables hold-to-talk on whichever control the keymap binds to `voice_search`.
-//                nullptr leaves that control unbound and reported at startup, which is the shipped
-//                default until the V0 spike proves a soft-mic button exists. Not owned.
 //   onboarding   the first-run controls card (input-ux §17); nullptr = feature off. Not owned.
 struct GamepadOptions {
   KeymapConfig keymap;
@@ -44,7 +40,6 @@ struct GamepadOptions {
   FastScrollConfig fast_scroll;
   int skip_seconds = 10;  // ± jump for a trigger bound to skip_back/skip_fwd (input-ux §18)
   const LayerState* layers = nullptr;
-  VoiceController* voice = nullptr;
   OnboardingController* onboarding = nullptr;
   UpdatePromptController* update_prompt = nullptr;  // feeds the OSD Updates tab; null = feature off
   OsdMenuController* osd = nullptr;                 // in-app Settings menu; null = feature off
@@ -88,8 +83,6 @@ class GamepadInput {
   void update_fast_scroll();                     // re-evaluate the right stick after an axis change
   bool handle_chord(int code,
                     int value);  // track/toggle the touch-lock chord; true = event consumed
-  // Press/hold/release for hold-to-talk; true = the event was the voice button and is consumed.
-  bool handle_voice(int code, int value);
   // While the controls card is up it is modal: it swallows every event, and a button press
   // dismisses it. Returns true when the event was consumed.
   bool handle_onboarding(int type, int code, int value);
@@ -131,11 +124,6 @@ class GamepadInput {
   // lt_key_/rt_key_ on the press edge.
   std::string lt_skip_js_, rt_skip_js_;
   bool lt_down_ = false, rt_down_ = false;
-
-  // Hold-to-talk (findings input-ux §13). voice_ is not owned and may be null.
-  VoiceController* voice_ = nullptr;
-  int voice_code_ = -1;
-  HoldToTalk hold_;
 
   // First-run controls card (findings input-ux §17). Not owned; may be null.
   OnboardingController* onboarding_ = nullptr;

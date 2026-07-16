@@ -44,7 +44,6 @@ OverlayContext shipped() {
       {"a", "select"},
       {"b", "back"},
       {"x", "playpause"},
-      {"y", "voice_search"},
       {"lb", "scrub_back"},
       {"rb", "scrub_fwd"},
       {"lt", "chapter_back"},
@@ -109,8 +108,7 @@ void test_rows_omit_controls_that_do_nothing() {
   assert(!row_for(trig_rows, "R2", nullptr));
 
   const auto rows = controls_overlay_rows(shipped());
-  // Y -> voice_search, and voice ships disabled. Advertising "Hold to speak" on a build where the
-  // mic button was never found is the same failure.
+  // Y is unbound since the voice feature was removed, so it earns no row.
   assert(!row_for(rows, "Y", nullptr));
 
   // A keymap value on Menu cannot hide the fixed Settings entry point.
@@ -122,13 +120,15 @@ void test_rows_omit_controls_that_do_nothing() {
   assert(row_for(dead_rows, "A", nullptr));
 }
 
-void test_voice_row_appears_only_when_voice_is_enabled() {
+// The voice feature is gone. A hot-swapped config that still binds `voice_search` (written against
+// an older launcher) must produce NO row: the action dispatches nothing, and a row is a promise.
+void test_removed_voice_action_earns_no_row() {
   OverlayContext c = shipped();
-  assert(!any_action(controls_overlay_rows(c), "Hold to speak"));
-  c.voice_enabled = true;
-  std::string a;
+  c.keymap.push_back({"y", "voice_search"});
   const auto rows = controls_overlay_rows(c);
-  assert(row_for(rows, "Y", &a) && a == "Hold to speak");
+  assert(!row_for(rows, "Y", nullptr));
+  assert(!any_action(rows, "Hold to speak"));
+  assert(!any_action(rows, "voice_search"));
 }
 
 void test_menu_is_a_fixed_settings_row_not_a_keymap_action() {
@@ -156,8 +156,8 @@ void test_menu_is_a_fixed_settings_row_not_a_keymap_action() {
 void test_shipped_app_json_produces_no_dead_rows() {
   auto cfg = Config::load(DECKBACK_APP_JSON);
   assert(cfg.has_value());
-  OverlayContext c{cfg->keymap, cfg->voice_enabled, cfg->right_stick_scroll,
-                   cfg->touch_lock_enabled, cfg->touch_lock_chord};
+  OverlayContext c{cfg->keymap, cfg->right_stick_scroll, cfg->touch_lock_enabled,
+                   cfg->touch_lock_chord};
   const auto rows = controls_overlay_rows(c);
   assert(!rows.empty());
   for (const ControlRow& r : rows) {
@@ -170,8 +170,7 @@ void test_shipped_app_json_produces_no_dead_rows() {
     assert(r.action != "scan_forward");
     assert(r.action != "navigate");
   }
-  // Voice ships disabled, so the card must not promise voice search.
-  assert(cfg->voice_enabled == false);
+  // The voice feature is gone, so the card must never promise voice search.
   assert(!any_action(rows, "Hold to speak"));
   // ...and the card must explain how to reach the fixed settings surface.
   assert(any_action(rows, "Settings"));
@@ -393,7 +392,7 @@ int main() {
 
   test_rows_from_the_shipped_keymap();
   test_rows_omit_controls_that_do_nothing();
-  test_voice_row_appears_only_when_voice_is_enabled();
+  test_removed_voice_action_earns_no_row();
   test_menu_is_a_fixed_settings_row_not_a_keymap_action();
   test_shipped_app_json_produces_no_dead_rows();
   test_rows_follow_a_hot_swapped_keymap();

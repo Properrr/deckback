@@ -63,7 +63,7 @@ void test_deprecated_seek_aliases_still_resolve() {
   assert(deprecated_action_replacement("select").empty());
   assert(deprecated_action_replacement("ArrowLeft").empty());
   assert(deprecated_action_replacement("c").empty());
-  assert(deprecated_action_replacement("voice_search").empty());
+  assert(deprecated_action_replacement("nosuch_action").empty());
   assert(deprecated_action_replacement("").empty());
 }
 
@@ -81,7 +81,7 @@ void test_scan_keys_dispatchable_but_still_unbound() {
 void test_binding_refuses_to_guess_unknown_actions() {
   // These appear in config/app.json but have no established Leanback key. Dispatching *something*
   // would look like it works while doing nothing; an empty result makes startup warn instead.
-  assert(resolve_binding("voice_search").empty());
+  assert(resolve_binding("nosuch_action").empty());
   assert(resolve_binding("player_menu").empty());
   assert(resolve_binding("scan_rewind").empty());
   assert(resolve_binding("scan_forward").empty());
@@ -123,7 +123,6 @@ void test_button_map_from_shipped_keymap() {
       {"a", "select"},
       {"b", "back"},
       {"x", "playpause"},
-      {"y", "voice_search"},
       {"lb", "scrub_back"},
       {"rb", "scrub_fwd"},
       {"lt", "scan_rewind"},
@@ -142,16 +141,16 @@ void test_button_map_from_shipped_keymap() {
   assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");     // RB
   assert(find_key(m, BTN_SELECT, &k) && k == "c");          // captions
 
-  // Y and Start dispatch no DOM key -> not bound, and reported. Both are *launcher* actions
-  // (voice_search, show_controls); build_button_map does not know that, so it honestly reports them
-  // as unmapped and the constructor removes each one only when its feature is actually enabled.
-  assert(!find_key(m, BTN_Y, nullptr));  // Y (BTN_Y == BTN_WEST) -> voice_search, a launcher action
+  // Y is unbound since the voice feature was removed. Start dispatches no DOM key -> not bound,
+  // and reported: show_controls is a *launcher* action, which build_button_map does not know, so it
+  // honestly reports it as unmapped and the constructor removes it once the OSD is enabled.
+  assert(!find_key(m, BTN_Y, nullptr));
   assert(!find_key(m, BTN_START, nullptr));
   // dpad/lt/rt are not EV_KEY buttons and must never appear here.
   assert(m.size() == 6);
 
-  // y, start reported (lt/rt are handled by the trigger path, not build_button_map).
-  assert(unmapped.size() == 2);
+  // start reported (lt/rt are handled by the trigger path, not build_button_map).
+  assert(unmapped.size() == 1);
 }
 
 void test_button_map_reports_unknown_control_names() {
@@ -743,52 +742,48 @@ void test_empty_base_keeps_builtin_defaults() {
   assert(resolve_button(m, BTN_EAST, Layer::Browse, false, false) == "Escape");
 }
 
-// ---- voice control resolution
-// --------------------------------------------------------------------
+// ---- launcher-action control resolution ---------------------------------------------------------
 
-void test_find_voice_control() {
-  // voice_search is not a DOM key (input-ux §8.2), so the input layer intercepts its control by
-  // evdev code rather than looking it up in the button map.
-  assert(find_control_for_action({{"y", "voice_search"}, {"a", "select"}}, "voice_search") ==
-         BTN_Y);
-  assert(find_control_for_action({{"start", "voice_search"}}, "voice_search") == BTN_START);
+void test_find_control_for_action() {
+  // `show_controls` is not a DOM key: the OSD intercepts its control by evdev code rather than
+  // looking it up in the button map. find_control_for_action is that lookup.
+  assert(find_control_for_action({{"start", "show_controls"}, {"a", "select"}}, "show_controls") ==
+         BTN_START);
+  assert(find_control_for_action({{"y", "show_controls"}}, "show_controls") == BTN_Y);
   // Absent, or bound to a control we do not know: -1, and startup warns rather than guessing.
-  assert(find_control_for_action({{"a", "select"}}, "voice_search") == -1);
-  assert(find_control_for_action({{"nosuch", "voice_search"}}, "voice_search") == -1);
-  assert(find_control_for_action({}, "voice_search") == -1);
-
-  // The same mechanism carries `show_controls`, the other launcher-performed action.
-  assert(find_control_for_action({{"start", "show_controls"}}, "show_controls") == BTN_START);
-  // ...and the two must not be confused for one another.
-  assert(find_control_for_action({{"y", "voice_search"}}, "show_controls") == -1);
+  assert(find_control_for_action({{"a", "select"}}, "show_controls") == -1);
+  assert(find_control_for_action({{"nosuch", "show_controls"}}, "show_controls") == -1);
+  assert(find_control_for_action({}, "show_controls") == -1);
+  // Distinct actions must not be confused for one another.
+  assert(find_control_for_action({{"start", "show_controls"}}, "player_menu") == -1);
 }
 
-void test_without_voice_control() {
+void test_without_action() {
   auto out =
-      without_action({{"a", "select"}, {"y", "voice_search"}, {"b", "back"}}, "voice_search");
+      without_action({{"a", "select"}, {"start", "show_controls"}, {"b", "back"}}, "show_controls");
   assert(out.size() == 2);
   assert(out[0].first == "a" && out[1].first == "b");  // order otherwise preserved
-  assert(without_action({{"a", "select"}}, "voice_search").size() == 1);
+  assert(without_action({{"a", "select"}}, "show_controls").size() == 1);
   // Removing one action leaves the other alone.
-  auto both = without_action({{"y", "voice_search"}, {"start", "show_controls"}}, "voice_search");
-  assert(both.size() == 1 && both[0].second == "show_controls");
+  auto both = without_action({{"start", "show_controls"}, {"y", "player_menu"}}, "show_controls");
+  assert(both.size() == 1 && both[0].second == "player_menu");
 }
 
-// With voice enabled, its control must not ALSO be reported as an unmapped binding: it is mapped,
-// to something that is not a key. With voice disabled it must still be reported, because then it
-// really is a dead control and the startup warning is the honest output.
-void test_voice_control_is_not_reported_unmapped_when_enabled() {
+// With the OSD enabled, Menu must not ALSO be reported as an unmapped binding: it is mapped, to
+// something that is not a key. Without it the binding really is dead, and the startup warning is
+// the honest output. This mirrors what the GamepadInput constructor does.
+void test_launcher_action_is_not_reported_unmapped_when_enabled() {
   const std::vector<std::pair<std::string, std::string>> keymap = {
-      {"a", "select"}, {"y", "voice_search"}, {"start", "player_menu"}};
+      {"a", "select"}, {"start", "show_controls"}, {"y", "player_menu"}};
 
   std::vector<std::string> off;
   build_keymaps(KeymapConfig{keymap, {}, {}, {}, {}}, &off);
-  assert(off.size() == 2);  // y and start
+  assert(off.size() == 2);  // start and y
 
   std::vector<std::string> on;
-  build_keymaps(KeymapConfig{without_action(keymap, "voice_search"), {}, {}, {}, {}}, &on);
-  assert(on.size() == 1);  // start only
-  assert(on[0].find("start") != std::string::npos);
+  build_keymaps(KeymapConfig{without_action(keymap, "show_controls"), {}, {}, {}, {}}, &on);
+  assert(on.size() == 1);  // y only
+  assert(on[0].find("y") != std::string::npos);
 }
 
 // ---- the actually-shipped config/app.json
@@ -802,10 +797,9 @@ void test_shipped_app_json_keymap_is_current() {
   assert(cfg.has_value());
   assert(!cfg->keymap.empty());
 
-  // Voice ships DISABLED (V0 unverified), so `y` is genuinely a dead control today and the startup
-  // warning about it is correct. If this flips, the V0 spike must have passed on hardware.
-  assert(cfg->voice_enabled == false);
-  assert(find_control_for_action(cfg->keymap, "voice_search") == BTN_Y);  // binding ready (Y=BTN_Y)
+  // The voice feature was removed (it never worked on this engine), so nothing may bind
+  // `voice_search` — a config binding to a feature that does not exist is a dead control.
+  assert(find_control_for_action(cfg->keymap, "voice_search") == -1);
 
   // The layer sections ship EMPTY on purpose: no Leanback key is bound without an on-Deck spike. If
   // this ever fails, someone guessed a binding — that is the thing to re-examine, not this test.
@@ -819,7 +813,7 @@ void test_shipped_app_json_keymap_is_current() {
   build_keymaps(KeymapConfig{cfg->keymap, cfg->keymap_player, cfg->keymap_osk, cfg->keymap_lt,
                              cfg->keymap_rt},
                 &layer_unmapped);
-  assert(layer_unmapped.size() == 2);  // keymap.y=voice_search, keymap.start=player_menu
+  assert(layer_unmapped.size() == 1);  // keymap.start=show_controls, absorbed by the OSD
 
   for (const auto& [name, value] : cfg->keymap) {
     // Nothing we ship may use a deprecated alias — the compatibility path exists for *remote*
@@ -834,9 +828,9 @@ void test_shipped_app_json_keymap_is_current() {
   assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");  // rb = scrub_fwd
   assert(find_key(m, BTN_SOUTH, &k) && k == "Enter");
 
-  // Exactly the two documented unmapped controls: y (voice is not a key at all — input-ux §8.2) and
-  // start (player_menu has no candidate key). A third would mean we broke a binding.
-  assert(unmapped.size() == 2);
+  // Exactly one documented unmapped control: start (show_controls is a launcher action the OSD
+  // absorbs, not a DOM key). A second would mean we broke a binding.
+  assert(unmapped.size() == 1);
 }
 
 }  // namespace
@@ -894,9 +888,9 @@ int main() {
   test_chord_set_locked_reconciles_a_failed_grab();
   test_chord_never_acts_while_not_fully_held();
 
-  test_find_voice_control();
-  test_without_voice_control();
-  test_voice_control_is_not_reported_unmapped_when_enabled();
+  test_find_control_for_action();
+  test_without_action();
+  test_launcher_action_is_not_reported_unmapped_when_enabled();
 
   test_resolve_layer();
   test_layers_absent_is_context_free();

@@ -37,6 +37,17 @@ cp -a "$outdir"/locales/*.pak "$bundle/locales/" 2>/dev/null || true
 cp -a "$REPO_ROOT/config" "$bundle/"
 cp -a "$REPO_ROOT/scripts/cdp.py" "$bundle/"
 
+# AppStream metainfo, staged at the exact relative path about.cpp probes (candidate #3, after
+# $DECKBACK_METAINFO and the Flatpak's /app/share/metainfo). Without it the OSD's About tab renders
+# only the version — name/summary/description/features all come from this file — which reads as a
+# regression against the Flatpak and was reported as one on 2026-07-16. The dev bundle is not a
+# Flatpak, so /app/share/metainfo does not exist here; run.sh cd's to ~/cobalt-yt, which makes this
+# relative path resolve. Keep the layout: about.cpp hardcodes 'flatpak/assets/<file>'.
+meta_src="$REPO_ROOT/flatpak/assets/io.github.properrr.deckback.metainfo.xml"
+[ -f "$meta_src" ] || die "missing $meta_src — the About tab would silently degrade to version-only"
+mkdir -p "$bundle/flatpak/assets"
+cp -a "$meta_src" "$bundle/flatpak/assets/"
+
 # Launcher (out-of-tree; builds anywhere).
 ./scripts/launcher.sh build
 cp -a "$REPO_ROOT/launcher/build/deckback-launcher" "$bundle/"

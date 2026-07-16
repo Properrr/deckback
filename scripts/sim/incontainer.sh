@@ -7,16 +7,29 @@ SRC=/src
 fail=0
 
 note() { echo "== $* =="; }
+
+# The sim's whole value is that it is the DEVICE's userspace. Trusting the image tag for that would be
+# the same unchecked assumption the base swap exists to remove, so prove it inside the container.
+if [ "${DECKBACK_SIM_BASE:-}" != "steamos" ]; then
+  echo "sim: image is not the SteamOS base (DECKBACK_SIM_BASE='${DECKBACK_SIM_BASE:-unset}')." >&2
+  echo "     Refusing: a green here would claim SteamOS fidelity the image does not have." >&2
+  exit 3
+fi
 ok() { echo "  ok  - $1"; }
 bad() {
   echo "  FAIL - $1"
   fail=$((fail + 1))
 }
 
-# The launcher is the out-of-tree C++23 shim; building it on Arch (not the repo's Debian toolchain)
-# also proves it isn't accidentally distro-locked. Out-of-source build so /src can stay read-only.
+# The launcher is the out-of-tree C++23 shim; building it on the SteamOS userspace (not the repo's
+# Debian toolchain) proves it isn't distro-locked AND that it compiles against the versions the Deck
+# actually carries. Out-of-source build so /src can stay read-only.
+#
+# The image is a real SteamOS 3.8.1x rootfs pinned to the device's own gcc/glibc, not archlinux:latest
+# -- which drifts ahead of SteamOS and had this suite compiling with GCC 16 against glibc 2.43 while
+# the Deck runs GCC 15.1.1 / glibc 2.41 (durable/test-sim.md ★ CORRECTION).
 run_launcher() {
-  note "suite: launcher — build the out-of-tree launcher on Arch + run its L0 tests"
+  note "suite: launcher — build the out-of-tree launcher on the SteamOS userspace + run its L0 tests"
   if ! cmake -S "$SRC/launcher" -B /tmp/lbuild -G Ninja -DCMAKE_BUILD_TYPE=Release >/tmp/cmake.log 2>&1; then
     tail -20 /tmp/cmake.log
     bad "cmake configure"
@@ -29,7 +42,7 @@ run_launcher() {
   fi
   if ctest --test-dir /tmp/lbuild --output-on-failure >/tmp/ctest.log 2>&1; then
     grep -E "tests passed" /tmp/ctest.log | tail -1
-    ok "launcher builds + L0 green on Arch"
+    ok "launcher builds + L0 green on SteamOS ${DECKBACK_SIM_BRANCH:-?} (gcc $(gcc -dumpfullversion), glibc $(ldd --version | head -1 | awk "{print \$NF}"))"
   else
     tail -20 /tmp/ctest.log
     bad "launcher ctest"
@@ -54,7 +67,7 @@ run_shortcut() {
     bad "install art"
     return
   fi
-  if python3 - "$cfg" <<'PY'
+  if python3 - "$cfg" <<'PY'; then
 import sys, os, importlib.util
 cfg = sys.argv[1]
 spec = importlib.util.spec_from_file_location("ss", "/src/scripts/steam_shortcuts.py")
@@ -70,7 +83,6 @@ missing = [suf for suf in ("", "p", "_hero", "_logo", "_icon")
 assert not missing, f"missing art suffixes {missing} for appid {gid}"
 print(f"  Steam tile + 5 art files written for appid {gid} — installer shortcut logic proven")
 PY
-  then
     ok "installer shortcut + artwork land correctly (no Deck, no GPU)"
   else
     bad "assert shortcut+art layout"

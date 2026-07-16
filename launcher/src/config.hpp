@@ -82,16 +82,6 @@ struct Config {
   // Hot-swappable.
   int skip_seconds = 10;
 
-  // Phase 5 voice search (findings input-ux §13). Ships DISABLED: `kSbKeyMicrophone` does nothing
-  // on this build, so voice must click Leanback's own soft-mic button — and whether that button
-  // even exists under our Cobalt UA is the unverified V0 spike. A dead button is worse than a
-  // missing one.
-  bool voice_enabled = false;
-  int voice_hold_ms = 250;           // hold this long before the mic opens (debounces a stray tap)
-  std::string voice_duck = "pause";  // none | mute | pause — speakers sit ~15 cm from the mic array
-  bool voice_click_toggles = false;  // true when the page's mic control is tap-to-toggle, not hold
-  std::vector<std::string> voice_mic_selectors;
-
   // Phase 4/5 startup CDP policy, applied by the Navigator. `steer_av1` mirrors
   // quality.steer_av1_unsupported (AV1 hw decode on the Deck unproven/disputed — findings
   // durable/hardware.md); `mic_autogrant`
@@ -144,9 +134,19 @@ struct Config {
   // and no password. The legacy boolean `self_update` still parses (true -> auto, false -> off).
   SelfUpdateMode self_update_mode = SelfUpdateMode::Notify;
 
-  // Loads and parses the JSON at `path`. Returns nullopt on read/parse failure.
-  // NOTE: this is a minimal top-level-key extractor sufficient for app.json's shape; replace with a
-  // real JSON parser when the config grows nested structure that must round-trip.
+  // Loads and parses the JSON at `path`. Returns nullopt when the file cannot be READ, cannot be
+  // PARSED, is not a JSON object, or declares a schema_version newer than this launcher supports.
+  //
+  // Parse failure being representable is the point: app.json is hot-swappable (doc §6), so a
+  // half-written file is a normal event on that path, and the previous reader could only fail on
+  // "cannot read" — a corrupt config loaded as all-defaults, i.e. remote_debugging_port 0, i.e. no
+  // CDP and no input at all, behind one warning.
+  //
+  // A key that is present but of the wrong type, or out of range, does NOT fail the load: it warns
+  // and keeps the default (or clamps). A bad value in an emergency config push should degrade
+  // loudly, not take the app down. Keys the launcher does not understand are reported, never
+  // silently ignored. Binding is by exact JSON path (see kStringFields et al. in config.cpp) — the
+  // sections in app.json are real, not decorative.
   static std::optional<Config> load(const std::string& path);
 };
 

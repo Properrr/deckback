@@ -8,10 +8,19 @@
 #include <unistd.h>
 
 #include <array>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <format>
+#include <map>
+#include <mutex>
+#include <random>
+#include <thread>
+#include <utility>
+#include <vector>
 
 #include "log.hpp"
 #include "util.hpp"
@@ -343,219 +352,464 @@ std::optional<std::string> http_get(int fd, const std::string& host, int port,
 
 }  // namespace
 
-DevToolsClient::DevToolsClient(std::string host, int port)
-    : host_(std::move(host)), port_(port), rng_(std::random_device{}()) {}
+// ---- CdpSession ---------------------------------------------------------------------------------
+//
+// One socket per host:port, shared by every DevToolsClient handle. A reader thread owns the read
+// side and demultiplexes replies by CDP id into per-request promises, so a caller's wait never
+// blocks another caller's send. See the header for why this replaced seven independent sockets.
 
-DevToolsClient::~DevToolsClient() {
-  std::lock_guard lk(mutex_);
-  disconnect();
-}
-
-void DevToolsClient::disconnect() {
-  if (fd_ >= 0) close(fd_);
-  fd_ = -1;
-  rxbuf_.clear();
-}
-
-bool DevToolsClient::connected() {
-  std::lock_guard lk(mutex_);
-  return fd_ >= 0;
-}
-
-// GET /json/list, then pull the path out of the first target's webSocketDebuggerUrl.
-std::optional<std::string> DevToolsClient::discover_ws_path() {
-  int fd = connect_tcp(host_, port_, 1500);
-  if (fd < 0) return std::nullopt;
-  auto resp = http_get(fd, host_, port_, "/json/list");
-  close(fd);
-  if (!resp) return std::nullopt;
-
-  size_t k = resp->find("\"webSocketDebuggerUrl\"");
-  if (k == std::string::npos) return std::nullopt;
-  size_t q = resp->find('"', resp->find(':', k) + 1);
-  if (q == std::string::npos) return std::nullopt;
-  size_t end = resp->find('"', q + 1);
-  if (end == std::string::npos) return std::nullopt;
-  const std::string url = resp->substr(q + 1, end - q - 1);  // ws://host:port/devtools/page/ID
-
-  size_t scheme = url.find("://");
-  if (scheme == std::string::npos) return std::nullopt;
-  size_t slash = url.find('/', scheme + 3);
-  if (slash == std::string::npos) return "/";
-  return url.substr(slash);
-}
-
-bool DevToolsClient::ws_handshake(const std::string& path) {
-  unsigned char key_raw[16];
-  for (unsigned char& b : key_raw) b = static_cast<unsigned char>(rng_() & 0xFF);
-  const std::string key = base64(key_raw, sizeof key_raw);
-  const std::string req = std::format(
-      "GET {} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
-      "Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
-      path, host_, port_, key);
-  if (!send_all(req)) return false;
-
-  // Read until the end of the handshake response headers.
-  rxbuf_.clear();
-  const long deadline = mono_ms() + 2000;
-  while (rxbuf_.find("\r\n\r\n") == std::string::npos) {
-    long left = deadline - mono_ms();
-    if (left <= 0) return false;
-    pollfd pfd{fd_, POLLIN, 0};
-    if (poll(&pfd, 1, static_cast<int>(left)) <= 0) return false;
-    char buf[2048];
-    ssize_t n = recv(fd_, buf, sizeof buf, 0);
-    if (n <= 0) return false;
-    rxbuf_.append(buf, static_cast<size_t>(n));
-    if (rxbuf_.size() > 64 * 1024) return false;
+class CdpSession {
+ public:
+  CdpSession(std::string host, int port) : host_(std::move(host)), port_(port) {
+    rng_.seed(std::random_device{}());
   }
-  size_t header_end = rxbuf_.find("\r\n\r\n") + 4;
-  const std::string status = rxbuf_.substr(0, rxbuf_.find("\r\n"));
-  if (status.find(" 101") == std::string::npos) {
-    warn("devtools: WebSocket upgrade rejected: " + status);
-    return false;
-  }
-  rxbuf_.erase(0, header_end);  // any bytes past the headers are the first WS frame(s)
-  return true;
-}
 
-bool DevToolsClient::ensure_connected() {
-  if (fd_ >= 0) return true;
-  auto path = discover_ws_path();
-  if (!path) {
-    if (!warned_unreachable_) {
-      warn(std::format("devtools: no debug target on {}:{} (is remote-debugging-port set?)", host_,
-                       port_));
-      warned_unreachable_ = true;
+  ~CdpSession() {
+    {
+      std::lock_guard lk(conn_mu_);
+      stopping_ = true;
+      shutdown_locked();
     }
-    return false;
+    join_reader();
   }
-  fd_ = connect_tcp(host_, port_, 1500);
-  if (fd_ < 0) return false;
-  if (!ws_handshake(*path)) {
-    disconnect();
-    return false;
+
+  CdpSession(const CdpSession&) = delete;
+  CdpSession& operator=(const CdpSession&) = delete;
+
+  bool connected() {
+    std::lock_guard lk(conn_mu_);
+    return fd_ >= 0;
   }
-  warned_unreachable_ = false;
-  info("devtools: WebSocket session established");
-  // Re-arm the sticky state on the fresh target. Leanback tears the page target down on navigation,
-  // and a new target reverts to content_shell defaults — without this the app would fall back to
-  // the desktop redirect (UA) or lose codec steering / the mic grant after the first navigation.
-  // request() below sees fd_>=0 and won't recurse.
-  if (!sticky_ua_.empty()) apply_user_agent();
-  for (const std::string& s : sticky_scripts_) install_script(s);
-  if (!grant_origin_.empty()) apply_grant();
-  return true;
-}
 
-bool DevToolsClient::apply_user_agent() {
-  if (sticky_ua_.empty()) return true;
-  request("Network.enable", "{}");
-  return request("Network.setUserAgentOverride",
-                 std::format(R"({{"userAgent":"{}"}})", json_escape(sticky_ua_)))
-      .has_value();
-}
+  // Send `method` and wait for its reply. nullopt on transport error, CDP error, or timeout.
+  std::optional<std::string> request(std::string_view method, std::string_view params_json) {
+    if (!ensure_connected()) return std::nullopt;
 
-bool DevToolsClient::install_script(std::string_view source) {
-  request("Page.enable", "{}");
-  return request("Page.addScriptToEvaluateOnNewDocument",
-                 std::format(R"({{"source":"{}"}})", json_escape(source)))
-      .has_value();
-}
-
-bool DevToolsClient::apply_grant() {
-  if (grant_origin_.empty()) return true;
-  return request("Browser.grantPermissions",
-                 std::format(R"({{"origin":"{}","permissions":["{}"]}})",
-                             json_escape(grant_origin_), json_escape(grant_perm_)))
-      .has_value();
-}
-
-bool DevToolsClient::send_all(const std::string& bytes) {
-  size_t off = 0;
-  while (off < bytes.size()) {
-    ssize_t n = ::send(fd_, bytes.data() + off, bytes.size() - off, MSG_NOSIGNAL);
-    if (n < 0) {
-      if (errno == EINTR) continue;
-      return false;
+    const uint64_t id = next_id_.fetch_add(1) + 1;
+    auto slot = std::make_shared<Pending>();
+    {
+      std::lock_guard lk(pending_mu_);
+      pending_[id] = slot;
     }
-    off += static_cast<size_t>(n);
-  }
-  return true;
-}
 
-std::optional<ws::Frame> DevToolsClient::read_frame(long deadline_ms) {
-  for (;;) {
-    ws::DecodeResult dr = ws::decode_frame(rxbuf_);
-    if (dr.status == ws::DecodeResult::Error) return std::nullopt;
-    if (dr.status == ws::DecodeResult::Ok) {
-      rxbuf_.erase(0, dr.consumed);
-      return dr.frame;
-    }
-    long left = deadline_ms - mono_ms();
-    if (left <= 0) return std::nullopt;
-    pollfd pfd{fd_, POLLIN, 0};
-    if (poll(&pfd, 1, static_cast<int>(left)) <= 0) return std::nullopt;
-    char buf[4096];
-    ssize_t n = recv(fd_, buf, sizeof buf, 0);
-    if (n <= 0) return std::nullopt;
-    rxbuf_.append(buf, static_cast<size_t>(n));
-  }
-}
-
-std::optional<std::string> DevToolsClient::request(std::string_view method,
-                                                   std::string_view params_json) {
-  if (!ensure_connected()) return std::nullopt;
-
-  const uint64_t id = ++next_id_;
-  const std::string msg =
-      std::format(R"({{"id":{},"method":"{}","params":{}}})", id, method, params_json);
-  const uint32_t mask = rng_();
-  if (!send_all(ws::encode_frame(ws::kText, msg, /*masked=*/true, mask))) {
-    disconnect();
-    return std::nullopt;
-  }
-
-  const long deadline = mono_ms() + 2500;
-  for (;;) {
-    auto frame = read_frame(deadline);
-    if (!frame) {
-      disconnect();
+    const std::string msg =
+        std::format(R"({{"id":{},"method":"{}","params":{}}})", id, method, params_json);
+    if (!send_text(msg)) {
+      forget(id);
+      drop_connection();
       return std::nullopt;
     }
-    switch (frame->opcode) {
-      case ws::kPing:
-        send_all(ws::encode_frame(ws::kPong, frame->payload, true, rng_()));
-        continue;
-      case ws::kClose:
-        disconnect();
-        return std::nullopt;
-      case ws::kText:
-        break;
-      default:
-        continue;  // pong / binary / continuation — ignore
+
+    // The wait is OUTSIDE every lock. This is the whole point: seven clients existed because the
+    // old request() held its mutex across the round trip, so one poll could stall key injection.
+    std::unique_lock lk(slot->mu);
+    const bool got = slot->cv.wait_for(lk, std::chrono::milliseconds(kRequestTimeoutMs),
+                                       [&] { return slot->done; });
+    std::optional<std::string> body = got ? std::move(slot->body) : std::nullopt;
+    lk.unlock();
+    forget(id);
+
+    if (!got) {
+      warn(std::format("devtools: {} timed out", method));
+      drop_connection();  // a reply we stopped waiting for would desync nothing, but a dead peer
+                          // would
+      return std::nullopt;
     }
-    const std::string& body = frame->payload;
-    auto rid = response_id(body);
-    if (!rid || *rid != id) continue;  // a CDP event (no id) or a stale response
-    if (body.find("\"exceptionDetails\"") != std::string::npos ||
-        body.find("\"error\":") != std::string::npos) {
+    if (!body) return std::nullopt;  // reader saw the socket die
+    if (body->find("\"exceptionDetails\"") != std::string::npos ||
+        body->find("\"error\":") != std::string::npos) {
       warn(std::format("devtools: {} returned an error", method));
       return std::nullopt;
     }
     return body;
   }
+
+  // Sticky state lives here, not on a handle: it is a property of the CONNECTION, so it is armed
+  // once and re-applied by whichever thread reconnects -- not only on the poll tick of whichever
+  // client happened to own the socket that carried it.
+  bool set_user_agent(std::string_view ua) {
+    {
+      std::lock_guard lk(sticky_mu_);
+      sticky_ua_.assign(ua);
+    }
+    return apply_user_agent();
+  }
+
+  bool add_sticky_script(std::string_view source) {
+    {
+      std::lock_guard lk(sticky_mu_);
+      // Idempotent: re-arming on reconnect must not grow the list, and two handles installing the
+      // same script must not double-inject it into the page.
+      for (const std::string& s : sticky_scripts_)
+        if (s == source) return install_script(source);
+      sticky_scripts_.emplace_back(source);
+    }
+    return install_script(source);
+  }
+
+  bool set_grant(std::string_view origin, std::string_view permission) {
+    {
+      std::lock_guard lk(sticky_mu_);
+      grant_origin_.assign(origin);
+      grant_perm_.assign(permission);
+    }
+    return apply_grant();
+  }
+
+ private:
+  static constexpr long kRequestTimeoutMs = 2500;
+
+  struct Pending {
+    std::mutex mu;
+    std::condition_variable cv;
+    bool done = false;
+    std::optional<std::string> body;
+  };
+
+  void forget(uint64_t id) {
+    std::lock_guard lk(pending_mu_);
+    pending_.erase(id);
+  }
+
+  // Fail every in-flight request. Without this a caller would sit out its full timeout after the
+  // socket is already known dead.
+  void fail_all_pending() {
+    std::map<uint64_t, std::shared_ptr<Pending>> taken;
+    {
+      std::lock_guard lk(pending_mu_);
+      taken.swap(pending_);
+    }
+    for (auto& [id, slot] : taken) {
+      std::lock_guard lk(slot->mu);
+      slot->done = true;
+      slot->body = std::nullopt;
+      slot->cv.notify_all();
+    }
+  }
+
+  void shutdown_locked() {  // caller holds conn_mu_
+    if (fd_ >= 0) ::shutdown(fd_, SHUT_RDWR);
+  }
+
+  void join_reader() {
+    if (reader_.joinable()) reader_.join();
+  }
+
+  void drop_connection() {
+    {
+      std::lock_guard lk(conn_mu_);
+      shutdown_locked();
+    }
+    fail_all_pending();
+  }
+
+  bool send_text(const std::string& msg) {
+    std::lock_guard lk(send_mu_);  // held for the write only, never across a wait
+    if (fd_ < 0) return false;
+    const uint32_t mask = rng_();
+    return send_all(ws::encode_frame(ws::kText, msg, /*masked=*/true, mask));
+  }
+
+  bool send_all(const std::string& bytes) {
+    size_t off = 0;
+    while (off < bytes.size()) {
+      const ssize_t n = ::send(fd_, bytes.data() + off, bytes.size() - off, MSG_NOSIGNAL);
+      if (n < 0) {
+        if (errno == EINTR) continue;
+        return false;
+      }
+      off += static_cast<size_t>(n);
+    }
+    return true;
+  }
+
+  bool ensure_connected() {
+    std::unique_lock lk(conn_mu_);
+    if (stopping_) return false;
+    if (fd_ >= 0) return true;
+
+    // The previous reader has exited (or is about to); join before replacing it.
+    lk.unlock();
+    join_reader();
+    lk.lock();
+    if (stopping_) return false;
+    if (fd_ >= 0) return true;  // another thread won the race
+
+    auto path = discover_ws_path();
+    if (!path) {
+      if (!warned_unreachable_) {
+        warn(std::format("devtools: no debug target on {}:{} (is remote-debugging-port set?)",
+                         host_, port_));
+        warned_unreachable_ = true;
+      }
+      return false;
+    }
+    const int fd = connect_tcp(host_, port_, 1500);
+    if (fd < 0) return false;
+    fd_ = fd;
+    if (!ws_handshake(*path)) {
+      close(fd_);
+      fd_ = -1;
+      return false;
+    }
+    warned_unreachable_ = false;
+    info("devtools: WebSocket session established");
+    reader_ = std::thread([this] { read_loop(); });
+    lk.unlock();
+
+    // Re-arm the sticky state on the fresh target. Leanback tears the page target down on
+    // navigation, and a new target reverts to content_shell defaults -- without this the app would
+    // fall back to the desktop redirect (UA) or lose codec steering / the mic grant.
+    apply_user_agent();
+    {
+      std::vector<std::string> scripts;
+      {
+        std::lock_guard sk(sticky_mu_);
+        scripts = sticky_scripts_;
+      }
+      for (const std::string& s : scripts) install_script(s);
+    }
+    apply_grant();
+    return true;
+  }
+
+  // Sole owner of the read side. Runs until the socket dies, then fails everything in flight.
+  void read_loop() {
+    std::string rx;
+    for (;;) {
+      pollfd pfd{fd_, POLLIN, 0};
+      const int pr = poll(&pfd, 1, 250);
+      {
+        std::lock_guard lk(conn_mu_);
+        if (stopping_) break;
+      }
+      if (pr < 0) {
+        if (errno == EINTR) continue;
+        break;
+      }
+      if (pr == 0) continue;
+
+      char buf[4096];
+      const ssize_t n = recv(fd_, buf, sizeof buf, 0);
+      if (n <= 0) {
+        if (n < 0 && errno == EINTR) continue;
+        break;
+      }
+      rx.append(buf, static_cast<size_t>(n));
+
+      bool fatal = false;
+      for (;;) {
+        ws::DecodeResult dr = ws::decode_frame(rx);
+        if (dr.status == ws::DecodeResult::NeedMore) break;
+        if (dr.status == ws::DecodeResult::Error) {
+          fatal = true;
+          break;
+        }
+        rx.erase(0, dr.consumed);
+        if (!on_frame(dr.frame)) {
+          fatal = true;
+          break;
+        }
+      }
+      if (fatal) break;
+    }
+
+    {
+      std::lock_guard lk(conn_mu_);
+      if (fd_ >= 0) {
+        close(fd_);
+        fd_ = -1;
+      }
+    }
+    fail_all_pending();
+  }
+
+  // Returns false when the connection must be torn down.
+  bool on_frame(const ws::Frame& f) {
+    switch (f.opcode) {
+      case ws::kPing: {
+        std::lock_guard lk(send_mu_);
+        if (fd_ >= 0) send_all(ws::encode_frame(ws::kPong, f.payload, true, rng_()));
+        return true;
+      }
+      case ws::kClose:
+        return false;
+      case ws::kText:
+        break;
+      default:
+        return true;  // pong / binary / continuation
+    }
+    // A reply carries an id; a CDP EVENT does not, and is dropped. Events are where an
+    // event-driven navigator/player would hook in -- the demux is the prerequisite for that.
+    auto id = response_id(f.payload);
+    if (!id) return true;
+    std::shared_ptr<Pending> slot;
+    {
+      std::lock_guard lk(pending_mu_);
+      auto it = pending_.find(*id);
+      if (it == pending_.end()) return true;  // a reply nobody is waiting for any more
+      slot = it->second;
+    }
+    {
+      std::lock_guard lk(slot->mu);
+      slot->done = true;
+      slot->body = f.payload;
+    }
+    slot->cv.notify_all();
+    return true;
+  }
+
+  bool apply_user_agent() {
+    std::string ua;
+    {
+      std::lock_guard lk(sticky_mu_);
+      ua = sticky_ua_;
+    }
+    if (ua.empty()) return true;
+    request("Network.enable", "{}");
+    return request("Network.setUserAgentOverride",
+                   std::format(R"({{"userAgent":"{}"}})", json_escape(ua)))
+        .has_value();
+  }
+
+  bool install_script(std::string_view source) {
+    request("Page.enable", "{}");
+    return request("Page.addScriptToEvaluateOnNewDocument",
+                   std::format(R"({{"source":"{}"}})", json_escape(source)))
+        .has_value();
+  }
+
+  bool apply_grant() {
+    std::string origin, perm;
+    {
+      std::lock_guard lk(sticky_mu_);
+      origin = grant_origin_;
+      perm = grant_perm_;
+    }
+    if (origin.empty()) return true;
+    return request("Browser.grantPermissions",
+                   std::format(R"({{"origin":"{}","permissions":["{}"]}})", json_escape(origin),
+                               json_escape(perm)))
+        .has_value();
+  }
+
+  // GET /json/list, then pull the path out of the first target's webSocketDebuggerUrl. Now done
+  // ONCE per endpoint rather than once per client, so every caller is pinned to the same target --
+  // seven independent discoveries could land on different ones after a Leanback teardown.
+  std::optional<std::string> discover_ws_path() {
+    const int fd = connect_tcp(host_, port_, 1500);
+    if (fd < 0) return std::nullopt;
+    auto resp = http_get(fd, host_, port_, "/json/list");
+    close(fd);
+    if (!resp) return std::nullopt;
+
+    size_t k = resp->find("\"webSocketDebuggerUrl\"");
+    if (k == std::string::npos) return std::nullopt;
+    size_t q = resp->find('"', resp->find(':', k) + 1);
+    if (q == std::string::npos) return std::nullopt;
+    size_t end = resp->find('"', q + 1);
+    if (end == std::string::npos) return std::nullopt;
+    const std::string url = resp->substr(q + 1, end - q - 1);  // ws://host:port/devtools/page/ID
+
+    size_t scheme = url.find("://");
+    if (scheme == std::string::npos) return std::nullopt;
+    size_t slash = url.find('/', scheme + 3);
+    if (slash == std::string::npos) return "/";
+    return url.substr(slash);
+  }
+
+  // Runs before the reader thread exists, so it may read fd_ directly.
+  bool ws_handshake(const std::string& path) {
+    unsigned char key_raw[16];
+    for (unsigned char& b : key_raw) b = static_cast<unsigned char>(rng_() & 0xFF);
+    const std::string key = base64(key_raw, sizeof key_raw);
+    const std::string req = std::format(
+        "GET {} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
+        "Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
+        path, host_, port_, key);
+    if (!send_all(req)) return false;
+
+    std::string rx;
+    const long deadline = mono_ms() + 2000;
+    while (rx.find("\r\n\r\n") == std::string::npos) {
+      const long left = deadline - mono_ms();
+      if (left <= 0) return false;
+      pollfd pfd{fd_, POLLIN, 0};
+      if (poll(&pfd, 1, static_cast<int>(left)) <= 0) return false;
+      char buf[2048];
+      const ssize_t n = recv(fd_, buf, sizeof buf, 0);
+      if (n <= 0) return false;
+      rx.append(buf, static_cast<size_t>(n));
+      if (rx.size() > 64 * 1024) return false;
+    }
+    const std::string status = rx.substr(0, rx.find("\r\n"));
+    if (status.find(" 101") == std::string::npos) {
+      warn("devtools: WebSocket upgrade rejected: " + status);
+      return false;
+    }
+    // Anything past the headers is the first WS frame(s) -- but the fake server and Chromium both
+    // wait for our first request, so there is nothing to carry over in practice. Assert the
+    // assumption rather than silently dropping bytes.
+    const size_t header_end = rx.find("\r\n\r\n") + 4;
+    if (header_end != rx.size())
+      warn("devtools: unexpected bytes immediately after the WebSocket handshake");
+    return true;
+  }
+
+  std::string host_;
+  int port_;
+
+  std::mutex conn_mu_;  // guards fd_/stopping_/warned_unreachable_ and serializes connect attempts
+  int fd_ = -1;
+  bool stopping_ = false;
+  bool warned_unreachable_ = false;
+  std::thread reader_;
+
+  std::mutex send_mu_;  // serializes writers on the socket
+  std::mt19937 rng_;
+
+  std::mutex pending_mu_;
+  std::map<uint64_t, std::shared_ptr<Pending>> pending_;
+  std::atomic<uint64_t> next_id_{0};
+
+  std::mutex sticky_mu_;
+  std::string sticky_ua_;
+  std::vector<std::string> sticky_scripts_;
+  std::string grant_origin_, grant_perm_;
+};
+
+namespace {
+
+// Process-wide registry, keyed by endpoint and held weakly: the session dies with its last handle,
+// joining the reader thread. Weak rather than strong so a test's FakeServer on an ephemeral port
+// cannot be resurrected by a later test that happens to draw the same port.
+std::mutex g_sessions_mu;
+std::map<std::pair<std::string, int>, std::weak_ptr<CdpSession>> g_sessions;
+
+std::shared_ptr<CdpSession> session_for(const std::string& host, int port) {
+  std::lock_guard lk(g_sessions_mu);
+  const auto key = std::make_pair(host, port);
+  if (auto it = g_sessions.find(key); it != g_sessions.end()) {
+    if (auto live = it->second.lock()) return live;
+  }
+  auto s = std::make_shared<CdpSession>(host, port);
+  g_sessions[key] = s;
+  return s;
 }
 
-std::optional<std::string> DevToolsClient::evaluate(std::string_view expression) {
-  return request("Runtime.evaluate",
-                 std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
-                             json_escape(expression)));
-}
+}  // namespace
+
+DevToolsClient::DevToolsClient(std::string host, int port) : session_(session_for(host, port)) {}
+
+DevToolsClient::~DevToolsClient() = default;
+
+bool DevToolsClient::connected() { return session_->connected(); }
 
 std::optional<std::string> DevToolsClient::eval_token(std::string_view expression) {
-  std::lock_guard lk(mutex_);
-  auto body = evaluate(expression);
+  auto body =
+      session_->request("Runtime.evaluate",
+                        std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
+                                    json_escape(expression)));
   if (!body) return std::nullopt;
   return extract_value_token(*body);
 }
@@ -585,33 +839,33 @@ std::optional<std::string> DevToolsClient::eval_string(std::string_view expressi
 }
 
 bool DevToolsClient::eval_void(std::string_view expression) {
-  std::lock_guard lk(mutex_);
-  return evaluate(expression).has_value();
+  return session_
+      ->request("Runtime.evaluate",
+                std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
+                            json_escape(expression)))
+      .has_value();
 }
 
 bool DevToolsClient::set_user_agent_override(std::string_view ua) {
-  std::lock_guard lk(mutex_);
-  sticky_ua_.assign(ua);
-  return apply_user_agent();
+  return session_->set_user_agent(ua);
 }
 
 bool DevToolsClient::navigate(std::string_view url) { return navigate_checked(url).sent; }
 
 DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url) {
-  std::lock_guard lk(mutex_);
-  request("Page.enable", "{}");
-  auto body = request("Page.navigate", std::format(R"({{"url":"{}"}})", json_escape(url)));
+  session_->request("Page.enable", "{}");
+  auto body =
+      session_->request("Page.navigate", std::format(R"({{"url":"{}"}})", json_escape(url)));
   if (!body) return {};
 
   NavStatus st;
   st.sent = true;
   // Page.navigate answers with `errorText` on a failed navigation and omits the field on success —
-  // it does not report failure as a CDP error, so `request()` returning a body proves nothing.
+  // it does not report failure as a CDP error, so a body proves nothing.
   const std::string needle = "\"errorText\":\"";
   auto at = body->find(needle);
   if (at != std::string::npos) {
     const size_t start = at + needle.size();
-    // Find the closing quote, honouring backslash escapes.
     size_t end = start;
     while (end < body->size() && (*body)[end] != '"') end += ((*body)[end] == '\\') ? 2 : 1;
     if (end <= body->size())
@@ -621,24 +875,17 @@ DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url)
 }
 
 bool DevToolsClient::reload() {
-  std::lock_guard lk(mutex_);
-  request("Page.enable", "{}");
-  return request("Page.reload", R"({"ignoreCache":true})").has_value();
+  session_->request("Page.enable", "{}");
+  return session_->request("Page.reload", R"({"ignoreCache":true})").has_value();
 }
 
 bool DevToolsClient::add_script_on_new_document(std::string_view source) {
-  std::lock_guard lk(mutex_);
-  sticky_scripts_.emplace_back(source);
-  return install_script(source);
+  return session_->add_sticky_script(source);
 }
 
 bool DevToolsClient::grant_permissions(std::string_view origin, std::string_view permission) {
-  std::lock_guard lk(mutex_);
-  grant_origin_.assign(origin);
-  grant_perm_.assign(permission);
-  return apply_grant();
+  return session_->set_grant(origin, permission);
 }
-
 namespace {
 // A fully-resolved key event: what Blink needs to synthesize a trusted keydown/keyup pair.
 // `text` is non-empty only for printable keys — Blink derives the charCode from it, which is what
@@ -720,7 +967,6 @@ std::optional<KeySpec> key_spec(std::string_view name) {
   return std::nullopt;
 }
 }  // namespace
-
 bool DevToolsClient::key_supported(std::string_view name) { return key_spec(name).has_value(); }
 
 bool DevToolsClient::dispatch_key(std::string_view name, int modifiers) {
@@ -739,11 +985,11 @@ bool DevToolsClient::dispatch_key(std::string_view name, int modifiers) {
   if (printable) fields += std::format(R"(,"text":"{}")", json_escape(spec->text));
   const std::string down_type = printable ? "keyDown" : "rawKeyDown";
 
-  std::lock_guard lk(mutex_);
-  bool ok =
-      request("Input.dispatchKeyEvent", std::format(R"({{"type":"{}",{}}})", down_type, fields))
-          .has_value();
-  ok = request("Input.dispatchKeyEvent", std::format(R"({{"type":"keyUp",{}}})", fields))
+  bool ok = session_
+                ->request("Input.dispatchKeyEvent",
+                          std::format(R"({{"type":"{}",{}}})", down_type, fields))
+                .has_value();
+  ok = session_->request("Input.dispatchKeyEvent", std::format(R"({{"type":"keyUp",{}}})", fields))
            .has_value() &&
        ok;
   return ok;
@@ -751,11 +997,11 @@ bool DevToolsClient::dispatch_key(std::string_view name, int modifiers) {
 
 bool DevToolsClient::dispatch_mouse(std::string_view type, double x, double y,
                                     std::string_view button, int buttons, int click_count) {
-  std::lock_guard lk(mutex_);
-  return request("Input.dispatchMouseEvent",
-                 std::format(
-                     R"({{"type":"{}","x":{},"y":{},"button":"{}","buttons":{},"clickCount":{}}})",
-                     type, x, y, button, buttons, click_count))
+  return session_
+      ->request(
+          "Input.dispatchMouseEvent",
+          std::format(R"({{"type":"{}","x":{},"y":{},"button":"{}","buttons":{},"clickCount":{}}})",
+                      type, x, y, button, buttons, click_count))
       .has_value();
 }
 

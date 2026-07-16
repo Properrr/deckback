@@ -53,26 +53,11 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       touch_toast_(opts.touch.toast),
       touch_haptic_(opts.touch.haptic),
       layers_(opts.layers),
-      voice_(opts.voice),
-      hold_(opts.voice ? opts.voice->hold_ms() : 0),
       onboarding_(opts.onboarding),
       update_prompt_(opts.update_prompt),
       osd_(opts.osd),
       fast_cfg_(opts.fast_scroll) {
   KeymapConfig& keymap = opts.keymap;
-  // Voice is not a DOM key. When it is enabled, take its control out of the button map so it is not
-  // reported as an unmapped binding; when it is not, leave it there so startup says so out loud.
-  if (voice_) {
-    voice_code_ = find_control_for_action(keymap.base, "voice_search");
-    if (voice_code_ < 0)
-      warn(
-          "input: voice is enabled but no control is bound to 'voice_search' — hold-to-talk is "
-          "off");
-    else
-      info(std::format("input: hold-to-talk on evdev code {} ({} ms)", voice_code_,
-                       voice_->hold_ms()));
-    keymap.base = without_action(keymap.base, "voice_search");
-  }
   // Menu is the OSD's fixed physical entry point, not a `show_controls` keymap action. The OSD
   // must remain reachable after a hot-swapped keymap removes or repurposes that legacy action.
   // Drop the old action anywhere it occurs so it can neither dispatch nor be reported as unmapped.
@@ -340,18 +325,6 @@ void GamepadInput::announce_touch_lock(bool locked) {
     haptic_.rumble(0x3000, 0x8000, 90);
 }
 
-bool GamepadInput::handle_voice(int code, int value) {
-  if (!voice_ || voice_code_ < 0 || code != voice_code_) return false;
-  const long now = mono_ms();
-  if (value == 1) {
-    hold_.on_press(now);  // never starts here — a stray tap must not open the mic
-  } else if (value == 0) {
-    if (hold_.on_release(now) == HoldToTalk::Action::Stop) voice_->stop();
-  }
-  // value == 2 is kernel auto-repeat while held: nothing to do; the loop tick drives the start.
-  return true;  // the voice button is ours; never also dispatch it as a mapped button
-}
-
 void GamepadInput::osd_event(int type, int code, int value) {
   if (type == EV_KEY) {
     if (value == 1) {  // press edge; fixed nav buttons
@@ -366,14 +339,10 @@ void GamepadInput::osd_event(int type, int code, int value) {
       else if (code == osd_rb_ && osd_rb_ >= 0)
         osd_->exec("tab_next");
     }
-    // Modal capture must not freeze physical state machines that started before the menu opened.
-    // In particular, swallowing the voice-button release leaves the page mic pressed and its
-    // playback ducked; swallowing a trigger release leaves its next press dead or its modifier
-    // layer stuck. Presses still stay modal — only release bookkeeping is allowed through.
-    if (value == 0) {
-      handle_chord(code, value);
-      handle_voice(code, value);
-    }
+    // Modal capture must not freeze physical state machines that started before the menu opened:
+    // swallowing a trigger release leaves its next press dead or its modifier layer stuck. Presses
+    // still stay modal — only release bookkeeping is allowed through.
+    if (value == 0) handle_chord(code, value);
     return;  // swallow every button while the menu is up
   }
   if (type != EV_ABS) return;
@@ -441,7 +410,6 @@ void GamepadInput::handle_event(int type, int code, int value) {
   if (osd_open_edge(type, code, value)) return;
   if (type == EV_KEY) {
     if (handle_chord(code, value)) return;
-    if (handle_voice(code, value)) return;
     if (value != 1) return;  // press edge only (ignore release=0 and kernel autorepeat=2)
     const std::string key = resolve_button(maps_, code, layer(), lt_down_, rt_down_);
     if (key.empty()) return;  // unbound, or absorbed by a held modifier layer
@@ -527,11 +495,9 @@ void GamepadInput::loop() {
       if (d < timeout) timeout = d;
     };
     // Directional auto-repeat, then the timers that mature with no further evdev event coming: the
-    // right stick held at a constant deflection, the hold-to-talk debounce, and the
-    // deliberate-unlock chord hold.
+    // right stick held at a constant deflection, and the deliberate-unlock chord hold.
     if (dir_key_) consider(next_repeat_ms_);
     if (fast_key_) consider(fast_next_ms_);
-    if (hold_.pending()) consider(hold_.deadline_ms());
     if (chord_.pending()) consider(chord_.deadline_ms());
 
     std::vector<pollfd> pfds;
@@ -567,8 +533,6 @@ void GamepadInput::loop() {
     // the page behind it. Not the OSD: while it is open a held direction drives the menu.
     if (onboarding_ && onboarding_->visible()) set_direction(nullptr);
 
-    // Hold-to-talk matures on a timer, not on an event.
-    if (hold_.pending() && hold_.on_tick(mono_ms()) == HoldToTalk::Action::Start) voice_->start();
     if (chord_.pending()) apply_touch_lock(chord_.on_tick(mono_ms()));
 
     // Directional auto-repeat with acceleration.
@@ -609,7 +573,6 @@ void GamepadInput::loop() {
   }
   close_devices();
   haptic_.detach();
-  if (voice_) voice_->stop();                      // never leave the mic open (or playback ducked)
   if (chord_.locked()) touch_.set_blocked(false);  // never leave the touchscreen grabbed on exit
 }
 

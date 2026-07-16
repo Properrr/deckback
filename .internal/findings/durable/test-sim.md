@@ -1,6 +1,100 @@
 # Containerized test sim (SteamOS/gamescope-in-Docker)
 
-## Status: Phase 2 (reconnect drive) LANDED 2026-07-16 — `just sim` runs four GPU-independent suites green in Docker
+## ★ CORRECTION 2026-07-16 — the sim was not SteamOS, and `reconnect` had never run here. Both fixed.
+
+Found while re-running the sim on a **native Linux host** (`7.0.0-27-generic`); the Phase 1/2 work
+below was spiked and greened on **WSL2**, and that difference hid both problems.
+
+### 1. The base was `archlinux:latest`, which is NOT SteamOS — so `launcher` proved less than it said
+
+`docker/sim.Dockerfile` read `FROM archlinux:latest` under "Arch base — honouring 'SteamOS is
+Arch-based'". True, and not enough: archlinux:latest is a ROLLING release drifting continuously ahead
+of SteamOS 3.x, which is a FROZEN Arch snapshot plus Valve's holo/jupiter packages. Measured the same
+day against the Deck (SteamOS **3.8.15**, build 20260715.1, board **Galileo/OLED**):
+
+| package | Deck | archlinux:latest |
+|---|---|---|
+| glibc | 2.41 | 2.43 |
+| **gcc-libs** | **15.1.1** | **16.1.1** — a full major ahead |
+| **systemd-libs** | **257.7** | **261.1** — sd-bus is the updater's transport |
+| curl | 8.15.0 | 8.21.0 |
+| **flatpak** | **1.16.6** | **1.18.0** — the portal IS the self-update foundation |
+| libevdev | 1.13.4 | 1.13.6 |
+| libxcb | 1.17.0-1 | 1.17.0-1 (the only exact match) |
+
+So `ok - launcher builds + L0 green on Arch` was an honest sentence answering a **different question**
+than a reader takes from it: it proved the launcher builds against *tomorrow's* glibc/gcc/libsystemd,
+not the Deck's, compiling with **GCC 16** — neither of the two toolchains doc §13.2 pins (Clang >=18 /
+GCC 14) nor the one SteamOS ships. Same family as `just power` reporting `mean 0.00 W ... PASS` off a
+missing battery node: a check aimed slightly past its target. Note especially the **portal suite**,
+the whole foundation of self-update, was validating against a flatpak the Deck does not run.
+
+**Fixed** by `docker/steamos.Dockerfile`: a two-stage build that bootstraps a pure SteamOS rootfs from
+Valve's real mirror (archlinux is used only to run `pacman` and nothing from it survives into the
+image). Every installed package now resolves to the **exact version string the Deck reports** —
+verified: glibc `2.41+r65+ge7c419a29575-1`, gcc `15.1.1+r7+gf36ec88aa85a-1`, systemd-libs `257.7-2.5`,
+curl `8.15.0-1`, libpulse `17.0+r43+g3e2bb8a1e-1`, libxcb `1.17.0-1`, libevdev `1.13.4-1`, flatpak
+`1:1.16.6-1.1`, bubblewrap `0.11.0-1`. The launcher builds and all 21 L0 tests pass on it.
+
+**The repos were READ OFF THE DEVICE, never guessed.** `scripts/sim/capture-deck-baseline.sh` pulls
+the unit's `/etc/os-release`, package versions and its own `/etc/pacman.conf` + mirrorlist into
+`docker/steamos-baseline.env`. The branch is **`3.8.1x`** (`jupiter-3.8.1x`, `holo-3.8.1x`,
+`core-3.8.1x`, …) off `https://steamdeck-packages.steamos.cloud/archlinux-mirror/$repo/os/$arch`.
+Guessing would have produced "holo-3.5" and been silently wrong — this is the no-guessing rule the
+keymap work already refuses to break, applied to the sim.
+
+**On the pin.** The gcc/glibc pin exists for REPRODUCIBILITY, and it is worth being exact about what
+it does not mean: the Deck never compiles anything. The shipped launcher is built by the **Flatpak
+SDK's GCC** (`org.freedesktop.Platform//25.08`, GCC 14) and runs against that runtime's libs, so
+SteamOS's compiler is **not** the release toolchain and must never be described as one. What the pin
+buys: archlinux:latest silently swapped the compiler between runs, so a green sim result was not
+reproducible and its toolchain was nobody's. The Dockerfile now **fails the build** on drift
+(`PIN DRIFT: gcc is X, pinned to Y`) rather than drifting quietly — verified with a bogus pin.
+
+### 2. `reconnect` was green only on a permissive host, and the requirement was never stated
+
+`just sim reconnect` failed here — `bwrap: Failed to make / slave: Permission denied` — tripping the
+positive control ("monitor never came up"). Verified **on `main`**, so not a regression: **this suite
+had never run on a native Linux host at all.** Confirmed cause: `kernel.apparmor_restrict_unprivileged_userns = 1`
+(Ubuntu >= 23.10), which WSL2 does not set. `run.sh` passed only `--security-opt seccomp=unconfined`.
+
+Measured minimum, each one load-bearing — `--privileged` buys **nothing** over this set:
+
+| flag | without it |
+|---|---|
+| `--security-opt seccomp=unconfined` | docker's default seccomp blocks `unshare` |
+| `--security-opt apparmor=unconfined` | `bwrap: Failed to make / slave: Permission denied` |
+| `--cap-add SYS_ADMIN` | `bwrap: setting up uid map: Permission denied` |
+
+With all three, all four suites are green here — **including `reconnect`, which now genuinely passes
+on this host for the first time.**
+
+The exit code was wrong in the same breath: bwrap being denied a privilege is an ENVIRONMENT failure
+(**3**) and the suite reported **2 = the product is wrong** — the precise category error HARNESS §1
+exists to prevent, committed by the harness itself. A reader trusting the taxonomy would hunt a
+reconnect bug that isn't there. (Still open: `incontainer.sh` maps every `bad()` to exit 2. The
+bwrap-privilege case specifically should be a 3.)
+
+### What none of this changes
+
+A SteamOS-userspace container still has **no GPU, no VA-API, no gamescope, no battery, no ACPI**. The
+exit-6 refusal below is untouched. Matching userspace makes the **build** and **D-Bus** layers
+faithful and widens **nothing** else. `tests/harness/test_sim_guardrail.sh` now pins all of it (14
+checks): the hardware refusals, that `run.sh` builds the SteamOS image, that `incontainer.sh` asserts
+`DECKBACK_SIM_BASE=steamos` before running anything (a wrong image exits 3, verified), that all three
+bwrap flags are granted, and that the toolchain pin fails the build on drift.
+
+### For the next SteamOS update
+
+Re-run `scripts/sim/capture-deck-baseline.sh` against a Deck. **The git diff of
+`docker/steamos-baseline.env` IS the upgrade note** — it names exactly what moved under the launcher.
+Bump `DECKBACK_STEAMOS_BRANCH` / `DECKBACK_STEAMOS_GCC` / `DECKBACK_STEAMOS_GLIBC` in
+`docker/steamos.Dockerfile` to match, then re-run `just sim all` before trusting any prior green. The
+build refuses to proceed on an unbumped pin, so this cannot be forgotten silently. The baseline
+records **one unit** — Galileo/OLED; an LCD (Jupiter) baseline would legitimately differ and has
+never been captured (durable/hardware.md).
+
+## Status: Phase 2 (reconnect drive) LANDED 2026-07-16 — `just sim` runs four GPU-independent suites green on a real SteamOS 3.8.1x userspace
 
 Landed and green (`just sim`, `docker/sim.Dockerfile` + `scripts/sim/run.sh` + `incontainer.sh`):
 - **`launcher`** — the out-of-tree launcher builds + all 21 L0 tests pass on **Arch** (not just the

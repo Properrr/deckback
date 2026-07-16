@@ -93,7 +93,6 @@ class FakeServer {
   void set_player_open(bool p) { player_open_.store(p); }
   void set_text_focused(bool p) { text_focused_.store(p); }
   // Whether the page exposes a soft-mic button (the V0 question). Default: it does.
-  void set_mic_present(bool p) { mic_present_.store(p); }
 
   // Page.navigate fails with this errorText for any URL except about:blank. "" = navigations
   // succeed. Models a network outage: `about:blank` still commits, so the error page can be drawn.
@@ -118,6 +117,13 @@ class FakeServer {
   // same-URL document reload: the old local `button_shown_` flag survives, the DOM does not.
   void set_osd_button_present(bool present) { osd_button_present_.store(present); }
 
+  // How many WebSocket sessions and /json/list probes this server has served. Every DevToolsClient
+  // for one host:port shares a single CdpSession, so N clients must produce exactly ONE of each --
+  // this is the assertion behind that claim. Note this fake serves connections SERIALLY, so the
+  // seven-independent-sockets design could not even have passed the test below.
+  int ws_upgrades() const { return ws_upgrades_.load(); }
+  int http_gets() const { return http_gets_.load(); }
+
   // Every CDP text frame the client sent, in order. Lets a test assert on the *wire format* of an
   // Input.dispatchKeyEvent rather than on our own return value (TEST-PLAN §0: never assert on a
   // value we chose). `take_requests` drains, so each test starts from a clean slate.
@@ -139,11 +145,13 @@ class FakeServer {
   void handle(int c) {
     std::string req = recv_until(c, "\r\n\r\n");
     if (req.find("Upgrade: websocket") != std::string::npos) {
+      ws_upgrades_.fetch_add(1);
       send_str(c,
                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                "Connection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n");
       serve_ws(c);
     } else {
+      http_gets_.fetch_add(1);
       const std::string body = std::string("[{\"type\":\"page\",\"webSocketDebuggerUrl\":\"ws://") +
                                "127.0.0.1:" + std::to_string(port_) + "/devtools/page/DECK\"}]";
       send_str(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
@@ -207,13 +215,6 @@ class FakeServer {
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"closed\"}}";
       else if (e.find("WANT_EXC") != std::string::npos)
         result = "\"exceptionDetails\":{\"text\":\"boom\"}";
-      // The voice mic-button probe. `mic_present_` models the V0 question: Leanback may not render
-      // a soft-mic button at all under our Cobalt UA, and the launcher must handle that without
-      // clicking at a phantom coordinate. Answers "x,y" (rect centre) or "" (no such button).
-      else if (e.find("getBoundingClientRect") != std::string::npos)
-        result = mic_present_.load()
-                     ? "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"640,360\"}}"
-                     : "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"\"}}";
       // The error page's retry flag. Modelled as a real one-shot: the expression both reads and
       // clears `window.__deckbackRetry`, so a launcher that forgets to consume it would retry
       // forever off a single keypress — and only a stateful fake can catch that.
@@ -231,10 +232,6 @@ class FakeServer {
         error_page_up_.store(true);
         result = "\"result\":{\"result\":{\"type\":\"boolean\",\"value\":true}}";
       }
-      // Voice duck/unduck. Must be matched BEFORE the pause()/play() branches below, which belong
-      // to PlayerController's suspend checkpoint and answer with a number.
-      else if (e.find("/*voice*/") != std::string::npos)
-        result = "\"result\":{\"result\":{\"type\":\"boolean\",\"value\":true}}";
       // PlayerController's poll: one expression, three signals, returned as a bitmask number.
       // Keyed on `activeElement`, which appears only in that expression.
       else if (e.find("activeElement") != std::string::npos)
@@ -268,8 +265,9 @@ class FakeServer {
   std::atomic<bool> playing_{true};
   std::atomic<bool> player_open_{false};
   std::atomic<bool> text_focused_{false};
-  std::atomic<bool> mic_present_{true};
   std::atomic<bool> retry_flag_{false};
+  std::atomic<int> ws_upgrades_{0};
+  std::atomic<int> http_gets_{0};
   std::atomic<bool> error_page_up_{false};
   std::atomic<bool> osd_button_present_{true};
   std::string nav_error_;                          // guarded by req_mu_

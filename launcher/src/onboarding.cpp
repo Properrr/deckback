@@ -40,14 +40,13 @@ constexpr Label kActionLabels[] = {
     {"chapter_fwd", "Next chapter"},
     {"skip_back", "Skip back"},
     {"skip_fwd", "Skip forward"},
-    {"voice_search", "Hold to speak"},
 };
 
-// Actions the launcher performs itself over CDP, with no DOM key: voice_search and the chapter/skip
-// seeks (LT/RT). `show_controls` is a retired compatibility action; Menu is fixed to Settings and
-// is appended below, independent of the keymap.
+// Actions the launcher performs itself over CDP, with no DOM key: the chapter/skip seeks (LT/RT).
+// `show_controls` is a retired compatibility action; Menu is fixed to Settings and is appended
+// below, independent of the keymap.
 bool is_launcher_action(std::string_view value) {
-  return value == "voice_search" || skip_action_sign(value) != 0 || chapter_action_sign(value) != 0;
+  return skip_action_sign(value) != 0 || chapter_action_sign(value) != 0;
 }
 
 }  // namespace
@@ -76,11 +75,6 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx) {
     if (name == "dpad" || name == "start" || value == "show_controls") continue;
     const std::string control = control_label(name);
     if (control.empty()) continue;  // a control this hardware does not have
-
-    // Voice is a launcher action, and it is off by default. Advertising "Hold to speak" on a build
-    // where the mic button was never found is the dead-button failure the voice work exists to
-    // avoid (input-ux §13.2).
-    if (value == "voice_search" && !ctx.voice_enabled) continue;
 
     // Anything that dispatches no key and is not a launcher action does nothing at all. Listing it
     // would teach the user a control that silently fails — worse than not mentioning it.

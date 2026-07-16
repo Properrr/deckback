@@ -22,7 +22,9 @@ Design + **Phase-1 feasibility proven** (2026-07-15). Not yet the full `just sim
 
 ## Next (Phase 1 — `sim-portal`)
 
-1. `docker/sim.Dockerfile` — Arch + flatpak/ostree/dbus + a minimal runtime.
+1. `docker/steamos.Dockerfile` — a REAL SteamOS 3.8.1x rootfs (Valve's holo/jupiter repos, pinned
+   to the Deck's own gcc/glibc) + flatpak/ostree/dbus. Was archlinux:latest, which drifts ahead of
+   SteamOS and quietly tested a toolchain nobody ships (durable/test-sim.md ★ CORRECTION).
 2. A tiny flatpak app wrapping `deckback-launcher` so the portal accepts it as a flatpak instance.
 3. A staging `archive-z2` repo helper (publish commit A → B) for the self-update round-trip.
 4. `deckback-launcher --selftest-watch <secs>` — run the real updater loop bounded, so a scripted

@@ -36,7 +36,6 @@ struct ControlRow {
 // the input layer resolves, so the two cannot disagree.
 struct OverlayContext {
   std::vector<std::pair<std::string, std::string>> keymap;  // app.json `keymap`, in written order
-  bool voice_enabled = false;
   bool right_stick_scroll = true;
   bool touch_lock_enabled = true;
   std::string touch_lock_chord = "l3+r3";

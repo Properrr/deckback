@@ -31,7 +31,6 @@
 #include "updater.hpp"
 #include "util.hpp"
 #include "version.hpp"
-#include "voice.hpp"
 #include "watchdog.hpp"
 
 namespace {
@@ -359,25 +358,10 @@ int main(int argc, char** argv) {
   std::optional<OsdMenuController> osd;
   std::optional<Navigator> navigator;
   std::optional<GamepadInput> gamepad;
-  // Phase 5 voice search. Disabled by default: voice cannot be a keypress on this engine, and
-  // whether Leanback even renders a soft-mic button under our Cobalt UA is the unverified V0 spike
-  // (findings input-ux §13.2). Declared here so it outlives the gamepad that borrows it.
-  std::optional<VoiceController> voice;
-  if (cdp_nav && cfg->voice_enabled) {
-    auto duck = parse_duck_mode(cfg->voice_duck);
-    if (!duck) {
-      warn(std::format("startup: voice_duck '{}' unrecognised (none|mute|pause) — using pause",
-                       cfg->voice_duck));
-      duck = DuckMode::Pause;
-    }
-    voice.emplace("127.0.0.1", cfg->remote_debugging_port,
-                  VoiceConfig{cfg->voice_enabled, cfg->voice_hold_ms, *duck,
-                              cfg->voice_click_toggles, cfg->voice_mic_selectors});
-  }
   if (cdp_nav && cfg->first_run_overlay) {
     onboarding.emplace("127.0.0.1", cfg->remote_debugging_port,
-                       OverlayContext{cfg->keymap, cfg->voice_enabled, cfg->right_stick_scroll,
-                                      cfg->touch_lock_enabled, cfg->touch_lock_chord},
+                       OverlayContext{cfg->keymap, cfg->right_stick_scroll, cfg->touch_lock_enabled,
+                                      cfg->touch_lock_chord},
                        first_run_marker_path(resolve_state_dir(runtime_dir)));
   }
 
@@ -385,21 +369,21 @@ int main(int argc, char** argv) {
   // playback. Constructed whenever CDP is up, independent of self-update. The update callbacks
   // route to update_prompt, which is emplaced below and feeds the OSD Updates tab.
   if (cdp_nav) {
-    osd.emplace(OsdMenuConfig{
-        .cdp_host = "127.0.0.1",
-        .cdp_port = cfg->remote_debugging_port,
-        .local_version = kDeckbackVersion,
-        .overlay = OverlayContext{cfg->keymap, cfg->voice_enabled, cfg->right_stick_scroll,
-                                  cfg->touch_lock_enabled, cfg->touch_lock_chord},
-        .about = parse_metainfo(load_metainfo().value_or("")),
-        .on_update_confirm =
-            [&update_prompt] {
-              if (update_prompt) update_prompt->confirm_update();
-            },
-        .on_update_ignore =
-            [&update_prompt] {
-              if (update_prompt) update_prompt->ignore_version();
-            }});
+    osd.emplace(
+        OsdMenuConfig{.cdp_host = "127.0.0.1",
+                      .cdp_port = cfg->remote_debugging_port,
+                      .local_version = kDeckbackVersion,
+                      .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll,
+                                                cfg->touch_lock_enabled, cfg->touch_lock_chord},
+                      .about = parse_metainfo(load_metainfo().value_or("")),
+                      .on_update_confirm =
+                          [&update_prompt] {
+                            if (update_prompt) update_prompt->confirm_update();
+                          },
+                      .on_update_ignore =
+                          [&update_prompt] {
+                            if (update_prompt) update_prompt->ignore_version();
+                          }});
     osd->set_update_model(false, update_policy_status(cfg->self_update_mode), "");
   }
 
@@ -463,7 +447,6 @@ int main(int argc, char** argv) {
                                       cfg->right_stick_slow_ms, cfg->right_stick_fast_ms};
     gp.skip_seconds = cfg->skip_seconds;
     gp.layers = player ? &layers : nullptr;
-    gp.voice = voice ? &*voice : nullptr;
     gp.onboarding = onboarding ? &*onboarding : nullptr;
     gp.update_prompt = update_prompt ? &*update_prompt : nullptr;
     gp.osd = osd ? &*osd : nullptr;

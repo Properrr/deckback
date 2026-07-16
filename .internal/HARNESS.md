@@ -105,7 +105,7 @@ the other:
 The separation is enforced, not conventional:
 
 - **Simulator scripts** live under `scripts/sim/` (`run.sh` host orchestrator, `incontainer.sh`
-  in-container suites) and `docker/sim.Dockerfile`. Nothing else sources them.
+  in-container suites) and `docker/steamos.Dockerfile`. Nothing else sources them.
 - **The one honesty rule** — the sim can never green a hardware gate — is pinned by
   `tests/harness/test_sim_guardrail.sh` (`gpu|vaapi|decode|power|soak|resume|suspend|pixel` → exit 6).
 - **Launcher C++ that exists only for the simulator** is isolated in its own translation unit,

@@ -1,11 +1,9 @@
 #pragma once
 #include <cstdint>
-#include <mutex>
+#include <memory>
 #include <optional>
-#include <random>
 #include <string>
 #include <string_view>
-#include <vector>
 
 namespace deckback {
 
@@ -17,9 +15,33 @@ namespace deckback {
 // Trust model: the endpoint is loopback on a port we launched, so the client skips
 // Sec-WebSocket-Accept verification (no crypto dep) and trusts the target list.
 //
-// Thread-safety: every public method serializes on an internal mutex, so the idle-poll thread and
-// the logind suspend/resume callbacks can share one client. Each call is a synchronous
-// request→response; there is only ever one outstanding CDP id.
+// ---- one socket, many clients -------------------------------------------------------------------
+//
+// A DevToolsClient is a cheap HANDLE, not a connection. Every client for the same host:port shares
+// one CdpSession: one TCP socket, one WebSocket, one reader thread that demultiplexes replies by
+// CDP id. Constructing seven of them (player, navigator, gamepad, onboarding, osd, update_prompt,
+// updateprompt's toast) opens one connection, not seven.
+//
+// This used to be seven independent sockets, and that was a rational workaround rather than an
+// oversight: request() held a mutex across the ENTIRE round trip (up to 2.5 s), so a shared client
+// would have let the navigator's poll stall gamepad key injection. The fan-out bought isolation by
+// paying for it elsewhere:
+//
+//   * discover_ws_path() takes the FIRST target in /json/list, and each client discovered
+//     independently at a different time. Nothing pinned them to the same target, so after a
+//     Leanback teardown the navigator's UA could be installed on one target while the gamepad
+//     dispatched keys into another.
+//   * The sticky TV UA's lifetime was tied to the NAVIGATOR's socket. If that session dropped,
+//     Chromium reverted the override and it stayed reverted until the navigator's next 1 Hz poll
+//     re-armed it -- any load committing in that window used content_shell's default UA and got the
+//     desktop redirect (R1).
+//   * Each connect cost two TCP connects (discover, then dial): 14 for seven clients.
+//
+// Demultiplexing removes the reason for the workaround AND is strictly more concurrent than the
+// fan-out was: the send lock is held only for the write, never across the wait, so requests from
+// different threads pipeline instead of serializing. Sticky state (UA, on-new-document scripts,
+// permission grants) lives on the session, so it is installed once and re-armed on any reconnect
+// rather than only on the poll tick of whichever client happened to own it.
 
 // RFC 6455 frame codec — pure, no I/O, exposed for unit testing.
 namespace ws {
@@ -59,6 +81,10 @@ constexpr int kCtrl = 2;
 constexpr int kMeta = 4;
 constexpr int kShift = 8;
 }  // namespace mod
+
+// The shared, demultiplexed connection behind every DevToolsClient. Defined in devtools.cpp: no
+// caller needs its shape, only that handles to the same endpoint share one.
+class CdpSession;
 
 class DevToolsClient {
  public:
@@ -148,39 +174,13 @@ class DevToolsClient {
  private:
   bool dispatch_mouse(std::string_view type, double x, double y, std::string_view button,
                       int buttons, int click_count);
-  bool ensure_connected();  // caller holds mutex_
-  void disconnect();        // caller holds mutex_
-  bool apply_user_agent();  // (re)send the sticky UA override; caller holds mutex_
-  bool install_script(std::string_view source);  // send one add-script call; caller holds mutex_
-  bool apply_grant();  // (re)send the sticky permission grant; caller holds mutex_
-  std::optional<std::string> discover_ws_path();
-  bool ws_handshake(const std::string& path);
-  // Send a CDP `method` with a raw JSON `params` object and return the raw response payload, or
-  // nullopt on transport/CDP error. Caller holds mutex_.
-  std::optional<std::string> request(std::string_view method, std::string_view params_json);
-  // Runtime.evaluate helper built on request(); caller holds mutex_.
-  std::optional<std::string> evaluate(std::string_view expression);
-  // Lock, evaluate, and return the raw `"value":` token of the reply — the shared front half of
-  // every eval_*() method. Takes mutex_ itself.
+  // Runtime.evaluate `expression` and return the raw `"value":` token of the reply — the shared
+  // front half of every eval_*() method.
   std::optional<std::string> eval_token(std::string_view expression);
-  bool send_all(const std::string& bytes);
-  // `deadline_ms` is an ABSOLUTE mono_ms() timestamp, so it must stay `long`: truncated to int it
-  // wraps negative once the machine has been up ~25 days and every read times out instantly.
-  std::optional<ws::Frame> read_frame(long deadline_ms);
 
-  std::string host_;
-  int port_;
-  int fd_ = -1;
-  std::string rxbuf_;
-  std::string
-      sticky_ua_;  // re-armed on every reconnect while non-empty (see set_user_agent_override)
-  std::vector<std::string>
-      sticky_scripts_;  // re-installed on every reconnect (add_script_on_new_document)
-  std::string grant_origin_, grant_perm_;  // re-applied on every reconnect (grant_permissions)
-  uint64_t next_id_ = 0;
-  std::mt19937 rng_;
-  std::mutex mutex_;
-  bool warned_unreachable_ = false;
+  // The shared connection. Never null. Clients for the same host:port hold the same session, so
+  // this is where the socket, the reader thread and the sticky state actually live.
+  std::shared_ptr<CdpSession> session_;
 };
 
 }  // namespace deckback

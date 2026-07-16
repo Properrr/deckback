@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/../.."
 
 suite="${1:-all}"
-image="deckback-sim:latest"
+image="deckback-sim-steamos:latest"
 
 # The guardrail, first and loud: the gates that actually gate a release can't run in software, and a
 # sim that faked them would be the m114 false-pass trap. Name them explicitly so `just sim vaapi` is a
@@ -24,11 +24,31 @@ gpu | vaapi | decode | power | soak | resume | suspend | pixel)
   ;;
 esac
 
-command -v docker >/dev/null 2>&1 || { echo "error: docker not found (env)" >&2; exit 3; }
+command -v docker >/dev/null 2>&1 || {
+  echo "error: docker not found (env)" >&2
+  exit 3
+}
 
 echo "sim: building $image ..."
-docker build -q -f docker/sim.Dockerfile -t "$image" docker >/dev/null
+docker build -q -f docker/steamos.Dockerfile -t "$image" docker >/dev/null
+
+# bwrap (flatpak instances, the reconnect suite) needs unprivileged user namespaces, and needs THREE
+# things on a native Linux host — measured 2026-07-16, each one load-bearing:
+#
+#   seccomp=unconfined    docker's default seccomp blocks the `unshare` syscall
+#   apparmor=unconfined   Ubuntu >= 23.10 ships kernel.apparmor_restrict_unprivileged_userns=1;
+#                         without this bwrap dies "Failed to make / slave: Permission denied"
+#   --cap-add SYS_ADMIN   without it bwrap dies "setting up uid map: Permission denied"
+#
+# Only seccomp was passed before, which is why `reconnect` was recorded green on a WSL2 host (where
+# the AppArmor restriction does not exist) and has never passed on a native Linux one. `--privileged`
+# was measured to buy exactly nothing over this set, so it is not used.
+DOCKER_SANDBOX_OPTS=(
+  --security-opt seccomp=unconfined
+  --security-opt apparmor=unconfined
+  --cap-add SYS_ADMIN
+)
 
 echo "sim: running suite '$suite' ..."
-exec docker run --rm --security-opt seccomp=unconfined -v "$PWD:/src:ro" \
+exec docker run --rm "${DOCKER_SANDBOX_OPTS[@]}" -v "$PWD:/src:ro" \
   "$image" bash /src/scripts/sim/incontainer.sh "$suite"

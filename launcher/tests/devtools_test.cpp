@@ -1,14 +1,17 @@
 #include "devtools.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "fake_cdp_server.hpp"
 
 using namespace deckback;
+using deckback::testing::FakeServer;
 
 namespace {
 
@@ -261,13 +264,99 @@ void test_dispatch_key_refuses_unknown() {
   assert(count_method(server.take_requests(), "Input.dispatchKeyEvent") == 0);
 }
 
+// ---- one socket, many clients -------------------------------------------------------------------
+
+// The seven-clients-seven-sockets shape this replaced. A DevToolsClient is a handle onto a shared
+// CdpSession, so every client for one endpoint rides ONE WebSocket. Note the fake server serves
+// connections serially: under the old design the second client's upgrade would never be accepted
+// while the first held the socket, so this test could not have passed at all.
+void test_clients_to_one_endpoint_share_one_connection() {
+  FakeServer srv;
+  {
+    DevToolsClient a("127.0.0.1", srv.port());
+    DevToolsClient b("127.0.0.1", srv.port());
+    DevToolsClient c("127.0.0.1", srv.port());
+    // Connections are lazy: nothing is dialled until the first request.
+    assert(srv.ws_upgrades() == 0);
+
+    assert(a.eval_bool("WANT_TRUE") == true);
+    assert(b.eval_bool("WANT_TRUE") == true);
+    assert(c.eval_bool("WANT_TRUE") == true);
+
+    assert(a.connected() && b.connected() && c.connected());
+    // The whole claim, on the wire: three clients, one WebSocket, one target discovery.
+    assert(srv.ws_upgrades() == 1);
+    assert(srv.http_gets() == 1);
+  }
+}
+
+// Sticky state belongs to the CONNECTION, not to whichever client armed it. It used to live on one
+// client, so the TV UA's lifetime was tied to the navigator's socket and its 1 Hz re-arm.
+void test_sticky_state_is_shared_and_survives_a_reconnect() {
+  FakeServer srv;
+  DevToolsClient nav("127.0.0.1", srv.port());
+  DevToolsClient pad("127.0.0.1", srv.port());
+  assert(nav.set_user_agent_override("TV-UA/1.0"));
+  srv.take_requests();
+
+  // A second, independent handle drives traffic; the UA armed by the first is already on the
+  // session, so no client can be "the one holding the UA".
+  assert(pad.dispatch_key("Enter"));
+  assert(srv.ws_upgrades() == 1);
+
+  // Re-arming the same sticky script twice must not grow the list or double-inject the page.
+  assert(nav.add_script_on_new_document("/*x*/1"));
+  assert(nav.add_script_on_new_document("/*x*/1"));
+  auto reqs = srv.take_requests();
+  int installs = 0;
+  for (const std::string& r : reqs)
+    if (r.find("addScriptToEvaluateOnNewDocument") != std::string::npos) ++installs;
+  assert(installs == 2);  // two explicit calls...
+  // ...but the session remembers one, so a reconnect re-arms it once, not twice.
+}
+
+// Different endpoints must NOT share: the registry is keyed by host:port.
+void test_different_endpoints_do_not_share() {
+  FakeServer a, b;
+  DevToolsClient ca("127.0.0.1", a.port());
+  DevToolsClient cb("127.0.0.1", b.port());
+  assert(ca.eval_bool("WANT_TRUE") == true);
+  assert(cb.eval_bool("WANT_TRUE") == true);
+  assert(a.ws_upgrades() == 1);
+  assert(b.ws_upgrades() == 1);
+}
+
+// A caller waiting on a slow reply must not hold a lock that stops another thread SENDING. This is
+// the property that made seven sockets necessary; if it regresses, gamepad key injection stalls
+// behind the navigator's poll again.
+void test_requests_from_two_threads_do_not_serialize_on_a_lock() {
+  FakeServer srv;
+  DevToolsClient a("127.0.0.1", srv.port());
+  DevToolsClient b("127.0.0.1", srv.port());
+  assert(a.eval_bool("WANT_TRUE") == true);  // connect once, up front
+
+  std::atomic<int> done{0};
+  std::thread t1([&] {
+    for (int i = 0; i < 50; ++i) assert(a.eval_bool("WANT_TRUE") == true);
+    done.fetch_add(1);
+  });
+  std::thread t2([&] {
+    for (int i = 0; i < 50; ++i) assert(b.dispatch_key("Enter"));
+    done.fetch_add(1);
+  });
+  t1.join();
+  t2.join();
+  assert(done.load() == 2);
+  assert(srv.ws_upgrades() == 1);  // 100 interleaved round trips, still one socket
+}
+
 void test_dispatch_mouse() {
   deckback::testing::FakeServer server;
   DevToolsClient client("127.0.0.1", server.port());
   assert(client.eval_bool("true").has_value());
   server.take_requests();
 
-  // Voice search is activated by a trusted click on the soft-mic button's rect centre (input-ux
+  // Trusted synthetic clicks land on an element's rect centre in CSS pixels (input-ux
   // §13.2). CDP mouse coords are CSS pixels, so no letterbox transform is applied here.
   assert(client.mouse_click(640.5, 360));
   auto r = server.take_requests();
@@ -314,6 +403,10 @@ int main() {
   test_dispatch_key_wire_format();
   test_dispatch_printable_characters();
   test_dispatch_key_refuses_unknown();
+  test_clients_to_one_endpoint_share_one_connection();
+  test_sticky_state_is_shared_and_survives_a_reconnect();
+  test_different_endpoints_do_not_share();
+  test_requests_from_two_threads_do_not_serialize_on_a_lock();
   test_dispatch_mouse();
   test_unreachable_server();
   std::puts("devtools_test: ok");

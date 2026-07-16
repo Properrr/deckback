@@ -11,6 +11,11 @@ endif()
 
 add_compile_options(-Wall -Wextra -Werror)
 
+# CMake >=3.28 scans every C++20+ TU for module imports by default. This project uses no modules, so
+# the scan is pure overhead: an extra preprocess of every file, whose .ddi.i output is larger than
+# the object it produces (enough to exhaust a 32G tmpfs on a sanitizer build).
+set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
+
 set(DECKBACK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 # Embed a JS file as a C++ raw-string constant so a missing/unreadable file can NEVER silently
@@ -116,9 +121,30 @@ if(DECKBACK_ASAN)
   add_link_options(-fsanitize=address,undefined)
 endif()
 
-add_executable(deckback-launcher
-  src/main.cpp
+find_package(Threads REQUIRED)
+
+# Optional deps are detected at compile time via __has_include and linked only when present, so the
+# launcher builds on a bare toolchain (CI free-runner) and gains D-Bus/HTTP on a full dev box.
+# Detected BEFORE deckback_core so the library can carry them PUBLIC to every dependent.
+find_package(PkgConfig QUIET)
+if(PkgConfig_FOUND)
+  pkg_check_modules(SYSTEMD IMPORTED_TARGET libsystemd)
+  pkg_check_modules(CURL IMPORTED_TARGET libcurl)
+  pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
+  # libxcb powers Option B of disable_touch (holding gamescope's global touch mode at hover while our
+  # window is focused). Optional: without it, touchmode.cpp compiles to a no-op and the page-level
+  # pointer swallow still makes taps inert. Present in the freedesktop SDK the Flatpak builds against.
+  pkg_check_modules(XCB IMPORTED_TARGET xcb)
+endif()
+
+# Everything except main.cpp. ONE source list: the executable and all ~20 test binaries link this,
+# so adding a file, a dependency or a compile definition is a single edit. Previously each target
+# relisted the sources it needed by hand -- 122 listings of 29 files, log.cpp named 19 times -- which
+# meant a new dependency edge was a scavenger hunt across the whole file and test link lines drifted
+# from what the code actually needed.
+add_library(deckback_core STATIC
   src/log.cpp
+  src/json.cpp
   src/config.cpp
   src/platform.cpp
   src/updater.cpp
@@ -135,7 +161,6 @@ add_executable(deckback-launcher
   src/input.cpp
   src/keymap.cpp
   src/layers.cpp
-  src/voice.cpp
   src/overlay.cpp
   src/haptic.cpp
   src/onboarding.cpp
@@ -147,222 +172,77 @@ add_executable(deckback-launcher
   src/audio.cpp
   src/profile.cpp
 )
-target_include_directories(deckback-launcher PRIVATE src "${DECKBACK_GENERATED_DIR}")
+# PUBLIC: dependents get the include dirs, the threads dep and the optional-backend defines for free.
+target_include_directories(deckback_core PUBLIC src "${DECKBACK_GENERATED_DIR}")
+target_link_libraries(deckback_core PUBLIC Threads::Threads)
+if(SYSTEMD_FOUND)
+  target_link_libraries(deckback_core PUBLIC PkgConfig::SYSTEMD)
+endif()
+if(CURL_FOUND)
+  target_link_libraries(deckback_core PUBLIC PkgConfig::CURL)
+endif()
+if(PULSE_FOUND)
+  target_link_libraries(deckback_core PUBLIC PkgConfig::PULSE)
+  target_compile_definitions(deckback_core PUBLIC DECKBACK_HAVE_PULSE=1)
+endif()
+if(XCB_FOUND)
+  target_link_libraries(deckback_core PUBLIC PkgConfig::XCB)
+  target_compile_definitions(deckback_core PUBLIC DECKBACK_HAVE_XCB=1)
+endif()
 
-find_package(Threads REQUIRED)
-target_link_libraries(deckback-launcher PRIVATE Threads::Threads)
+add_executable(deckback-launcher src/main.cpp)
+target_link_libraries(deckback-launcher PRIVATE deckback_core)
 
 # Install rule so `ninja install` works under flatpak-builder (buildsystem: cmake-ninja).
-# Installs to ${CMAKE_INSTALL_PREFIX}/bin — flatpak-builder sets the prefix to /app.
+# Installs to ${CMAKE_INSTALL_PREFIX}/bin -- flatpak-builder sets the prefix to /app.
 include(GNUInstallDirs)
 install(TARGETS deckback-launcher RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-# Optional deps are detected at compile time via __has_include and linked only when present, so the
-# launcher builds on a bare toolchain (CI free-runner) and gains D-Bus/HTTP on a full dev box.
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-  pkg_check_modules(SYSTEMD IMPORTED_TARGET libsystemd)
-  pkg_check_modules(CURL IMPORTED_TARGET libcurl)
-  pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
-  if(SYSTEMD_FOUND)
-    target_link_libraries(deckback-launcher PRIVATE PkgConfig::SYSTEMD)
-  endif()
-  if(CURL_FOUND)
-    target_link_libraries(deckback-launcher PRIVATE PkgConfig::CURL)
-  endif()
-  if(PULSE_FOUND)
-    target_link_libraries(deckback-launcher PRIVATE PkgConfig::PULSE)
-    target_compile_definitions(deckback-launcher PRIVATE DECKBACK_HAVE_PULSE=1)
-  endif()
-  # libxcb powers Option B of disable_touch (holding gamescope's global touch mode at hover while our
-  # window is focused). Optional: without it, touchmode.cpp compiles to a no-op and the page-level
-  # pointer swallow still makes taps inert. Present in the freedesktop SDK the Flatpak builds against.
-  pkg_check_modules(XCB IMPORTED_TARGET xcb)
-  if(XCB_FOUND)
-    target_link_libraries(deckback-launcher PRIVATE PkgConfig::XCB)
-    target_compile_definitions(deckback-launcher PRIVATE DECKBACK_HAVE_XCB=1)
-  endif()
-endif()
-
 include(CTest)
 if(BUILD_TESTING)
-  add_executable(config_test tests/config_test.cpp src/config.cpp src/log.cpp)
-  target_include_directories(config_test PRIVATE src)
-  add_test(NAME config_test COMMAND config_test)
-
-  add_executable(log_test tests/log_test.cpp src/log.cpp)
-  target_include_directories(log_test PRIVATE src)
-  add_test(NAME log_test COMMAND log_test)
-
-  add_executable(devtools_test tests/devtools_test.cpp src/devtools.cpp src/log.cpp)
-  target_include_directories(devtools_test PRIVATE src tests)
-  target_link_libraries(devtools_test PRIVATE Threads::Threads)
-  add_test(NAME devtools_test COMMAND devtools_test)
-
-  add_executable(player_test tests/player_test.cpp src/player.cpp src/devtools.cpp
-                             src/netprobe.cpp src/layers.cpp src/scripts.cpp src/log.cpp)
-  target_include_directories(player_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(player_test PRIVATE Threads::Threads)
-  add_test(NAME player_test COMMAND player_test)
-
-  add_executable(watchdog_test tests/watchdog_test.cpp src/watchdog.cpp src/log.cpp)
-  target_include_directories(watchdog_test PRIVATE src)
-  target_link_libraries(watchdog_test PRIVATE Threads::Threads)
-  add_test(NAME watchdog_test COMMAND watchdog_test)
-
-  # Self-updater. The portal path itself is NOT verified here — it is verified separately on a Deck
-  # (durable/self-update.md: --selftest-update + a staging-repo round-trip). This target pins what
-  # holds off-Deck: the pure Progress.status decode (2 == Done), the factory, and a crash-free /
-  # idempotent lifecycle. Links libsystemd (compiled in via __has_include) + devtools/overlay/scripts
-  # for the "restart to apply" toast path.
-  add_executable(updater_test tests/updater_test.cpp src/updater.cpp src/devtools.cpp
-                              src/overlay.cpp src/scripts.cpp src/log.cpp)
-  target_include_directories(updater_test PRIVATE src "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(updater_test PRIVATE Threads::Threads)
-  if(SYSTEMD_FOUND)
-    target_link_libraries(updater_test PRIVATE PkgConfig::SYSTEMD)
-  endif()
-  add_test(NAME updater_test COMMAND updater_test)
-
-  # The Widevine CDM path rule (P7). `usable_cdm_path` mirrors the engine patch's check; the
-  # near-miss cases ("/a/..b") are the ones worth a test.
-  add_executable(cdm_fetcher_test tests/cdm_fetcher_test.cpp src/cdm_fetcher.cpp src/sha256.cpp
-                                  src/log.cpp)
-  target_include_directories(cdm_fetcher_test PRIVATE src)
-  # cdm_fetcher.cpp compiles its libcurl download path in via __has_include, so the test binary has
-  # to link libcurl too even though it never downloads anything.
-  if(PkgConfig_FOUND AND CURL_FOUND)
-    target_link_libraries(cdm_fetcher_test PRIVATE PkgConfig::CURL)
-  endif()
-  add_test(NAME cdm_fetcher_test COMMAND cdm_fetcher_test)
-
-  add_executable(sha256_test tests/sha256_test.cpp src/sha256.cpp)
-  target_include_directories(sha256_test PRIVATE src)
-  add_test(NAME sha256_test COMMAND sha256_test)
-
-  add_executable(profile_test tests/profile_test.cpp src/profile.cpp src/log.cpp)
-  target_include_directories(profile_test PRIVATE src)
-  add_test(NAME profile_test COMMAND profile_test)
-
-  # Phase 3 input: pure keymap/direction/trigger logic. Pulls in devtools.cpp for key_supported() and
-  # config.cpp to cover the keymap object parser.
-  add_executable(input_test tests/input_test.cpp src/input.cpp src/keymap.cpp src/layers.cpp
-                            src/touch.cpp src/voice.cpp src/overlay.cpp src/haptic.cpp
-                            src/onboarding.cpp src/osdmenu.cpp src/updateprompt.cpp src/updater.cpp
-                            src/devtools.cpp src/scripts.cpp src/config.cpp src/log.cpp)
-  target_include_directories(input_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(input_test PRIVATE Threads::Threads)
-  # input.cpp now drives the self-update notify UI (updateprompt.cpp), which pulls in updater.cpp
-  # (UpdateState) and optionally libcurl (changelog fetch) / libsystemd (updater backend).
-  if(CURL_FOUND)
-    target_link_libraries(input_test PRIVATE PkgConfig::CURL)
-  endif()
-  if(SYSTEMD_FOUND)
-    target_link_libraries(input_test PRIVATE PkgConfig::SYSTEMD)
-  endif()
-  # Point one test at the real shipped config so app.json cannot drift away from the C++ keymap.
-  target_compile_definitions(input_test PRIVATE
-    DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
-  add_test(NAME input_test COMMAND input_test)
-
-  # Self-update notify UI: the pure helpers that the card/dot/dedup rely on — semantic version
-  # compare, GitHub-releases parse, changelog summary, the show-card/show-dot decision, and the
-  # dismissal state files. The portal deploy is verified separately on a Deck (durable/self-update.md).
-  add_executable(updateprompt_test tests/updateprompt_test.cpp src/updateprompt.cpp src/updater.cpp
-                                   src/osdmenu.cpp src/onboarding.cpp src/keymap.cpp src/layers.cpp
-                                   src/overlay.cpp src/scripts.cpp src/devtools.cpp src/log.cpp)
-  target_include_directories(updateprompt_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(updateprompt_test PRIVATE Threads::Threads)
-  if(CURL_FOUND)
-    target_link_libraries(updateprompt_test PRIVATE PkgConfig::CURL)
-  endif()
-  if(SYSTEMD_FOUND)
-    target_link_libraries(updateprompt_test PRIVATE PkgConfig::SYSTEMD)
-  endif()
-  add_test(NAME updateprompt_test COMMAND updateprompt_test)
-
-  # Phase 5 voice: the hold-to-talk state machine, duck-mode parsing, the mic-button probe, and the
-  # VoiceController's CDP behaviour against a fake soft-mic button.
-  add_executable(voice_test tests/voice_test.cpp src/voice.cpp src/devtools.cpp src/scripts.cpp
-                            src/log.cpp)
-  target_include_directories(voice_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(voice_test PRIVATE Threads::Threads)
-  add_test(NAME voice_test COMMAND voice_test)
-
-  # disable_touch: the embedded pointer-swallow script is present and covers the events that
-  # navigate, and Option B's focus-class matcher only asserts hover over OUR windows. Built in stub
-  # mode (no DECKBACK_HAVE_XCB) — the pure helper is compiled regardless of xcb.
-  add_executable(touchmode_test tests/touchmode_test.cpp src/touchmode.cpp src/scripts.cpp
-                                src/devtools.cpp src/log.cpp)
-  target_include_directories(touchmode_test PRIVATE src "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(touchmode_test PRIVATE Threads::Threads)
-  add_test(NAME touchmode_test COMMAND touchmode_test)
-
-  # The kiosk failure state: a failed Page.navigate must be *seen* as failed (CDP reports it as a
-  # successful command with an errorText field), and the injected Retry page must survive hostile
-  # hot-swapped text.
-  add_executable(errorpage_test tests/errorpage_test.cpp src/errorpage.cpp src/overlay.cpp
-                                src/scripts.cpp src/devtools.cpp src/log.cpp)
-  target_include_directories(errorpage_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(errorpage_test PRIVATE Threads::Threads)
-  add_test(NAME errorpage_test COMMAND errorpage_test)
-
-  # First-run controls card. The card must be derived from the live keymap, never hardcoded: a card
-  # that contradicts a hot-swapped app.json teaches the user something false.
-  add_executable(onboarding_test tests/onboarding_test.cpp src/onboarding.cpp src/keymap.cpp
-                                 src/layers.cpp src/overlay.cpp src/scripts.cpp src/devtools.cpp
-                                 src/config.cpp src/log.cpp)
-  target_include_directories(onboarding_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(onboarding_test PRIVATE Threads::Threads)
-  # Read the real shipped config, so a keymap change cannot make the card advertise a dead control.
-  target_compile_definitions(onboarding_test PRIVATE
-    DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
-  add_test(NAME onboarding_test COMMAND onboarding_test)
-
-  # OSD menu pure helpers (osdmenu.cpp): status line, action-button set, verdict parser.
-  add_executable(osdmenu_test tests/osdmenu_test.cpp src/osdmenu.cpp src/onboarding.cpp
-                              src/keymap.cpp src/layers.cpp src/overlay.cpp src/scripts.cpp
-                              src/devtools.cpp src/log.cpp)
-  target_include_directories(osdmenu_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(osdmenu_test PRIVATE Threads::Threads)
-  add_test(NAME osdmenu_test COMMAND osdmenu_test)
-
-  # About tab: the metainfo -> AboutInfo parser (pure; the tab is single-sourced from that XML).
-  add_executable(about_test tests/about_test.cpp src/about.cpp)
-  target_include_directories(about_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  add_test(NAME about_test COMMAND about_test)
-
-  # Touch-lock feedback: the CDP-injected toast (escaping is the whole risk) and the FF_RUMBLE
-  # effect construction. The rumble ioctls themselves need a real pad and belong to the on-Deck tier.
-  add_executable(overlay_test tests/overlay_test.cpp src/overlay.cpp src/haptic.cpp
-                              src/scripts.cpp src/devtools.cpp src/log.cpp)
-  target_include_directories(overlay_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(overlay_test PRIVATE Threads::Threads)
-  add_test(NAME overlay_test COMMAND overlay_test)
-
-  # The shared header-only helpers (util.hpp): the DECKBACK_EXTRA_ARGS splitter and the escapes.
-  add_executable(util_test tests/util_test.cpp)
-  target_include_directories(util_test PRIVATE src)
-  add_test(NAME util_test COMMAND util_test)
-
-  # The page-script registry (scripts.cpp): ScriptParams JSON/escaping, render()'s (body)(params)
-  # shape, the embedded defaults, and runtime override from a scripts dir.
-  add_executable(scripts_test tests/scripts_test.cpp src/scripts.cpp src/devtools.cpp src/log.cpp)
-  target_include_directories(scripts_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(scripts_test PRIVATE Threads::Threads)
-  add_test(NAME scripts_test COMMAND scripts_test)
-
-  # The Navigator's "already on the app" needle — the predicate behind every re-navigation.
-  add_executable(navigator_test tests/navigator_test.cpp src/navigator.cpp src/errorpage.cpp
-                                src/overlay.cpp src/scripts.cpp src/devtools.cpp src/log.cpp)
-  target_include_directories(navigator_test PRIVATE src tests "${DECKBACK_GENERATED_DIR}")
-  target_link_libraries(navigator_test PRIVATE Threads::Threads)
-  add_test(NAME navigator_test COMMAND navigator_test)
-
   # Tests assert() their invariants. CI builds Release, which defines NDEBUG and would both compile
-  # the assertions out (tests silently pass) and trip -Werror=unused-variable. Force NDEBUG off for
-  # test targets so assertions stay live regardless of the build type.
-  foreach(t config_test log_test devtools_test player_test watchdog_test updater_test input_test sha256_test profile_test voice_test overlay_test errorpage_test onboarding_test osdmenu_test about_test cdm_fetcher_test touchmode_test util_test navigator_test scripts_test)
-    target_compile_options(${t} PRIVATE -UNDEBUG)
+  # the assertions out (tests silently pass) and trip -Werror=unused-variable. -UNDEBUG on the test
+  # TU keeps assertions live regardless of the build type; src/ contains no assert(), so building
+  # deckback_core with NDEBUG costs no coverage.
+  function(deckback_test name)
+    add_executable(${name} tests/${name}.cpp)
+    target_link_libraries(${name} PRIVATE deckback_core)
+    target_include_directories(${name} PRIVATE tests)
+    target_compile_options(${name} PRIVATE -UNDEBUG)
+    add_test(NAME ${name} COMMAND ${name})
+  endfunction()
+
+  deckback_test(json_test)
+  deckback_test(config_test)
+  deckback_test(log_test)
+  deckback_test(devtools_test)
+  deckback_test(player_test)
+  deckback_test(watchdog_test)
+  deckback_test(sha256_test)
+  deckback_test(profile_test)
+  deckback_test(util_test)
+  deckback_test(about_test)
+  deckback_test(scripts_test)
+  deckback_test(navigator_test)
+  deckback_test(overlay_test)
+  deckback_test(errorpage_test)
+  deckback_test(osdmenu_test)
+  deckback_test(cdm_fetcher_test)
+  deckback_test(touchmode_test)
+  # The portal path is NOT verified here -- that is a Deck job (durable/self-update.md:
+  # --selftest-update + a staging-repo round-trip). These pin what holds off-Deck: the pure
+  # Progress.status decode (2 == Done), the factory, and a crash-free / idempotent lifecycle.
+  deckback_test(updater_test)
+  # Self-update notify UI: semantic version compare, GitHub-releases parse, changelog summary, the
+  # show-card/show-dot decision, and the dismissal state files.
+  deckback_test(updateprompt_test)
+
+  # These two read the real shipped config, so a keymap change cannot make the launcher and the
+  # first-run card advertise a control that does not work.
+  deckback_test(input_test)
+  deckback_test(onboarding_test)
+  foreach(t input_test onboarding_test)
+    target_compile_definitions(${t} PRIVATE
+      DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
   endforeach()
 endif()
