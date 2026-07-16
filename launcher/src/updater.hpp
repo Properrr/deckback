@@ -115,14 +115,9 @@ class Updater {
   // pre-grants consent first. Exit: 0 Done · 2 Empty · 3 Failed · 1 setup/timeout.
   virtual int selftest_deploy(bool seed) = 0;
 
-  // Diagnostic (`--selftest-watch <secs>`): run the real updater loop for up to `secs` seconds,
-  // then stop cleanly. Nothing is deployed (notify mode with no consent) — the point is to keep the
-  // loop alive so an external actor can drop the session bus (case A) or restart flatpak-portal
-  // (case B) and the reconnect handling logs its progress. This is what the containerized `just sim
-  // reconnect` drive exercises off-hardware (durable/dbus-reconnect.md, durable/test-sim.md).
-  // Interruptible by SIGINT/SIGTERM for a clean early stop. Exit: 0 (ran and stopped) · 1 (no live
-  // session bus).
-  virtual int selftest_watch(int secs) = 0;
+  // NOTE: the `--selftest-watch` sim driver is deliberately NOT a method here — it only needs the
+  // public start()/stop() below, so it lives outside this interface in simwatch.cpp to keep the
+  // simulator surface isolated from the shipping updater (findings/durable/test-sim.md).
 
   static bool backend_available();
 };

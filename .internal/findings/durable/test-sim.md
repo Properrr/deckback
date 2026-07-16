@@ -13,7 +13,10 @@ Landed and green (`just sim`, `docker/sim.Dockerfile` + `scripts/sim/run.sh` + `
   (the self-update / reconnect foundation).
 - **`reconnect`** (Phase 2, 2026-07-16) — drives the launcher's real D-Bus reconnect logic
   (`durable/dbus-reconnect.md`) off hardware. A bounded `deckback-launcher --selftest-watch <secs>`
-  runs the actual `PortalUpdater` loop **inside a bwrap flatpak-instance** (synthetic
+  — implemented in its own translation unit `launcher/src/simwatch.{cpp,hpp}`, **isolated** from the
+  shipping `updater.cpp` (it uses only the public `Updater` start()/stop() interface), so the
+  simulator surface doesn't bleed into the self-update code — runs the actual `PortalUpdater` loop
+  **inside a bwrap flatpak-instance** (synthetic
   `/.flatpak-info` → the portal accepts `CreateUpdateMonitor`; a self-managed `dbus-daemon` at a
   FIXED socket path so the bus can be dropped and restored at the same address). Four asserts, all
   green and stable across 3 runs: **positive control** (monitor comes up — the flatpak-instance

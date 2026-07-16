@@ -122,6 +122,7 @@ add_executable(deckback-launcher
   src/config.cpp
   src/platform.cpp
   src/updater.cpp
+  src/simwatch.cpp  # sim-only: the --selftest-watch reconnect driver (isolated from updater.cpp)
   src/updateprompt.cpp
   src/watchdog.cpp
   src/cdm_fetcher.cpp

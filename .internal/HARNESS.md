@@ -92,6 +92,27 @@ This is the harness's least obvious property. Three different machines are invol
 
 **Builds never run on the Deck.** The Deck is a deploy/test target only.
 
+### 2.1 Two test targets: real device vs docker simulator
+
+Testing has **two execution targets**, and the code for each is kept separate so neither leaks into
+the other:
+
+| Target | Entry | What it can prove | What it can NOT prove |
+|---|---|---|---|
+| **Real device** (Deck over SSH) | `just deck-ci` · `just test-deck` · `just power` · `just soak` · `just cert-deck` | everything: GPU/VA-API decode, green-band pixel verdict, power (≤~9 W), suspend/resume, real Leanback | — (it is ground truth) |
+| **Docker simulator** | `just sim [launcher\|shortcut\|portal\|reconnect\|all]` | GPU-**independent** layers only: launcher build+L0 on Arch, installer Steam-tile writing, Flatpak-portal self-update foundation, the **D-Bus reconnect drive** | anything needing a GPU/battery/ACPI — it **refuses** those with exit **6**, never a fake pass |
+
+The separation is enforced, not conventional:
+
+- **Simulator scripts** live under `scripts/sim/` (`run.sh` host orchestrator, `incontainer.sh`
+  in-container suites) and `docker/sim.Dockerfile`. Nothing else sources them.
+- **The one honesty rule** — the sim can never green a hardware gate — is pinned by
+  `tests/harness/test_sim_guardrail.sh` (`gpu|vaapi|decode|power|soak|resume|suspend|pixel` → exit 6).
+- **Launcher C++ that exists only for the simulator** is isolated in its own translation unit,
+  `launcher/src/simwatch.{cpp,hpp}` (the `--selftest-watch` reconnect driver the sim invokes) — kept
+  out of the shipping `updater.cpp`, which uses only the public `Updater` interface. See
+  `.internal/findings/durable/test-sim.md`.
+
 ---
 
 ## 3. Recipe reference

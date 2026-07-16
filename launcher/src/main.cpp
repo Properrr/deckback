@@ -25,6 +25,7 @@
 #include "player.hpp"
 #include "profile.hpp"
 #include "scripts.hpp"
+#include "simwatch.hpp"
 #include "touchmode.hpp"
 #include "updateprompt.hpp"
 #include "updater.hpp"
@@ -229,12 +230,8 @@ int main(int argc, char** argv) {
   }
 
   if (selftest_watch) {
-    info(std::string("selftest-watch: backend ") +
-         (Updater::backend_available() ? "libsystemd" : "stub (no libsystemd)"));
-    // Default config = notify mode with no consent: the loop watches but never deploys. The point
-    // is to keep the reconnect handling alive for the sim's case-A/case-B drive
-    // (durable/test-sim.md).
-    return Updater::create(UpdaterConfig{})->selftest_watch(selftest_watch_secs);
+    // The sim reconnect driver lives in simwatch.cpp (isolated from the shipping updater).
+    return run_selftest_watch(selftest_watch_secs);
   }
 
   const std::string runtime_dir = env_or("XDG_RUNTIME_DIR", "/tmp");
