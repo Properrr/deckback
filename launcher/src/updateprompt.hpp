@@ -114,10 +114,10 @@ class UpdatePromptController {
   void feed(bool has_update, const std::string& status, const std::string& notes);
 
   UpdatePromptConfig cfg_;
-  DevToolsClient client_;    // input-thread only (the confirm toast)
-  std::string last_commit_;  // last commit tick() reacted to (edge detection)
-  bool notify_ = false;      // an un-ignored update is available
-  std::string hidden_status_ = "Checking for updates…";
+  DevToolsClient client_;      // input-thread only (the confirm toast)
+  std::string last_commit_;    // last commit tick() reacted to (edge detection)
+  bool notify_ = false;        // an un-ignored update is available
+  std::string hidden_status_;  // empty -> the generic "no update" idle status (kNoUpdateStatus)
 
   // Last values fed to the OSD, so tick() only calls set_update_model on a change.
   bool fed_has_ = false;

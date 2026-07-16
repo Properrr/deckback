@@ -8,6 +8,12 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Fixed
+- **Settings ▸ Updates** no longer sits on "Checking for updates…" forever when you're already on
+  the latest version. That text implied a check that never finishes; it now shows a resolved
+  **"No update is currently available."** (a newer release still shows what's new and the update
+  actions, unchanged).
+
 ## [0.0.5] - 2026-07-15
 
 ### Fixed

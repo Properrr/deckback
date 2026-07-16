@@ -28,7 +28,7 @@ namespace {
 
 constexpr std::size_t kMaxNotesLen = 4000;
 constexpr long kReleasesTimeoutSec = 6;
-constexpr std::string_view kCheckingStatus = "Checking for updates…";
+constexpr std::string_view kNoUpdateStatus = "No update is currently available.";
 constexpr std::string_view kIgnoredStatus =
     "This available version is ignored. A newer version will appear here.";
 constexpr std::string_view kRequestedStatus =
@@ -384,7 +384,7 @@ void UpdatePromptController::tick(bool on_watch) {
   (void)on_watch;
   if (!cfg_.osd) return;
   if (!cfg_.state || !cfg_.state->available()) {
-    feed(false, std::string(kCheckingStatus), "");
+    feed(false, std::string(kNoUpdateStatus), "");
     return;
   }
   const std::string commit = cfg_.state->commit();
@@ -398,7 +398,7 @@ void UpdatePromptController::tick(bool on_watch) {
     if (notify_) kick_changelog();
   }
   if (!notify_) {
-    feed(false, hidden_status_.empty() ? std::string(kCheckingStatus) : hidden_status_, "");
+    feed(false, hidden_status_.empty() ? std::string(kNoUpdateStatus) : hidden_status_, "");
     return;
   }
   const ChangelogView cv = current_changelog();

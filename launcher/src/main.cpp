@@ -54,7 +54,7 @@ std::string update_policy_status(SelfUpdateMode mode) {
     case SelfUpdateMode::Off:
       return "Updates are off. Update Deckback in Discover or run flatpak update.";
     case SelfUpdateMode::Notify:
-      return "Checking for updates…";
+      return "No update is currently available.";
     case SelfUpdateMode::Auto:
       return "Automatic updates are enabled. New versions install when they are available.";
   }
