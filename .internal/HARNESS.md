@@ -119,6 +119,7 @@ This is the harness's least obvious property. Three different machines are invol
 | `just deck-channel` | report which channel (dev bundle / official repo) the Deck is on | Deck | ✓ read by eye | | | 3,4 |
 | `just logs` | tail the remote app log + journal | Deck | ✓ read by eye | | | — |
 | `just debug` | `ssh -L 9222` tunnel for `chrome://inspect` | Deck | ✓ browser | | | 3,4 |
+| `just portal-poll [set N\|restore\|status]` | shrink/restore the Deck's Flatpak-portal update poll (~30 min → N s) so a self-update round-trip fires fast; `set` then relaunch (a portal restart orphans a running app's monitor) | Deck | ✓ read by eye | ✓ portal drop-in (reversible via `restore`) | | 0,3,4,5 |
 | `just power [secs]` | assert playback + VA-API, sample draw → CSV, adjudicate vs the ≤9 W gate | Deck **on battery**, video playing | ✓ open a video | | ✓ CSV | 2,3,4,5 |
 | `just soak [n]` | *n* × suspend/resume; app alive **and** `currentTime` advanced; reports EPP | Deck, video playing | ✓ open a video | ✓ suspends HW | | 2,3,4,5 |
 | `just cert [suite] [preset]` | self-hosted `js_mse_eme` headless; fail only on a **regression** | `out/<preset>`, ctr, network | | | ✓ JUnit+JSON | 2,3,4 |

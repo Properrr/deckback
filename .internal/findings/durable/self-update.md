@@ -1,5 +1,63 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK, REAL REMOTE (2026-07-15, OLED, Game Mode)
+
+The on-Deck notify round-trip that every section below calls "still pending" **ran end-to-end and
+passed** — and against the **production** GitHub-Pages remote (`https://properrr.github.io/deckback/
+repo/`), a real **0.0.5 → 0.0.6** hop, so this doubles as the **T2 real-URL** verification, not just
+T1 staging. Trigger: a user reported "0.0.6 released but it won't auto-update." Diagnosis: nothing
+was broken — the release/publish pipeline was fine (remote `master` = commit `29e676d`, confirmed by
+importing the actual v0.0.6 release bundle: its metainfo lists 0.0.6 latest; `flatpak update` already
+reported `u`). The app simply behaves as designed: **`self_update_mode: notify` never auto-installs**,
+and the portal's ~30-min poll rarely coincides with short sessions.
+
+**What was verified (journal + `flatpak info` + the user's own eyes, OLED, ordinary Steam-shortcut
+launch in Game Mode):**
+- Real portal **detection** on the fast poll: fresh launch → 60 s later `updater: an update is
+  available (remote 29e676d7d4b3)` → `updater: notify mode — awaiting user confirmation in Settings ▸
+  Updates`. Genuine portal detection of the real published commit, correctly routed to notify.
+- The **OSD Updates UI rendered and worked**: the user found Settings ▸ Updates and pressed A on
+  *Update now* (human-confirmed; the settings button DOM was correct via CDP —
+  `#__deckback_settings_btn` `btnRect [1116,10,149,36]`, a proper top-right button, NOT the old
+  1279×0 mis-render). Per this file's own caveat, trust DOM assertions + a human's eyes over the
+  unreliable gamescope screenshot — a mid-session CDP snapshot with the OSD *closed* showed no badge
+  child, which is expected (the badge lives on the button/tab only while relevant), not a defect.
+- **Deploy** via the shipped consent seed (`flatpak permission-show` already had `flatpak updates …
+  yes`): `update requested; deploying in the background` → `update: user confirmed — deploy
+  requested` → 6 s later `update deployed — it will apply the next time Deckback is launched`.
+  `flatpak info` then read Version **0.0.6** / Commit `29e676d`; the next launch (fresh startup) bound
+  it and **ran 0.0.6**. This also confirms `Progress.status 2 (Done)` against a real successful update
+  (the earlier T1-REPLAY proved it from staging; this is the production remote).
+
+**Gotcha for anyone repeating this with a poll-timeout drop-in:** a portal **restart orphans an
+already-created `UpdateMonitor`** — the app subscribes once at start and never recreates it, and the
+orphaned monitor goes *silent* (no `sd_bus_process` error, just no signals). So install the
+`flatpak-portal.service` `--poll-timeout` drop-in and restart the portal **first**, *then* launch the
+app, or detection never fires that session. (This is how the first attempt today produced "watching
+for updates" but no detection: the app came up ~1 s before the portal restart.)
+
+**Method (Deck restored afterward):** the temporary portal poll override is now a first-class,
+reversible harness — **`just portal-poll set 60`** installs a user drop-in
+(`~/.config/systemd/user/flatpak-portal.service.d/zz-deckback-fastpoll.conf`,
+`ExecStart=/usr/lib/flatpak-portal --poll-timeout=60`; built-in default is ~30 min) and
+**`just portal-poll restore`** removes it and restarts the portal to default (`just portal-poll
+status` reports the effective interval). Pure logic is L0-tested (`tests/harness/test_portal_poll.sh`);
+`scripts/lib/portal_poll.sh` is the shared source of truth. **Run `set` BEFORE launching Deckback** —
+a portal restart orphans a running app's already-created monitor (see the ★ gotcha above). No other
+Deck changes; the 0.0.6 deploy is the only intended, kept result.
+
+**LCD (Van Gogh) — also VERIFIED (2026-07-15).** The same notify round-trip was confirmed working on
+the LCD unit too, so self-update is now proven on **both** the OLED (Sephiroth) and LCD (Van Gogh)
+APUs — the first Deckback feature verified on both. (This is the notify/OSD path specifically; other
+LCD-untested claims elsewhere still stand.)
+
+**Known reliability nit (being addressed):** the journal shows a recurring `updater: sd_bus_process
+error — self-update inactive until next launch` at **session teardown** that kills the updater thread
+for that session (it re-arms next launch, per the connect-once design), so a *very short* session may
+never reach the first poll. A **session-bus reconnect** for `updater.cpp` is planned to make the
+watcher survive a mid-session bus drop instead of going inert until relaunch (see
+`.internal/findings/durable/dbus-reconnect.md` once landed).
+
 ## ★ UI MOVED INTO THE OSD (2026-07-15) — see osd-menu-plan.md
 
 The standalone notify overlays described below (the amber **pill** and the modal **card**,
@@ -11,8 +69,9 @@ the in-app **OSD Settings menu** (`.internal/osd-menu-plan.md`): `updateprompt.c
 **Updates** tab; `confirm_update()`/`ignore_version()` are OSD action callbacks (A on *Update now* /
 Y / focused *Ignore*). This also fixes BUG 2b structurally (capture ⇔ paint, `osd-menu-plan.md` §2).
 Everything below about the portal deploy, the permission-store seed, and the on-Deck T1 results still
-holds verbatim; only the notify *surface* changed. The on-Deck notify round-trip is still pending —
-now via `tests/deck/test_osd.py` + the update round-trip, not the deleted pill/card.
+holds verbatim; only the notify *surface* changed. The on-Deck notify round-trip **is now VERIFIED**
+against the OSD UI — see ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK at the top of this file (2026-07-15,
+real 0.0.5→0.0.6 on the production remote).
 
 ## ★ NOTIFY MODE is the default (2026-07-14) — detect, don't enforce
 
@@ -200,10 +259,12 @@ instead of a `<style>` tag. Map it onto the two bugs and both fall out with no a
   no `<style>` and uses `adoptedStyleSheets`) and that the card/dot carry the keep-alive observer while
   the hide scripts drop from it. `overlay_test.cpp`'s toast-shape assertions updated to the CSSOM form.
 
-**Still TODO (the real gate):** re-run the on-Deck notify round-trip (Steam-shortcut launch,
-`DECKBACK_FAKE_UPDATE`, DOM assertions per the caveat — not the unreliable gamescope screenshot) and
-confirm the amber dot, the modal card, and the confirm toast all paint, and that a Leanback DOM swap
-no longer traps input. **Follow-up (separate, same cause):** `config/scripts/overlay.js` (the
+**DONE (the real gate) 2026-07-15:** the on-Deck notify round-trip ran end-to-end on the OSD UI via a
+real Steam-shortcut launch and **real portal detection** (not `DECKBACK_FAKE_UPDATE`) against the
+production remote — see ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK at the top. The OSD Settings ▸
+Updates badge/tab rendered, *Update now* drove a real deploy, and 0.0.6 bound on next launch. (The
+pill/card overlays this paragraph originally referred to were since replaced by the OSD menu; the CSP
+render fix below still applies to any remaining `<style>`/inline-`style` injection.) **Follow-up (separate, same cause):** `config/scripts/overlay.js` (the
 onboarding controls card) still uses a `<style>` block and is latently broken on M138 the same way —
 it belongs to onboarding, not this branch, but should get the identical `adoptedStyleSheets` treatment.
 

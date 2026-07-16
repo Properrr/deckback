@@ -96,6 +96,12 @@ logs:
 debug:
     ./scripts/debug.sh
 
+# Shrink the Deck's Flatpak-portal update poll (~30 min default) for fast self-update debugging, then
+# restore it. `just portal-poll set [seconds]` (default 60) | `restore` | `status` (default). Set
+# FIRST, then relaunch Deckback — a portal restart orphans a running app's monitor (self-update.md).
+portal-poll *args:
+    ./scripts/portal-poll.sh {{args}}
+
 # Format: tree clang-format on patch-touched files, gn format on .gn, clang-format on launcher/.
 fmt:
     ./scripts/fmt.sh
