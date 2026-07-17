@@ -72,6 +72,15 @@ else
   info "UNSIGNED repo (set DECKBACK_GPG_KEY to sign for a public deployment)"
 fi
 
+# Fail-fast completeness gate. The site is only redeployed on a Release, so a missing file here is a
+# silent 404 that survives until the next one (exactly how install.sh 404'd: an older publish-repo.sh
+# predating these cp lines shipped a site without it). Assert the staged tree — not the sources — so
+# dropping any cp line above is caught here, not by a user's curl.
+for f in index.html deckback.flatpakrepo "${app}.flatpakref" install.sh steam_shortcuts.py \
+  repo/config icon.png; do
+  [ -e "$site/$f" ] || die_assert "staged site is missing $f — the one-line installer would 404 (see scripts/publish-repo.sh)"
+done
+
 cat >&2 <<EOF
 
 Site staged in ${site}/ :
