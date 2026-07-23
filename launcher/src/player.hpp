@@ -1,15 +1,22 @@
 #pragma once
 #include <atomic>
+#include <functional>
 #include <optional>
 #include <string>
 
 #include "devtools.hpp"
 #include "layers.hpp"
+#include "platform.hpp"
 #include "worker.hpp"
 
 namespace deckback {
 
-class Platform;
+// The host unit scripts/install-idle-nudge.sh installs; without it SteamOS dims and suspends
+// mid-video and nothing in the sandbox can stop it (findings durable/keep-awake.md).
+inline constexpr const char* kKeepAwakeUnit = "deckback-idle-nudge.service";
+
+// Default keep-awake probe. Unknown when we may not ask, which must not produce a warning.
+UnitState keep_awake_state();
 
 // On resume, wait until host:port is reachable before nudging the player (timeout_ms 0 = skip).
 struct ResumeProbe {
@@ -53,6 +60,12 @@ class PlayerController {
   // keymaps. Must be called before start(); the LayerState must outlive this controller.
   void set_layer_sink(LayerState* layers) { layers_ = layers; }
 
+  // Checked once, on the first tick that observes playback, and warned about only if Inactive.
+  // Leave unset to disable the check entirely.
+  void set_keep_awake_probe(std::function<UnitState()> probe) {
+    keep_awake_probe_ = std::move(probe);
+  }
+
   void start();  // launch the poll thread
   void stop();   // signal + join (idempotent; also called by the destructor)
 
@@ -83,6 +96,8 @@ class PlayerController {
   long reload_after_suspend_ms_ = 0;
   long suspend_boottime_ms_ = 0;  // CLOCK_BOOTTIME at the last on_suspend (0 = none seen)
   bool warned_synthetic_ = false;
+  std::function<UnitState()> keep_awake_probe_;
+  bool warned_keep_awake_ = false;
   LayerState* layers_ = nullptr;  // optional context sink for the input layer
   // Kept as the raw bitmask rather than std::atomic<PlayState>: a 3-byte struct is not lock-free
   // and would drag in -latomic on GCC for no benefit.

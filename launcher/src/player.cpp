@@ -5,11 +5,19 @@
 
 #include "log.hpp"
 #include "netprobe.hpp"
+#include "overlay.hpp"
 #include "platform.hpp"
 #include "scripts.hpp"
 
 namespace deckback {
 namespace {
+
+// Shown over Leanback when the keep-awake helper is missing. Deliberately names no shell command:
+// installing it is a Desktop-Mode step, and Game Mode cannot act on a command line.
+constexpr const char* kKeepAwakeToast =
+    "Screen may dim and sleep during video \xE2\x80\x94 the keep-awake helper is not installed. "
+    "See Support.";
+constexpr int kKeepAwakeToastMs = 9000;
 
 // CLOCK_BOOTTIME (unlike CLOCK_MONOTONIC) keeps counting across system suspend, so the delta
 // between on_suspend and on_resume is the real wall-clock time the Deck slept.
@@ -29,6 +37,8 @@ std::string pause_js() { return ScriptLibrary::instance().render("player_pause")
 std::string play_js() { return ScriptLibrary::instance().render("player_play"); }
 
 }  // namespace
+
+UnitState keep_awake_state() { return user_unit_state(kKeepAwakeUnit); }
 
 PlayState decode_play_state(double bitmask) {
   PlayState s;
@@ -74,6 +84,16 @@ bool PlayerController::poll_once() {
   if (s.playing && synthetic_fallback_ && !platform_.backend_live() && !warned_synthetic_) {
     warn("player: idle-inhibit backend unavailable; synthetic-activity fallback not implemented");
     warned_synthetic_ = true;
+  }
+  if (s.playing && keep_awake_probe_ && !warned_keep_awake_) {
+    warned_keep_awake_ = true;
+    if (keep_awake_probe_() == UnitState::Inactive) {
+      warn(
+          std::format("player: {} is not running — the screen may dim and the Deck may suspend "
+                      "mid-video; install the keep-awake helper in Desktop Mode (docs/SUPPORT.md)",
+                      kKeepAwakeUnit));
+      show_toast(client_, kKeepAwakeToast, kKeepAwakeToastMs);
+    }
   }
   if (layers_) {
     layers_->set_video_up(s.player_open);

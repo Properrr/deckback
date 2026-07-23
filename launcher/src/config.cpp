@@ -70,6 +70,7 @@ constexpr Field<bool> kBoolFields[] = {
     {"error_page", &Config::error_page},
     {"log.log_mirror_stderr", &Config::log_to_stderr},
     {"power.idle_inhibit_synthetic_fallback", &Config::idle_inhibit_synthetic_fallback},
+    {"power.keep_awake_warn", &Config::keep_awake_warn},
 };
 
 struct IntField {

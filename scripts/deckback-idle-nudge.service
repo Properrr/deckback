@@ -6,7 +6,13 @@ Documentation=https://github.com/properrr/deckback
 # Injects a tiny synthetic pointer motion via /dev/uinput every ~25s WHILE Deckback holds its
 # "playback active" logind inhibitor, so gamescope/Steam's input-idle timer never fires. Runs on the
 # host because the Flatpak sandbox has no /dev/uinput and gamescope ignores sandbox-emulated input.
+# Diagnose (screen still dims after a SteamOS update?): journalctl --user -u deckback-idle-nudge,
+# then `deckback-idle-nudge --check` (is playback detected?) / `--force 120` (does the nudge still
+# hold the screen on when detection is bypassed?).
 ExecStart=%h/.local/bin/deckback-idle-nudge
+# Tune the nudge interval without editing the binary (kept under SteamOS's 1-min sleep floor):
+# Environment=DECKBACK_NUDGE_INTERVAL=25
+SyslogIdentifier=deckback-idle-nudge
 Restart=always
 RestartSec=5
 

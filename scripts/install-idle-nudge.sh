@@ -25,5 +25,12 @@ systemctl --user restart deckback-idle-nudge.service   # restart (not just --now
 systemctl --user --no-pager --full status deckback-idle-nudge.service || true
 echo
 echo "Installed. The helper nudges only while Deckback is playing a video; it does nothing otherwise,"
-echo "so the Deck still sleeps normally in menus. Uninstall:"
+echo "so the Deck still sleeps normally in menus."
+echo
+echo "If the screen still dims/sleeps during playback (e.g. after a SteamOS update), diagnose with:"
+echo "  journalctl --user -u deckback-idle-nudge -f      # 'playback active — nudging' while a video plays?"
+echo "  deckback-idle-nudge --check                      # is the playback inhibitor detected right now?"
+echo "  deckback-idle-nudge --force 120                  # nudge for 120s with detection bypassed"
+echo
+echo "Uninstall:"
 echo "  systemctl --user disable --now deckback-idle-nudge.service && rm ~/.local/bin/deckback-idle-nudge ~/.config/systemd/user/deckback-idle-nudge.service"

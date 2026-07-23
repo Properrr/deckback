@@ -285,6 +285,7 @@ int main(int argc, char** argv) {
         ResumeProbe{cfg->resume_probe_host, cfg->resume_probe_port, cfg->resume_online_timeout_ms},
         cfg->resume_reload_after_ms);
     player->set_layer_sink(&layers);
+    if (cfg->keep_awake_warn) player->set_keep_awake_probe(&keep_awake_state);
     platform->on_suspend([&] { player->on_suspend(); });
     platform->on_resume([&] { player->on_resume(); });
     player->start();

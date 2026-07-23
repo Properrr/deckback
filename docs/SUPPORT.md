@@ -75,6 +75,7 @@ launcher checks the Deckback Chromium sink input on startup and after resume, bu
 mute changes from inside the sandbox (`Access denied`). The host-side user service installed by
 `scripts/install-audio-repair.sh` watches only Deckback's sink input and clears stale mute state.
 It was verified on the OLED Deck by muting the live stream and observing `Mute: no` after recovery.
+Like the idle-nudge helper, it self-removes when you uninstall Deckback (or use `just uninstall`).
 
 If video is playing but silent, use the Deck's hardware volume controls and confirm the output is
 set to **Speaker**, not headphones or HDMI. From Desktop Mode, inspect the route with:
@@ -252,6 +253,12 @@ power button works normally. Install it once, in **Desktop Mode**:
 
     just idle-nudge      # or: ./scripts/install-idle-nudge.sh
 
+If the helper is **not** installed, Deckback tells you: the first time a video plays it shows a
+one-time toast that the screen may dim and sleep. It can only report this, never fix it — a sandboxed
+Flatpak cannot install a host service. Set `power.keep_awake_warn: false` in `app.json` to silence the
+toast if you deliberately run without the helper; Deckback also stays silent when it isn't permitted
+to check.
+
 It self-uninstalls if you later remove Deckback (Flatpak can't run host commands on uninstall, so the
 helper watches for that and cleans itself up). Uninstall manually with:
 
@@ -260,6 +267,38 @@ helper watches for that and cleans itself up). Uninstall manually with:
 
 Without the helper, the Deck simply auto-suspends during long idle playback and **resumes where you
 left off** on wake — normal Deck behavior, just not TV-like.
+
+**If the screen still dims and sleeps during playback** — for example after a SteamOS update changed
+something — the helper is installed but no longer holding the timer off. Diagnose it on the Deck (in
+Desktop Mode, or over SSH) while a video is playing:
+
+    journalctl --user -u deckback-idle-nudge -f     # should print "playback active — nudging"
+    deckback-idle-nudge --check                     # is the playback inhibitor detected right now?
+    deckback-idle-nudge --force 120                 # nudge for 120 s with detection bypassed
+
+If `--check` says playback is **not** detected while a video is clearly playing, the helper can't see
+Deckback's playback signal — reinstall it (`just idle-nudge`) and, if it persists, file an issue. If
+`--check` detects playback but the screen still dims, run `--force 120` during playback: if the screen
+stays lit, the service just needs a restart (`systemctl --user restart deckback-idle-nudge`); if it
+dims even under `--force`, a newer gamescope has stopped honoring the synthetic nudge and the helper
+needs an update — please file an issue with your SteamOS version.
+
+## Uninstalling Deckback
+
+Flatpak has no uninstall hook, so removing the app through Discover or `flatpak uninstall` leaves the
+two host helpers (idle-nudge, audio-repair) enabled and the Steam library shortcut behind. To remove
+**everything** in one step, run this on the Deck in **Desktop Mode**:
+
+    just uninstall            # remove app + both helpers + Steam shortcut; KEEP your YouTube sign-in
+    just uninstall --purge    # also delete app data (sign-in, cache) — a full wipe
+    just uninstall --yes      # skip the confirmation prompt
+
+By default your **sign-in is kept** (`~/.var/app/io.github.properrr.deckback`), so a later reinstall
+resumes where you left off; `--purge` deletes that too. Close Steam first if you want the library
+shortcut and its artwork removed (Steam rewrites its shortcut file on exit, so an edit while it is
+running would be lost). If you only ever `flatpak uninstall` the app instead, the helpers **self-clean
+anyway** — each watches for the app to disappear and removes its own service + binary within ~30 s
+(and survives an app *update*, which is not an uninstall).
 
 ## Known limitations
 

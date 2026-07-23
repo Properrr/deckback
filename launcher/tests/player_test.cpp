@@ -5,7 +5,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <string>
+#include <string_view>
 #include <thread>
+#include <vector>
 
 #include "fake_cdp_server.hpp"
 #include "netprobe.hpp"
@@ -219,6 +222,80 @@ void test_resume_no_reload_when_disabled() {
   assert(!server.saw_reload());
 }
 
+// The ASCII core of kKeepAwakeToast, so JSON-escaping of the em-dash cannot break the match.
+constexpr std::string_view kKeepAwakeNeedle = "keep-awake helper is not installed";
+
+bool any_request_contains(const std::vector<std::string>& reqs, std::string_view needle) {
+  for (const auto& r : reqs)
+    if (r.find(needle) != std::string_view::npos) return true;
+  return false;
+}
+
+// Helper missing + a video playing: warn exactly once, however long playback runs.
+void test_keep_awake_warns_once_when_helper_inactive() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  int probes = 0;
+  pc.set_keep_awake_probe([&probes] {
+    ++probes;
+    return UnitState::Inactive;
+  });
+  server.set_playing(true);
+  server.take_requests();
+  assert(pc.poll_once() == true);
+  assert(pc.poll_once() == true);
+  assert(probes == 1);
+  assert(any_request_contains(server.take_requests(), kKeepAwakeNeedle));
+}
+
+// Helper running: probed once, never announced.
+void test_keep_awake_silent_when_helper_active() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  int probes = 0;
+  pc.set_keep_awake_probe([&probes] {
+    ++probes;
+    return UnitState::Active;
+  });
+  server.set_playing(true);
+  server.take_requests();
+  assert(pc.poll_once() == true);
+  assert(probes == 1);
+  assert(!any_request_contains(server.take_requests(), kKeepAwakeNeedle));
+}
+
+// Unknown means we could not ask (no permission to talk to systemd1) — say nothing. Warning about a
+// helper we cannot see would be unactionable noise on every launch.
+void test_keep_awake_silent_when_state_unknown() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  pc.set_keep_awake_probe([] { return UnitState::Unknown; });
+  server.set_playing(true);
+  server.take_requests();
+  assert(pc.poll_once() == true);
+  assert(!any_request_contains(server.take_requests(), kKeepAwakeNeedle));
+}
+
+// Nothing playing: nothing to keep awake, so the helper is never probed.
+void test_keep_awake_not_probed_while_idle() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  int probes = 0;
+  pc.set_keep_awake_probe([&probes] {
+    ++probes;
+    return UnitState::Inactive;
+  });
+  server.set_playing(false);
+  server.take_requests();
+  assert(pc.poll_once() == false);
+  assert(probes == 0);
+  assert(!any_request_contains(server.take_requests(), kKeepAwakeNeedle));
+}
+
 }  // namespace
 
 int main() {
@@ -233,6 +310,10 @@ int main() {
   test_resume_with_probe();
   test_resume_reloads_after_long_suspend();
   test_resume_no_reload_when_disabled();
+  test_keep_awake_warns_once_when_helper_inactive();
+  test_keep_awake_silent_when_helper_active();
+  test_keep_awake_silent_when_state_unknown();
+  test_keep_awake_not_probed_while_idle();
   std::puts("player_test: ok");
   return 0;
 }

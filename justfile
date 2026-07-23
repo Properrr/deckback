@@ -183,3 +183,9 @@ audio-repair:
 # plays). Runs ON the Deck in Desktop Mode, not from the workstation. See docs/SUPPORT.md.
 idle-nudge:
     ./scripts/install-idle-nudge.sh
+
+# Remove Deckback + every host-side trace (both helpers, the Steam shortcut). Keeps app data (the
+# YouTube sign-in) unless you pass --purge. Runs ON the Deck in Desktop Mode. See docs/SUPPORT.md.
+#   just uninstall            # keep sign-in    ·    just uninstall --purge   # full wipe
+uninstall *args:
+    ./scripts/uninstall.sh "$@"

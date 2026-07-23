@@ -29,6 +29,8 @@
     "$comment": "Phase 6 (doc §2 P6). Play-state is polled over DevTools (needs remote_debugging_port) to hold the logind idle inhibitor while a video plays. Synthetic fallback is off by default.",
     "devtools_poll_ms": 1000,
     "idle_inhibit_synthetic_fallback": false,
+    "keep_awake_warn": true,
+    "$comment_keep_awake": "SteamOS dims the screen and auto-suspends mid-video unless the host-side keep-awake helper (scripts/install-idle-nudge.sh, `just idle-nudge`) is running — nothing inside the Flatpak sandbox can prevent it (findings durable/keep-awake.md). When true, the launcher asks the host user systemd whether deckback-idle-nudge.service is active, once, on the first tick that observes playback, and shows a one-time toast if it is not. It stays silent when the answer is unknown (e.g. the sandbox may not talk to org.freedesktop.systemd1), so it can never nag about something it cannot see. Set false to suppress the toast if you deliberately run without the helper.",
     "resume_probe_host": "www.youtube.com",
     "resume_probe_port": 443,
     "resume_online_timeout_ms": 8000,

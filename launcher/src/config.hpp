@@ -116,6 +116,8 @@ struct Config {
   // to fall back to synthetic activity when no logind idle inhibitor is available.
   int devtools_poll_ms = 1000;
   bool idle_inhibit_synthetic_fallback = false;
+  // Warn once, on first playback, when the host keep-awake helper is not running.
+  bool keep_awake_warn = true;
   // On resume, wait until this host:port is reachable before nudging the player (0 ms = skip).
   std::string resume_probe_host = "www.youtube.com";
   int resume_probe_port = 443;

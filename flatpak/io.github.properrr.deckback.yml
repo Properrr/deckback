@@ -32,6 +32,10 @@ finish-args:
   - --device=input
   - --talk-name=org.freedesktop.ScreenSaver
   - --system-talk-name=org.freedesktop.login1
+  # Read-only: ask the host user manager whether deckback-idle-nudge.service is active, so the app
+  # can warn that the screen will dim mid-video (keep-awake.md). It cannot install the helper — the
+  # sandbox has no host exec and no write access to ~/.config/systemd/user — only report it missing.
+  - --talk-name=org.freedesktop.systemd1
   # Self-update: the Flatpak portal lets this sandboxed app update ONLY itself, from its own remote,
   # with no root and no password (findings durable/self-update.md). ON by default (app.json:
   # self_update=true) — the portal path is verified on-Deck; the permission is inert if turned off.
