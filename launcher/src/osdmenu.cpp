@@ -135,10 +135,10 @@ void OsdMenuController::tick(bool on_watch) {
   if (just_reloaded) button_shown_ = false;
 
   if (open_.load(std::memory_order_acquire)) {
-    if (on_watch)
-      close_menu();  // a video came up under the open menu
-    else
-      reconcile_open();  // enforce capture <=> paint: the menu we capture for must still be painted
+    // The menu is allowed to stay up over playback (Menu opens it there, and Exit is most wanted
+    // mid-video), so a video appearing underneath no longer closes it. Capture is modal, so a video
+    // can only arrive from autoplay/up-next, never from the user driving Leanback behind the menu.
+    reconcile_open();  // enforce capture <=> paint: the menu we capture for must still be painted
   } else if (just_reloaded) {
     // Not captured, but a reload can leave a keep-alive'd node painted with no owner — keys would
     // pass through a visible menu. Sweep it (no-op if nothing is there).

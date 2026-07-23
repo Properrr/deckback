@@ -1,8 +1,12 @@
 # Exit / Quit — design doc
 
-Status: **PROPOSED** — no code written. Scope: how a user deliberately leaves Deckback, where that
+Status: **ACCEPTED, in implementation.** Scope: how a user deliberately leaves Deckback, where that
 control lives, and how they find out it exists. Supersedes nothing; closes one open question in
 `findings/durable/input-ux.md` (Back-at-root).
+
+Decisions taken by the user 2026-07-23: **hold-A-to-confirm** (not the inline confirm this doc
+originally recommended — §4), **footer on every tab** (E1), **available during playback** (E9), and
+**not bindable to a controller button** (E3).
 
 ---
 
@@ -186,6 +190,8 @@ avoids implying a bindable Exit button exists.
 | E6 | Exit routes through **`Watchdog::request_shutdown()`** | The only path the watchdog treats as success rather than a crash to restart |
 | E7 | Exit is **refused while an update deploy is in flight** | A half-applied portal deploy is the one genuinely unsafe interruption |
 | E8 | Label is **"Exit Deckback"** | Mirrors Steam's "Exit Game"; naming the app disambiguates from leaving a video |
+| E9 | The OSD is **reachable during playback**: Menu opens it on the watch screen, and a video appearing underneath no longer closes it. The on-screen Settings **button** stays hidden there. | Mid-video is the most likely moment to want Exit. Menu had nothing else to do on watch — `show_controls` is stripped from the keymap in the input ctor and resolves to no DOM key, so Menu was a *dead button* there. Capture is modal, so a video can only arrive from autoplay/up-next, never from the user driving Leanback behind the menu. (User-selected 2026-07-23.) |
+| E10 | Confirm is **hold-A (~600 ms)** with a progress fill and a rumble on completion; release early cancels. The row label advertises "Hold A to exit". | User-selected 2026-07-23 over the inline confirm. One interaction, impossible to trigger accidentally, and the haptics already exist (`haptic.cpp`). The label carries the discoverability the gesture otherwise lacks. |
 
 ## 8. Test plan
 
@@ -205,9 +211,9 @@ L2 / on-device (the parts L0 cannot prove):
 
 ## 9. Open questions
 
-- **Confirm vs hold-to-confirm** (§4). Recommend inline confirm; revisit if it feels heavy in hand.
-- **Should Exit also appear when the OSD is opened during playback?** The OSD gates some actions on
-  playback. Exit should stay available — the most likely moment to want out is mid-video — but that
-  interacts with the playback-gating rules and should be confirmed against `osdmenu.cpp`.
+- ~~Confirm vs hold-to-confirm~~ — **resolved: hold-A** (E10).
+- ~~Exit during playback~~ — **resolved: available** (E9); the gating change shipped with it.
 - **Power-off / sleep adjacency.** Deliberately out of scope: sleep is the STEAM button's job, and
   adding a second power verb next to Exit invites mis-selection.
+- **Hold duration.** ~600 ms is a starting point, not a measured value. Long enough to be deliberate,
+  short enough not to feel stuck; confirm in hand and tune.

@@ -116,6 +116,37 @@ void test_reconcile_ignores_a_detached_node() {
   assert(osd.open());
 }
 
+// Mid-video is exactly when Exit and the settings are wanted, and Menu has nothing else to do on
+// the watch screen (`show_controls` is stripped from the keymap and resolves to no DOM key, so Menu
+// was simply dead there). So the menu must survive a video appearing underneath it. Capture is
+// modal, so that can only come from autoplay/up-next, never from the user driving Leanback behind
+// the menu.
+void test_menu_stays_open_over_playback() {
+  testing::FakeServer srv;
+  OsdMenuConfig cfg;
+  cfg.cdp_port = srv.port();
+  cfg.local_version = "0.0.4";
+  OsdMenuController osd(cfg);
+  assert(osd.open_menu());
+  srv.set_osd_state("tab=settings;idx=-1");  // still painted
+  osd.tick(true);                            // a video is up underneath
+  assert(osd.open());                        // NOT torn down
+}
+
+// ...but the on-screen Settings button stays hidden on the watch screen, so it never sits over the
+// video. Only the physical Menu button reaches the menu there.
+void test_settings_button_is_not_drawn_over_playback() {
+  testing::FakeServer srv;
+  OsdMenuConfig cfg;
+  cfg.cdp_port = srv.port();
+  OsdMenuController osd(cfg);
+  srv.take_requests();
+  osd.tick(true);  // on watch
+  for (const std::string& request : srv.take_requests())
+    assert(request.find("__deckback_settings_btn") == std::string::npos ||
+           request.find("osd-button-state") != std::string::npos);
+}
+
 int main() {
   test_status_line();
   test_button_is_redrawn_when_a_same_url_reload_wipes_it();
@@ -124,6 +155,8 @@ int main() {
   test_reconcile_releases_capture_when_the_page_reloaded_the_menu_away();
   test_reconcile_keeps_capture_while_painted();
   test_reconcile_ignores_a_detached_node();
+  test_menu_stays_open_over_playback();
+  test_settings_button_is_not_drawn_over_playback();
   std::puts("osdmenu_test: all passed");
   return 0;
 }

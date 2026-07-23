@@ -62,7 +62,7 @@ class OsdMenuController {
   // Modal-capture flag, read by the input thread every event.
   bool open() const { return open_.load(std::memory_order_acquire); }
 
-  // Deliberate open (Menu button, off playback). False if the engine is unreachable.
+  // Deliberate open (Menu button), on the watch screen too. False if the engine is unreachable.
   bool open_menu();
   void close_menu();
 

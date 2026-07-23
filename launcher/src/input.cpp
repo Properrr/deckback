@@ -458,8 +458,11 @@ void GamepadInput::osd_event(int type, int code, int value) {
 bool GamepadInput::osd_open_edge(int type, int code, int value) {
   if (!osd_ || osd_->open()) return false;
   if (type == EV_KEY && value == 1 && code == menu_code_ && menu_code_ >= 0) {
-    if (layers_ && layers_->video_up())
-      return false;  // Menu keeps its normal meaning over playback
+    // Menu opens the OSD during playback too. It has nothing else to do there: `show_controls` is
+    // stripped from the keymap in the ctor and resolves to no DOM key, so Menu was simply dead on
+    // the watch screen — and mid-video is exactly when Exit and the settings are wanted. The
+    // on-screen Settings button stays hidden on watch (tick(): want = !on_watch); only the physical
+    // button reaches the menu there.
     osd_->open_menu();
     return true;
   }
