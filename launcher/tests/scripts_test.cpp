@@ -104,6 +104,16 @@ void test_overlays_use_a_csp_safe_style_path() {
   }
 }
 
+void test_toast_wraps_instead_of_clipping() {
+  // `white-space: pre` never wraps, so a toast wider than the panel was clipped at BOTH edges (it
+  // is centred with translateX(-50%)) — silently, with no ellipsis. Observed on-Deck with the
+  // keep-awake warning. pre-wrap + a max-width is what keeps a long or hot-swapped string readable.
+  const std::string b(ScriptLibrary::instance().body("toast"));
+  assert(has(b, "'pre-wrap'"));
+  assert(!has(b, "'white-space', 'pre'"));
+  assert(has(b, "max-width"));
+}
+
 void test_overlays_self_heal_across_body_swaps() {
   // A Leanback in-page body swap can detach a documentElement child without firing on_app_loaded,
   // so the keep-alive observer re-appends the dot/card; the *_hide scripts must drop from the
@@ -155,6 +165,7 @@ int main() {
   test_render_unknown_is_empty();
   test_embedded_defaults_present();
   test_overlays_use_a_csp_safe_style_path();
+  test_toast_wraps_instead_of_clipping();
   test_overlays_self_heal_across_body_swaps();
   // Keep this LAST: it mutates the process-wide singleton (a fresh process per test binary, so this
   // is safe, but ordering it last keeps the earlier assertions against pristine embedded defaults).

@@ -66,8 +66,9 @@ void test_toast_js_escapes_newlines() {
   const std::string js = toast_js("one\ntwo", 100);
   assert(has(js, R"("text":"one\ntwo")"));
   assert(!has(js, "one\ntwo"));  // no raw newline survived into the param
-  // white-space:pre (via CSSOM), or the escaped \n renders as a space.
-  assert(has(js, "setProperty('white-space', 'pre')"));
+  // pre-wrap (via CSSOM) keeps the escaped \n a line break like `pre` did, and additionally wraps a
+  // long single line instead of clipping it off both edges.
+  assert(has(js, "setProperty('white-space', 'pre-wrap')"));
 }
 
 void test_toast_js_clamps_negative_duration() {

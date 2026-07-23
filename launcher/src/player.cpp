@@ -12,11 +12,11 @@
 namespace deckback {
 namespace {
 
-// Shown over Leanback when the keep-awake helper is missing. Deliberately names no shell command:
-// installing it is a Desktop-Mode step, and Game Mode cannot act on a command line.
+// Shown over Leanback when the keep-awake helper is missing. Kept short: toast.js centres one line
+// and only wraps at 76vw, and a toast cannot be acted on — the log line and SUPPORT.md carry the
+// how-to-fix detail. Names no shell command: installing it is a Desktop-Mode step.
 constexpr const char* kKeepAwakeToast =
-    "Screen may dim and sleep during video \xE2\x80\x94 the keep-awake helper is not installed. "
-    "See Support.";
+    "Keep-awake helper not running \xE2\x80\x94 screen may dim during video";
 constexpr int kKeepAwakeToastMs = 9000;
 
 // CLOCK_BOOTTIME (unlike CLOCK_MONOTONIC) keeps counting across system suspend, so the delta

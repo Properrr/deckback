@@ -223,7 +223,7 @@ void test_resume_no_reload_when_disabled() {
 }
 
 // The ASCII core of kKeepAwakeToast, so JSON-escaping of the em-dash cannot break the match.
-constexpr std::string_view kKeepAwakeNeedle = "keep-awake helper is not installed";
+constexpr std::string_view kKeepAwakeNeedle = "Keep-awake helper not running";
 
 bool any_request_contains(const std::vector<std::string>& reqs, std::string_view needle) {
   for (const auto& r : reqs)

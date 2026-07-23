@@ -21,7 +21,11 @@
   s.setProperty('padding', '18px 30px');
   s.setProperty('border-radius', '14px');
   s.setProperty('pointer-events', 'none');
-  s.setProperty('white-space', 'pre');
+  // pre-wrap, not pre: `pre` never wraps, so a toast wider than the panel is clipped at BOTH edges
+  // (centred via translateX(-50%)) with no ellipsis and no error. max-width makes it wrap early.
+  s.setProperty('white-space', 'pre-wrap');
+  s.setProperty('max-width', '76vw');
+  s.setProperty('text-align', 'center');
   s.setProperty('opacity', '1');
   s.setProperty('transition', 'opacity .35s ease-out');
   if (window.__deckbackToastT) clearTimeout(window.__deckbackToastT);
