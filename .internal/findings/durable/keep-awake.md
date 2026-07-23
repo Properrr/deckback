@@ -128,6 +128,13 @@ playback active","block"]` inhibitor, and the `deckback-idle-nudge` uinput devic
 past the configured Steam timer (the 1 min / 5 min setting) with no suspend** — the same gate the
 2026-07-11 result used, so the regression is closed end to end.
 
+**Re-confirmed the same day through a full deploy**, which is the strongest form of this test: a new
+bundle was built from main and installed with `just deck-install-dev`, i.e. the exact
+flatpak uninstall→install cycle that caused the original self-removal. The helper came through it
+with `NRestarts=0`, continuously active across the deploy, and never even entered the grace period
+(no poll landed in the ~10 s uninstall gap). The user then confirmed the screen still does not dim.
+So the fix holds against the real trigger, not just against the symptom.
+
 Also fixed: `install-audio-repair.sh` used `enable --now`, which does not restart an already-running
 unit, so reinstalling it never picked up new code (observed on-Deck: the pre-update process was still
 live after a reinstall). It now `restart`s, like the idle-nudge installer already did.
