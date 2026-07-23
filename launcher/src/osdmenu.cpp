@@ -36,6 +36,7 @@ OsdVerdict parse_verdict(std::string_view v) {
   constexpr std::string_view kApply = "apply:";
   if (v.substr(0, kApply.size()) == kApply)
     return {OsdVerdict::Kind::Apply, std::string(v.substr(kApply.size()))};
+  if (v == "hold") return {OsdVerdict::Kind::Hold, {}};
   return {OsdVerdict::Kind::Consumed, {}};
 }
 
@@ -84,8 +85,16 @@ bool OsdMenuController::inject_open(DevToolsClient& client) {
       .set("about_author", ab.developer)
       .set("about_version", cfg_.local_version)
       .set("about_features", ab.features)
-      .set("about_links", links);
+      .set("about_links", links)
+      .set("exit_enabled", cfg_.exit_enabled && static_cast<bool>(cfg_.on_exit))
+      .set("hold_ms", cfg_.exit_hold_ms);
   return eval_op(client, pm) == "ok";
+}
+
+void OsdMenuController::fire_exit() {
+  if (!cfg_.on_exit) return;
+  info("osd: exit confirmed (hold complete)");
+  cfg_.on_exit();
 }
 
 bool OsdMenuController::open_menu() {
@@ -123,6 +132,9 @@ std::string OsdMenuController::exec(std::string_view cmd) {
       break;
     case OsdVerdict::Kind::Apply:
       if (cfg_.captions) cfg_.captions->apply_action(pv.action);
+      break;
+    case OsdVerdict::Kind::Hold:
+      // The input layer owns the hold deadline (it sees the release edge); nothing to do here.
       break;
     case OsdVerdict::Kind::Consumed:
       break;

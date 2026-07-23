@@ -115,7 +115,17 @@
     "#__deckback_osd .dbf{outline:3px solid #f5b301;outline-offset:2px;background:rgba(245,179,1,0.14);}" +
     "#__deckback_osd .hint{color:#9a9a9a;font-size:19px;border-top:2px solid rgba(255,255,255,0.12);" +
     "padding-top:10px;}" +
-    "#__deckback_osd .hint .kb{font-weight:700;}";
+    "#__deckback_osd .hint .kb{font-weight:700;}" +
+    "#__deckback_osd .exitbar{position:relative;overflow:hidden;display:flex;align-items:center;" +
+    "justify-content:space-between;gap:24px;margin-top:10px;padding:12px 18px;border-radius:11px;" +
+    "font-size:23px;border-top:2px solid rgba(255,255,255,0.12);}" +
+    "#__deckback_osd .exitbar .lbl{display:flex;align-items:center;gap:12px;font-weight:600;}" +
+    "#__deckback_osd .exitbar .hold{color:#9a9a9a;font-size:19px;}" +
+    "#__deckback_osd .exitbar.off{opacity:0.45;}" +
+    // The hold fill: width is driven by a CSS transition whose duration C++ supplies, so the bar and
+    // the launcher's timer cannot drift apart, and no per-frame CDP traffic is needed.
+    "#__deckback_osd .exitbar .fill{position:absolute;left:0;top:0;bottom:0;width:0;" +
+    "background:rgba(245,179,1,0.30);pointer-events:none;}";
 
   function ensureSheet() {
     try {
@@ -313,8 +323,25 @@
     hint.appendChild(el('span', 'kb', 'L1/R1'));
     hint.appendChild(el('span', null, ' Tab   ←/→ Change · Reorder   ↑↓ Move'));
 
+    // Exit lives in the chrome, not in a tab: it is not a setting, and a tab whose selection is an
+    // action would sit in the L1/R1 cycle the user passes through constantly. Present on every tab,
+    // and collect() appends it as the LAST focus stop wherever you are.
+    var exitBar = el('div', 'exitbar');
+    exitBar.setAttribute('data-focus', '1');
+    exitBar.setAttribute('data-role', 'exit');
+    var exitFill = el('div', 'fill');
+    exitBar.appendChild(exitFill);
+    var exitLbl = el('span', 'lbl');
+    exitLbl.appendChild(el('span', null, '⏻'));
+    exitLbl.appendChild(el('span', null, p.exit_label || 'Exit Deckback'));
+    exitBar.appendChild(exitLbl);
+    var exitHold = el('span', 'hold', p.exit_hint || 'Hold A to exit');
+    exitBar.appendChild(exitHold);
+    if (p.exit_enabled === false) exitBar.classList.add('off');
+
     root.appendChild(tabs);
     root.appendChild(content);
+    root.appendChild(exitBar);
     root.appendChild(hint);
     document.documentElement.appendChild(root);
     if (window.__dbKeepAlive) window.__dbKeepAlive(root);
@@ -333,7 +360,10 @@
       subLabel: subLabel,
       subContent: subContent,
       keysScroll: keysScroll,
-      picker: null
+      picker: null,
+      exitBar: exitBar,
+      exitFill: exitFill,
+      exitEnabled: p.exit_enabled !== false
     };
 
     function comboText(row) {
@@ -413,6 +443,7 @@
     S.collect = function () {
       var nodes = S.panels[S.tab].querySelectorAll('[data-focus]');
       S.focusables = Array.prototype.slice.call(nodes);
+      if (S.exitBar) S.focusables.push(S.exitBar);  // always the last stop, on every tab
     };
     S.setTab = function (tab, idx) {
       S.clearRing();
@@ -572,10 +603,30 @@
       return 'consumed';
     }
 
-    S.activate = function () {
+    // Exit is hold-to-confirm, so A on it does not act: it starts the fill and answers 'hold'. The
+    // launcher owns the deadline and either fires the exit or sends hold_cancel on an early release.
+    S.holdStart = function (ms) {
+      if (!S.exitEnabled || !S.exitFill) return 'consumed';
+      var f = S.exitFill;
+      f.style.setProperty('transition', 'none');
+      f.style.setProperty('width', '0');
+      void f.offsetWidth;  // flush, or the transition starts from the old width
+      f.style.setProperty('transition', 'width ' + (ms > 0 ? ms : 0) + 'ms linear');
+      f.style.setProperty('width', '100%');
+      return 'hold';
+    };
+    S.holdCancel = function () {
+      if (!S.exitFill) return 'consumed';
+      S.exitFill.style.setProperty('transition', 'width 140ms ease-out');
+      S.exitFill.style.setProperty('width', '0');
+      return 'consumed';
+    };
+
+    S.activate = function (ms) {
       var n = S.focusables[S.focusIdx];
       if (!n) return 'consumed';
       var role = n.getAttribute('data-role');
+      if (role === 'exit') return S.holdStart(ms);
       if (role === 'add') return openPicker();
       var a = n.getAttribute('data-action');
       return a ? ('action:' + a) : 'consumed';
@@ -626,7 +677,8 @@
         case 'down': return moveOrScroll(1);
         case 'left': return edit(-1);
         case 'right': return edit(1);
-        case 'select': return S.activate();
+        case 'select': return S.activate(p.hold_ms);
+        case 'hold_cancel': return S.holdCancel();
         case 'delete': {
           var d = S.focusables[S.focusIdx];
           if (d && d.getAttribute('data-role') === 'langremove') return removeLang(d);

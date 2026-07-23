@@ -25,8 +25,14 @@ namespace deckback {
 namespace {
 
 constexpr long kInitialDelayMs = 350;  // hold-to-repeat: delay before the first auto-repeat
-constexpr long kRepeatMs = 130;        // base repeat interval
-constexpr long kMinRepeatMs = 55;      // fastest interval after acceleration
+
+// Exit hold completed. A single firm pulse, distinct from the touch-lock pair: it is the only
+// confirmation the hold took, and the app is about to disappear.
+constexpr uint16_t kExitRumbleStrong = 0xE000;
+constexpr uint16_t kExitRumbleWeak = 0x6000;
+constexpr uint16_t kExitRumbleMs = 220;
+constexpr long kRepeatMs = 130;    // base repeat interval
+constexpr long kMinRepeatMs = 55;  // fastest interval after acceleration
 constexpr int kStickDeadzone =
     13000;  // |axis| beyond this counts as a direction (Xbox range ~32767)
 
@@ -319,21 +325,23 @@ void GamepadInput::announce_touch_lock(bool locked) {
                locked ? 2600 : 1600);
   }
   if (!touch_haptic_) return;
-  if (!haptic_tried_) {
-    // Deferred to the first pulse: at construction no pad has been discovered yet. Once only —
-    // a pad without FF must not re-open a device on every toggle.
-    haptic_tried_ = true;
-    for (const std::string& p : paths_)
-      if (haptic_.attach(p)) break;
-    if (!haptic_.attached())
-      info("input: no force-feedback device — touch-lock haptics unavailable (toast only)");
-  }
+  ensure_haptic();
   // Two magnitudes, not one: locking and unlocking must feel different in the pocket, since the
   // user may trip the chord without looking at the screen.
   if (locked)
     haptic_.rumble(0xC000, 0x4000, 180);
   else
     haptic_.rumble(0x3000, 0x8000, 90);
+}
+
+void GamepadInput::ensure_haptic() {
+  if (haptic_tried_) return;
+  // Deferred to the first pulse: at construction no pad has been discovered yet. Once only — a pad
+  // without FF must not re-open a device on every toggle.
+  haptic_tried_ = true;
+  for (const std::string& p : paths_)
+    if (haptic_.attach(p)) break;
+  if (!haptic_.attached()) info("input: no force-feedback device — haptics unavailable");
 }
 
 void GamepadInput::toggle_captions() {
@@ -399,9 +407,12 @@ void GamepadInput::tick_caption_apply(bool on_watch) {
 void GamepadInput::osd_event(int type, int code, int value) {
   if (type == EV_KEY) {
     if (value == 1) {  // press edge; fixed nav buttons
-      if (code == osd_a_ && osd_a_ >= 0)
-        osd_->exec("select");
-      else if ((code == osd_b_ && osd_b_ >= 0) || (code == menu_code_ && menu_code_ >= 0))
+      if (code == osd_a_ && osd_a_ >= 0) {
+        // A on a hold-to-confirm control (Exit) answers "hold" instead of acting: arm the deadline
+        // and let the release edge below cancel it.
+        if (parse_verdict(osd_->exec("select")).kind == OsdVerdict::Kind::Hold)
+          exit_hold_deadline_ = mono_ms() + osd_->exit_hold_ms();
+      } else if ((code == osd_b_ && osd_b_ >= 0) || (code == menu_code_ && menu_code_ >= 0))
         osd_->exec("back");
       else if (code == osd_x_ && osd_x_ >= 0)
         osd_->exec("delete");
@@ -415,7 +426,13 @@ void GamepadInput::osd_event(int type, int code, int value) {
     // Modal capture must not freeze physical state machines that started before the menu opened:
     // swallowing a trigger release leaves its next press dead or its modifier layer stuck. Presses
     // still stay modal — only release bookkeeping is allowed through.
-    if (value == 0) handle_chord(code, value);
+    if (value == 0) {
+      if (code == osd_a_ && osd_a_ >= 0 && exit_hold_deadline_ != 0) {
+        exit_hold_deadline_ = 0;  // released early — nothing happens
+        osd_->exec("hold_cancel");
+      }
+      handle_chord(code, value);
+    }
     return;  // swallow every button while the menu is up
   }
   if (type != EV_ABS) return;
@@ -580,6 +597,7 @@ void GamepadInput::loop() {
     if (fast_key_) consider(fast_next_ms_);
     if (chord_.pending()) consider(chord_.deadline_ms());
     if (caption_apply_pending_) consider(caption_next_ms_);
+    if (exit_hold_deadline_ != 0) consider(exit_hold_deadline_);
 
     std::vector<pollfd> pfds;
     pfds.reserve(fds_.size());
@@ -616,6 +634,15 @@ void GamepadInput::loop() {
     if (onboarding_ && onboarding_->visible()) set_direction(nullptr);
 
     if (chord_.pending()) apply_touch_lock(chord_.on_tick(mono_ms()));
+
+    // Hold-to-confirm completed on the OSD's Exit row. Rumble first: it is the only feedback that
+    // the hold took, and the app is about to go away.
+    if (exit_hold_deadline_ != 0 && mono_ms() >= exit_hold_deadline_) {
+      exit_hold_deadline_ = 0;
+      ensure_haptic();
+      haptic_.rumble(kExitRumbleStrong, kExitRumbleWeak, kExitRumbleMs);
+      if (osd_) osd_->fire_exit();
+    }
 
     // Directional auto-repeat with acceleration.
     if (dir_key_ && mono_ms() >= next_repeat_ms_) {

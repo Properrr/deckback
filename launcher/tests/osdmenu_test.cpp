@@ -147,6 +147,52 @@ void test_settings_button_is_not_drawn_over_playback() {
            request.find("osd-button-state") != std::string::npos);
 }
 
+// A on the Exit row must NOT act. It answers "hold" so the input layer can arm its deadline; only a
+// completed hold fires. Anything that made this an Action would exit on a single stray press.
+void test_hold_verdict_is_not_an_action() {
+  const OsdVerdict h = parse_verdict("hold");
+  assert(h.kind == OsdVerdict::Kind::Hold);
+  assert(h.action.empty());
+  assert(parse_verdict("hold").kind != OsdVerdict::Kind::Action);
+  assert(parse_verdict("hold").kind != OsdVerdict::Kind::Close);
+}
+
+// The row is inert unless someone can actually act on it, so a build with no exit handler cannot
+// paint an Exit control that does nothing when held.
+void test_exit_row_is_disabled_without_a_handler() {
+  testing::FakeServer srv;
+  OsdMenuConfig cfg;
+  cfg.cdp_port = srv.port();
+  OsdMenuController osd(cfg);  // no on_exit
+  srv.take_requests();
+  assert(osd.open_menu());
+  bool saw_disabled = false;
+  for (const std::string& request : srv.take_requests())
+    if (request.find("\\\"exit_enabled\\\":false") != std::string::npos ||
+        request.find("\"exit_enabled\":false") != std::string::npos)
+      saw_disabled = true;
+  assert(saw_disabled);
+}
+
+// The hold duration the launcher counts and the one the fill animates are the SAME number, or the
+// bar finishes at a different moment than the exit fires.
+void test_hold_ms_is_shared_with_the_page() {
+  testing::FakeServer srv;
+  OsdMenuConfig cfg;
+  cfg.cdp_port = srv.port();
+  cfg.exit_hold_ms = 750;
+  cfg.on_exit = [] {};
+  OsdMenuController osd(cfg);
+  assert(osd.exit_hold_ms() == 750);
+  srv.take_requests();
+  assert(osd.open_menu());
+  bool saw = false;
+  for (const std::string& request : srv.take_requests())
+    if (request.find("hold_ms") != std::string::npos && request.find("750") != std::string::npos)
+      saw = true;
+  assert(saw);
+}
+
 int main() {
   test_status_line();
   test_button_is_redrawn_when_a_same_url_reload_wipes_it();
@@ -157,6 +203,9 @@ int main() {
   test_reconcile_ignores_a_detached_node();
   test_menu_stays_open_over_playback();
   test_settings_button_is_not_drawn_over_playback();
+  test_hold_verdict_is_not_an_action();
+  test_exit_row_is_disabled_without_a_handler();
+  test_hold_ms_is_shared_with_the_page();
   std::puts("osdmenu_test: all passed");
   return 0;
 }

@@ -423,6 +423,17 @@ int main(int argc, char** argv) {
                       .on_update_ignore =
                           [&update_prompt] {
                             if (update_prompt) update_prompt->ignore_version();
+                          },
+                      // Ordered: checkpoint BEFORE the shutdown request, or "your place is saved"
+                      // is a lie. request_shutdown() is the only path the watchdog scores as
+                      // success rather than a crash to restart, so this must never just kill the
+                      // child. Runs on the input thread; DevToolsClient is internally synchronized
+                      // and request_shutdown() is async-signal-safe.
+                      .on_exit =
+                          [&player] {
+                            if (player) player->on_suspend();
+                            info("exit: user confirmed — shutting down");
+                            Watchdog::request_shutdown();
                           }});
     osd->set_update_model(false, update_policy_status(cfg->self_update_mode), "");
   }

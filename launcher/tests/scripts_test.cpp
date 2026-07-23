@@ -104,6 +104,18 @@ void test_overlays_use_a_csp_safe_style_path() {
   }
 }
 
+void test_osd_exit_row_is_hold_to_confirm_on_every_tab() {
+  // Exit is chrome, not tab content: collect() appends it after the panel's own focusables, so it
+  // is the last stop wherever you are. And A on it must start a hold ('hold') rather than act, or a
+  // single stray press ends the session.
+  const std::string b(ScriptLibrary::instance().body("osd"));
+  assert(has(b, "'exit'"));
+  assert(has(b, "S.focusables.push(S.exitBar)"));
+  assert(has(b, "holdStart"));
+  assert(has(b, "hold_cancel"));
+  assert(has(b, "return 'hold'"));
+}
+
 void test_toast_wraps_instead_of_clipping() {
   // `white-space: pre` never wraps, so a toast wider than the panel was clipped at BOTH edges (it
   // is centred with translateX(-50%)) — silently, with no ellipsis. Observed on-Deck with the
@@ -166,6 +178,7 @@ int main() {
   test_embedded_defaults_present();
   test_overlays_use_a_csp_safe_style_path();
   test_toast_wraps_instead_of_clipping();
+  test_osd_exit_row_is_hold_to_confirm_on_every_tab();
   test_overlays_self_heal_across_body_swaps();
   // Keep this LAST: it mutates the process-wide singleton (a fresh process per test binary, so this
   // is safe, but ordering it last keeps the earlier assertions against pristine embedded defaults).

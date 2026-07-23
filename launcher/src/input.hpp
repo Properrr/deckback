@@ -119,6 +119,7 @@ class GamepadInput {
   std::string chord_label_;  // as written in config, so the toast can name the real chord
   bool touch_toast_ = true;
   bool touch_haptic_ = true;
+  void ensure_haptic();  // lazy-attach on first pulse; no pad exists at construction
   // Rumble needs its own O_RDWR fd on the pad; the input fds are O_RDONLY. Attached lazily on the
   // first pulse, because at construction no device has been discovered yet.
   Haptic haptic_;
@@ -149,6 +150,9 @@ class GamepadInput {
   // is spent.
   bool prev_video_up_ = false;
   bool caption_apply_pending_ = false;
+  // Non-zero while A is held on the OSD's Exit row: the mono_ms() at which the hold completes.
+  // Cleared by the release edge, so letting go early cancels.
+  long exit_hold_deadline_ = 0;
   int caption_apply_ticks_ = 0;
   long caption_next_ms_ = 0;        // monotonic deadline for the next apply tick in the window
   std::string caption_apply_last_;  // last logged apply result, so only transitions are logged
