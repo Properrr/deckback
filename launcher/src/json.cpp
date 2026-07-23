@@ -1,7 +1,9 @@
 #include "json.hpp"
 
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
+#include <format>
 
 namespace deckback {
 namespace json {
@@ -375,6 +377,119 @@ std::vector<std::string> Value::leaf_paths() const {
 }
 
 ParseResult parse(std::string_view text) { return Parser(text).run(); }
+
+namespace {
+
+void dump_string(const std::string& s, std::string& out) {
+  out.push_back('"');
+  for (char c : s) {
+    switch (c) {
+      case '"':
+        out += "\\\"";
+        break;
+      case '\\':
+        out += "\\\\";
+        break;
+      case '\b':
+        out += "\\b";
+        break;
+      case '\f':
+        out += "\\f";
+        break;
+      case '\n':
+        out += "\\n";
+        break;
+      case '\r':
+        out += "\\r";
+        break;
+      case '\t':
+        out += "\\t";
+        break;
+      default:
+        if (static_cast<unsigned char>(c) < 0x20) {
+          char buf[7];
+          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
+          out += buf;
+        } else {
+          out.push_back(c);
+        }
+    }
+  }
+  out.push_back('"');
+}
+
+void dump_number(double d, std::string& out) {
+  if (std::isfinite(d) && d == std::floor(d) && std::abs(d) < 1e15)
+    out += std::format("{}", static_cast<long long>(d));
+  else
+    out += std::format("{}", d);
+}
+
+void newline_indent(int indent, int depth, std::string& out) {
+  if (indent < 0) return;
+  out.push_back('\n');
+  out.append(static_cast<size_t>(indent) * static_cast<size_t>(depth), ' ');
+}
+
+void dump_value(const Value& v, int indent, int depth, std::string& out) {
+  switch (v.type()) {
+    case Type::Null:
+      out += "null";
+      return;
+    case Type::Bool:
+      out += *v.as_bool() ? "true" : "false";
+      return;
+    case Type::Number:
+      dump_number(*v.as_number(), out);
+      return;
+    case Type::String:
+      dump_string(*v.as_string(), out);
+      return;
+    case Type::Array: {
+      const std::vector<Value>& arr = *v.as_array();
+      if (arr.empty()) {
+        out += "[]";
+        return;
+      }
+      out.push_back('[');
+      for (size_t i = 0; i < arr.size(); ++i) {
+        newline_indent(indent, depth + 1, out);
+        dump_value(arr[i], indent, depth + 1, out);
+        if (i + 1 < arr.size()) out.push_back(',');
+      }
+      newline_indent(indent, depth, out);
+      out.push_back(']');
+      return;
+    }
+    case Type::Object: {
+      const std::vector<Member>& obj = *v.as_object();
+      if (obj.empty()) {
+        out += "{}";
+        return;
+      }
+      out.push_back('{');
+      for (size_t i = 0; i < obj.size(); ++i) {
+        newline_indent(indent, depth + 1, out);
+        dump_string(obj[i].first, out);
+        out += indent >= 0 ? ": " : ":";
+        dump_value(obj[i].second, indent, depth + 1, out);
+        if (i + 1 < obj.size()) out.push_back(',');
+      }
+      newline_indent(indent, depth, out);
+      out.push_back('}');
+      return;
+    }
+  }
+}
+
+}  // namespace
+
+std::string dump(const Value& v, int indent) {
+  std::string out;
+  dump_value(v, indent, 0, out);
+  if (indent >= 0) out.push_back('\n');
+  return out;
+}
 
 }  // namespace json
 }  // namespace deckback

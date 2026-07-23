@@ -15,9 +15,23 @@ namespace deckback {
 // Resolve one `config/app.json:keymap` value to a DOM key. A value may be a DOM key value directly
 // ("Enter", "MediaPlayPause", "c") — which is what makes the keymap hot-swappable without a rebuild
 // — or one of the semantic actions from the design doc's P3 table ("select", "back", "playpause",
-// "toggle_captions", "scrub_back", "scrub_fwd"). Returns "" when the value cannot be mapped to a
-// key this build can synthesise.
+// "scrub_back", "scrub_fwd"). Returns "" when the value cannot be mapped to a key this build can
+// synthesise — including the launcher actions (toggle_captions, chapter/skip seeks) driven over CDP
+// rather than by a DOM key.
 std::string resolve_binding(std::string_view value);
+
+// Whether `value` is the caption-toggle launcher action ("toggle_captions"/"captions"). Like the
+// chapter/skip seeks it has no DOM key: youtube.com/tv ignores the desktop `c` hotkey, so the input
+// layer drives captions through the player's caption module over CDP (config/scripts/
+// toggle_captions.js) and intercepts the bound control by evdev code. build_button_map() skips it
+// so it is neither mapped to a key nor reported as an unmapped binding.
+bool captions_action(std::string_view value);
+
+// The primary language subtag of one locale token, lowercased: "en_US.UTF-8" -> "en", "pt-BR" ->
+// "pt", "" / "C" / "POSIX" -> "". Turns the SteamOS system locale (LANG/LC_*) into the preferred
+// caption language handed to config/scripts/toggle_captions.js. The caller splits a LANGUAGE
+// colon-list first.
+std::string caption_language_subtag(std::string_view locale);
 
 // The current name for a deprecated action alias, or "" when `value` is not deprecated. Deprecated
 // names still resolve (a remotely hot-swapped app.json must not break); startup warns once per

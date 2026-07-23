@@ -15,6 +15,8 @@
 
 namespace deckback {
 
+class CaptionSettings;
+
 // In-app OSD Settings menu (findings osd-menu-plan.md). Focus/tab/scroll state lives in
 // config/scripts/osd.js; this owns open/close, the top-right Settings button, playback gating, and
 // the C++<->JS command bridge. Invariant: capture <=> paint — exec() returning "gone" clears open_.
@@ -27,7 +29,9 @@ std::string osd_status_line(std::string_view local_version, std::string_view ava
 std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update);
 
 struct OsdVerdict {
-  enum class Kind { Consumed, Close, Action, Gone } kind = Kind::Consumed;
+  // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
+  // a one-shot that closes (the Updates buttons).
+  enum class Kind { Consumed, Close, Action, Apply, Gone } kind = Kind::Consumed;
   std::string action;
 };
 OsdVerdict parse_verdict(std::string_view verdict);
@@ -40,6 +44,10 @@ struct OsdMenuConfig {
   std::string local_version;
   OverlayContext overlay;  // live keymap -> Keys rows; const after ctor
   AboutInfo about;         // About tab content (from the AppStream metainfo)
+  // Captions sub-tab: read at open (osd_model_json) and mutated on each edit (apply_action). Not
+  // owned; null hides the sub-tab. Same object the input layer's View toggle reads, so an OSD edit
+  // takes effect on the next press with no restart.
+  CaptionSettings* captions = nullptr;
   std::function<void()> on_update_confirm;
   std::function<void()> on_update_ignore;
 };

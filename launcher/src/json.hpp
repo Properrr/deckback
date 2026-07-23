@@ -98,5 +98,12 @@ struct ParseResult {
 // Never throws.
 ParseResult parse(std::string_view text);
 
+// Serialize a Value back to JSON text — the write half of the config overlay (user.json), this
+// codebase's first JSON *writer*. `indent >= 0` pretty-prints with that many spaces per level and a
+// trailing newline (2 = human-diffable, the default); `indent < 0` is compact. Object key ORDER is
+// preserved, so a hand-authored user.json keeps its shape across rewrites. Round-trips through
+// parse(): dump then parse yields an equal document.
+std::string dump(const Value& v, int indent = 2);
+
 }  // namespace json
 }  // namespace deckback

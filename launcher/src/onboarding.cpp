@@ -42,11 +42,13 @@ constexpr Label kActionLabels[] = {
     {"skip_fwd", "Skip forward"},
 };
 
-// Actions the launcher performs itself over CDP, with no DOM key: the chapter/skip seeks (LT/RT).
-// `show_controls` is a retired compatibility action; Menu is fixed to Settings and is appended
-// below, independent of the keymap.
+// Actions the launcher performs itself over CDP, with no DOM key: the chapter/skip seeks (LT/RT)
+// and the caption toggle (View). Without this they resolve to no key and the derivation below would
+// drop their rows as dead — but they DO something, so they must still be taught. `show_controls` is
+// a retired compatibility action; Menu is fixed to Settings and is appended below, independent of
+// the keymap.
 bool is_launcher_action(std::string_view value) {
-  return skip_action_sign(value) != 0 || chapter_action_sign(value) != 0;
+  return skip_action_sign(value) != 0 || chapter_action_sign(value) != 0 || captions_action(value);
 }
 
 }  // namespace

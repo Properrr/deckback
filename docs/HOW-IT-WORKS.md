@@ -132,7 +132,8 @@ the verbatim form wins, which is the hot-swap lever. A DOM key resolving to noth
 logged as an unmapped WARN at startup rather than guessed.
 
 Default bindings: A→Enter (select), B→Escape (back), X→MediaPlayPause, LB/RB→ArrowLeft/Right
-(scrub), View→`c` (captions), Menu→show controls card, D-pad + left stick→arrows.
+(scrub), View→captions (a launcher action that toggles the player's caption module over CDP, not a
+keystroke — Leanback ignores the desktop `c` hotkey), Menu→settings, D-pad + left stick→arrows.
 
 - ✅ Buttons + multi-device merge (*2026-07-08*) and 2 s hotplug rescan (*2026-07-09*).
 - 🟡 Auto-repeat **acceleration**, right-stick fast-scroll (`input.cpp` scales the arrow-repeat rate
@@ -233,9 +234,14 @@ not run on a Deck.
 
 ### Settings menu (OSD) + self-update 🟡 Implemented — not yet on a Deck
 `osdmenu.cpp` + `config/scripts/osd.js` are an in-app, controller-driven **Settings** menu, opened
-from a persistent top-right button (Menu ☰) — the app's engineering surface. Two tabs: **Settings ▸
-Keys** (the live keymap, reusing the controls-card derivation so the two can't disagree) and
-**Updates**. The focus/tab/scroll state lives in the injected JS; `input.cpp` captures the pad
+from a persistent top-right button (Menu ☰) — the app's engineering surface. Tabs: **Settings**
+(sub-tabs ‹ Keys | Captions ›), **Updates**, **About**. **Settings ▸ Keys** shows the live keymap
+(reusing the controls-card derivation so the two can't disagree); **Settings ▸ Captions** is the
+first *writable* surface — an ordered preferred-language list (add/remove + a full-language picker,
+L1/R1 page-jump), the author/auto source policy, remember-last, and the toast. Edits persist to a
+sparse `user.json` overlay (`config_store.cpp`, applied over `app.json`) and apply live to the View
+caption toggle with no restart. The focus/tab/scroll state lives in the injected JS; `input.cpp`
+captures the pad
 modally and forwards discrete commands (`up/down/select/back/tab_next/scroll_*`), reusing the
 existing auto-repeat + right-stick machinery. It is CSP-safe (`adoptedStyleSheets` + CSSOM, no
 `<style>`, no `innerHTML`) and keep-alive'd against Leanback body swaps. Its invariant is *capture ⇔
@@ -346,6 +352,7 @@ for the LCD; auto-invoked on-screen keyboard on text focus and server-side contr
 impossible under Xwayland/without Steamworks; passing `js_mse_eme` is **not** certification.
 
 Still unverified on hardware: auto-repeat acceleration, right-stick scroll, keymap layers, captions'
-actual effect, mic capture, **voice search end-to-end**, single-instance lock, resume audio-restore,
+actual effect (the new player-caption-module toggle — the old `c` keystroke is confirmed dead), mic
+capture, **voice search end-to-end**, single-instance lock, resume audio-restore,
 audio device hot-swap, and any hardware-decode path. Not built: text-entry/OSK, touch gesture layer,
 input-latency measurement, Crashpad, forced 720p surface + glyph-size check, grid art.

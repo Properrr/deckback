@@ -14,9 +14,12 @@
 
 #include "about.hpp"
 #include "audio.hpp"
+#include "caption_settings.hpp"
 #include "cdm_fetcher.hpp"
 #include "config.hpp"
+#include "config_store.hpp"
 #include "input.hpp"
+#include "keymap.hpp"
 #include "log.hpp"
 #include "navigator.hpp"
 #include "onboarding.hpp"
@@ -83,6 +86,30 @@ std::string resolve_state_dir(const std::string& runtime_dir) {
   if (const char* v = std::getenv("HOME"); v && *v)
     return std::string(v) + "/.local/state/deckback";
   return runtime_dir + "/deckback";
+}
+
+// Where the sparse user-settings overlay (user.json, written by the OSD) lives. XDG_CONFIG_HOME,
+// then ~/.config, else the state dir. In the Flatpak XDG_CONFIG_HOME points at the durable
+// ~/.var/app/<id>/config, so a user's caption settings survive updates.
+std::string resolve_config_dir(const std::string& runtime_dir) {
+  if (const char* v = std::getenv("XDG_CONFIG_HOME"); v && *v) return std::string(v) + "/deckback";
+  if (const char* v = std::getenv("HOME"); v && *v) return std::string(v) + "/.config/deckback";
+  return resolve_state_dir(runtime_dir);
+}
+
+// The SteamOS system language (Settings ▸ System ▸ Language sets LANG), for the caption "system"
+// pseudo-language. POSIX precedence, skipping the "no localization" C/POSIX values SteamOS ships in
+// LC_ALL alongside a real LANG; LANGUAGE is a colon-list, so take its first entry.
+std::string system_language() {
+  for (const char* var : {"LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"}) {
+    const char* v = std::getenv(var);
+    if (!v || !*v) continue;
+    std::string_view sv(v);
+    if (const size_t c = sv.find(':'); c != std::string_view::npos) sv = sv.substr(0, c);
+    std::string lang = caption_language_subtag(sv);
+    if (!lang.empty()) return lang;
+  }
+  return {};
 }
 
 // Resolve the log directory: explicit config wins, then $DECKBACK_LOG_DIR, else `logs/` under the
@@ -241,6 +268,17 @@ int main(int argc, char** argv) {
     error("startup: failed to load config " + config_path);
     return 1;
   }
+  ConfigStore user_store(resolve_config_dir(runtime_dir) + "/user.json");
+  user_store.load();
+  user_store.apply(*cfg);
+
+  std::vector<std::string> cc_languages = cfg->caption_languages;
+  if (cc_languages.empty() && !cfg->caption_language.empty())
+    cc_languages = {cfg->caption_language};
+  CaptionSettings captions(&user_store, cfg->caption_control, cc_languages, cfg->caption_type,
+                           cfg->caption_remember, cfg->captions_toast, cfg->caption_on,
+                           system_language());
+
   const std::string log_dir = resolve_log_dir(cfg->log_dir, runtime_dir);
   log_init(log_dir + "/deckback.log", cfg->log_max_bytes, cfg->log_max_files, cfg->log_to_stderr);
   info(version_line());
@@ -377,6 +415,7 @@ int main(int argc, char** argv) {
                       .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll,
                                                 cfg->touch_lock_enabled, cfg->touch_lock_chord},
                       .about = parse_metainfo(load_metainfo().value_or("")),
+                      .captions = &captions,
                       .on_update_confirm =
                           [&update_prompt] {
                             if (update_prompt) update_prompt->confirm_update();
@@ -447,6 +486,7 @@ int main(int argc, char** argv) {
     gp.fast_scroll = FastScrollConfig{cfg->right_stick_scroll, cfg->right_stick_deadzone,
                                       cfg->right_stick_slow_ms, cfg->right_stick_fast_ms};
     gp.skip_seconds = cfg->skip_seconds;
+    gp.captions = &captions;
     gp.layers = player ? &layers : nullptr;
     gp.onboarding = onboarding ? &*onboarding : nullptr;
     gp.update_prompt = update_prompt ? &*update_prompt : nullptr;

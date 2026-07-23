@@ -59,6 +59,10 @@ void test_parse_verdict() {
   assert(a.kind == OsdVerdict::Kind::Action);
   assert(a.action == "update.confirm");
 
+  const OsdVerdict ap = parse_verdict("apply:cc.type=auto_first");
+  assert(ap.kind == OsdVerdict::Kind::Apply);
+  assert(ap.action == "cc.type=auto_first");
+
   // An unknown non-action token is treated as consumed, never as an action.
   assert(parse_verdict("whatever").kind == OsdVerdict::Kind::Consumed);
   assert(parse_verdict("action:").kind == OsdVerdict::Kind::Action);

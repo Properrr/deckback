@@ -14,6 +14,7 @@ namespace deckback {
 
 class UpdatePromptController;
 class OsdMenuController;
+class CaptionSettings;
 
 // Runtime touchscreen-lock policy for the input layer (findings input-ux §4). Sourced from Config.
 struct TouchConfig {
@@ -39,6 +40,9 @@ struct GamepadOptions {
   TouchConfig touch;
   FastScrollConfig fast_scroll;
   int skip_seconds = 10;  // ± jump for a trigger bound to skip_back/skip_fwd (input-ux §18)
+  // Caption-button behaviour (language priority, source policy, toast). Owned by main and shared
+  // with the OSD Captions sub-tab; null = the View toggle is disabled.
+  CaptionSettings* captions = nullptr;
   const LayerState* layers = nullptr;
   OnboardingController* onboarding = nullptr;
   UpdatePromptController* update_prompt = nullptr;  // feeds the OSD Updates tab; null = feature off
@@ -93,7 +97,14 @@ class GamepadInput {
   bool osd_open_edge(int type, int code, int value);
   void apply_touch_lock(TouchLockChord::Action a);  // engage/release the grab and report it
   void announce_touch_lock(bool locked);            // toast + rumble; never fails the lock
-  Layer layer() const;                              // Browse when no LayerState is attached
+  // Toggle Leanback captions over CDP (config/scripts/toggle_captions.js) and toast the new state.
+  // youtube.com/tv ignores the desktop `c` hotkey, so captions are a launcher action driven through
+  // the player's caption module, not a dispatched key (findings input-ux.md §8.1).
+  void toggle_captions();
+  // Per-tick: on a video start (Local-override mode) enforce our caption on/off state + language,
+  // retrying until the caption module has loaded.
+  void tick_caption_apply(bool on_watch);
+  Layer layer() const;  // Browse when no LayerState is attached
 
   DevToolsClient client_;
   std::vector<int> fds_;
@@ -125,6 +136,23 @@ class GamepadInput {
   std::string lt_skip_js_, rt_skip_js_;
   bool lt_down_ = false, rt_down_ = false;
 
+  // Caption toggle (View). The bound control is intercepted by its evdev code (<0 = unbound); the
+  // launcher renders toggle_captions.js from the live CaptionSettings and evaluates it over CDP,
+  // rather than dispatching a DOM key. Not owned; may be null.
+  int captions_code_ = -1;
+  CaptionSettings* captions_ = nullptr;
+  // Auto-apply captions on a video start (Local-override mode). A video's caption module, tracklist
+  // and — crucially — its translation list load in stages a beat after the video, and YouTube may
+  // auto-enable its own default caption late. So on the watch-view transition we open a short
+  // ENFORCEMENT WINDOW: re-evaluate every caption_next_ms_ tick, upgrading to our preferred
+  // language as translations load and re-asserting our on/off state, until the window's tick budget
+  // is spent.
+  bool prev_video_up_ = false;
+  bool caption_apply_pending_ = false;
+  int caption_apply_ticks_ = 0;
+  long caption_next_ms_ = 0;        // monotonic deadline for the next apply tick in the window
+  std::string caption_apply_last_;  // last logged apply result, so only transitions are logged
+
   // First-run controls card (findings input-ux §17). Not owned; may be null.
   OnboardingController* onboarding_ = nullptr;
   // Physical Menu (Start): fixed off-playback OSD entry. It deliberately does not come from the
@@ -138,7 +166,7 @@ class GamepadInput {
   // In-app OSD Settings menu (osd-menu-plan.md). Not owned; may be null. Its nav buttons are fixed
   // (keymap-independent, resolved via control_code), like the old update card's.
   OsdMenuController* osd_ = nullptr;
-  int osd_a_ = -1, osd_b_ = -1, osd_y_ = -1, osd_lb_ = -1, osd_rb_ = -1;
+  int osd_a_ = -1, osd_b_ = -1, osd_x_ = -1, osd_y_ = -1, osd_lb_ = -1, osd_rb_ = -1;
 
   // Directional auto-repeat state. dir_key_ is the *base* arrow (a stable module constant compared
   // by identity); the key actually dispatched is resolved per-repeat, so releasing a modifier or

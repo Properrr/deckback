@@ -40,11 +40,15 @@ struct ActionAlias {
   std::string_view key;
   std::string_view replaced_by;  // "" = current name
 };
+// `toggle_captions` is deliberately ABSENT: it once resolved to `c`, the desktop youtube.com
+// caption hotkey, which youtube.com/tv (Leanback) receives and ignores — Google publishes no key
+// contract for the TV app (findings input-ux.md §8.1). It is now a launcher action
+// (captions_action), driven through the player's caption module over CDP like the chapter/skip
+// seeks, so it has no DOM key.
 constexpr ActionAlias kActionAliases[] = {
     {"select", "Enter", ""},
     {"back", "Escape", ""},
     {"playpause", "MediaPlayPause", ""},
-    {"toggle_captions", "c", ""},
     {"scrub_back", "ArrowLeft", ""},
     {"scrub_fwd", "ArrowRight", ""},
     {"seek_back_10", "ArrowLeft", "scrub_back"},
@@ -157,6 +161,7 @@ std::vector<ButtonBinding> build_button_map(
   std::vector<ButtonBinding> out;
   for (const auto& [name, value] : keymap) {
     if (name == "dpad" || name == "lt" || name == "rt") continue;  // not EV_KEY buttons
+    if (captions_action(value)) continue;
     const ControlCode* cc = nullptr;
     for (const ControlCode& c : kControlCodes)
       if (c.name == name) cc = &c;
@@ -189,6 +194,17 @@ int chapter_action_sign(std::string_view value) {
   if (value == "chapter_fwd" || value == "chapter_forward" || value == "chapter_next") return 1;
   if (value == "chapter_back" || value == "chapter_backward" || value == "chapter_prev") return -1;
   return 0;
+}
+
+bool captions_action(std::string_view value) {
+  return value == "toggle_captions" || value == "captions";
+}
+
+std::string caption_language_subtag(std::string_view locale) {
+  const size_t end = locale.find_first_of("_-.@");
+  std::string out = ascii_lower(end == std::string_view::npos ? locale : locale.substr(0, end));
+  if (out == "c" || out == "posix") return {};
+  return out;
 }
 
 FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg) {

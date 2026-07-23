@@ -154,6 +154,17 @@ void test_out_of_range_values_are_clamped() {
   assert(c->right_stick_deadzone == 1);  // clamped up
 }
 
+void test_integer_settings_reject_fractional_values_and_clamp_huge_ones() {
+  auto fractional = load(R"({"skip_seconds":1.5,"remote_debugging_port":9222.5})");
+  assert(fractional.has_value());
+  assert(fractional->skip_seconds == 10);
+  assert(fractional->remote_debugging_port == 0);
+
+  auto huge = load(R"({"remote_debugging_port":1e100})");
+  assert(huge.has_value());
+  assert(huge->remote_debugging_port == 65535);
+}
+
 void test_inverted_ranges_are_swapped() {
   auto c = load(R"({"error_retry_min_ms": 30000, "error_retry_max_ms": 2000})");
   assert(c.has_value());
@@ -190,6 +201,9 @@ void test_schema_version() {
   // beats half-applying an emergency config push.
   assert(!load(R"({"schema_version":99})").has_value());
   assert(!load(R"({"schema_version":"1"})").has_value());
+  assert(!load(R"({"schema_version":1.5})").has_value());
+  assert(!load(R"({"schema_version":-1})").has_value());
+  assert(!load(R"({"schema_version":1e100})").has_value());
 }
 
 void test_empty_object_is_all_defaults() {
@@ -214,6 +228,7 @@ int main() {
   test_string_escapes_survive();
   test_array_with_a_bracket_inside_a_string();
   test_out_of_range_values_are_clamped();
+  test_integer_settings_reject_fractional_values_and_clamp_huge_ones();
   test_inverted_ranges_are_swapped();
   test_keymap_order_is_preserved_and_comments_skipped();
   test_self_update_modes();

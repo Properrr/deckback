@@ -146,6 +146,8 @@ add_library(deckback_core STATIC
   src/log.cpp
   src/json.cpp
   src/config.cpp
+  src/config_store.cpp
+  src/caption_settings.cpp
   src/platform.cpp
   src/updater.cpp
   src/simwatch.cpp  # sim-only: the --selftest-watch reconnect driver (isolated from updater.cpp)
@@ -214,6 +216,9 @@ if(BUILD_TESTING)
 
   deckback_test(json_test)
   deckback_test(config_test)
+  deckback_test(config_store_test)
+  deckback_test(caption_settings_test)
+  deckback_test(caption_fuzz_test)
   deckback_test(log_test)
   deckback_test(devtools_test)
   deckback_test(player_test)
@@ -245,4 +250,13 @@ if(BUILD_TESTING)
     target_compile_definitions(${t} PRIVATE
       DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
   endforeach()
+
+  find_program(NODE_EXECUTABLE NAMES node nodejs)
+  if(NODE_EXECUTABLE)
+    add_test(NAME js_toggle_captions
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/toggle_captions.test.js)
+  else()
+    message(STATUS "node not found — skipping the JS caption test (js_toggle_captions)")
+  endif()
 endif()

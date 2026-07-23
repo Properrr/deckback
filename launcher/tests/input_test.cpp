@@ -43,10 +43,31 @@ void test_binding_translates_semantic_actions() {
   assert(resolve_binding("select") == "Enter");
   assert(resolve_binding("back") == "Escape");
   assert(resolve_binding("playpause") == "MediaPlayPause");
-  assert(resolve_binding("toggle_captions") == "c");
   // These dispatch arrows, which scrub the progress bar — they are not a fixed-interval seek.
   assert(resolve_binding("scrub_back") == "ArrowLeft");
   assert(resolve_binding("scrub_fwd") == "ArrowRight");
+}
+
+void test_captions_is_a_launcher_action_not_a_key() {
+  assert(resolve_binding("toggle_captions").empty());
+  assert(resolve_binding("captions").empty());
+  assert(captions_action("toggle_captions"));
+  assert(captions_action("captions"));
+  assert(!captions_action("select"));
+  assert(!captions_action("c"));
+  assert(!captions_action(""));
+}
+
+void test_caption_language_subtag() {
+  assert(caption_language_subtag("en_US.UTF-8") == "en");
+  assert(caption_language_subtag("pt-BR") == "pt");
+  assert(caption_language_subtag("zh_CN.UTF-8") == "zh");
+  assert(caption_language_subtag("fr@euro") == "fr");
+  assert(caption_language_subtag("de") == "de");
+  assert(caption_language_subtag("EN_us") == "en");
+  assert(caption_language_subtag("C").empty());
+  assert(caption_language_subtag("POSIX").empty());
+  assert(caption_language_subtag("").empty());
 }
 
 void test_deprecated_seek_aliases_still_resolve() {
@@ -139,17 +160,15 @@ void test_button_map_from_shipped_keymap() {
   assert(find_key(m, BTN_X, &k) && k == "MediaPlayPause");  // X (BTN_X == BTN_NORTH)
   assert(find_key(m, BTN_TL, &k) && k == "ArrowLeft");      // LB
   assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");     // RB
-  assert(find_key(m, BTN_SELECT, &k) && k == "c");          // captions
+  assert(!find_key(m, BTN_SELECT, nullptr));
 
   // Y is unbound since the voice feature was removed. Start dispatches no DOM key -> not bound,
   // and reported: show_controls is a *launcher* action, which build_button_map does not know, so it
   // honestly reports it as unmapped and the constructor removes it once the OSD is enabled.
   assert(!find_key(m, BTN_Y, nullptr));
   assert(!find_key(m, BTN_START, nullptr));
-  // dpad/lt/rt are not EV_KEY buttons and must never appear here.
-  assert(m.size() == 6);
+  assert(m.size() == 5);
 
-  // start reported (lt/rt are handled by the trigger path, not build_button_map).
   assert(unmapped.size() == 1);
 }
 
@@ -352,6 +371,8 @@ void test_config_touch_defaults() {
   assert(cfg->touch_lock_unlock_hold_ms == 800);
   assert(cfg->touch_lock_toast == true);
   assert(cfg->touch_lock_haptic == true);
+  assert(cfg->captions_toast == true);
+  assert(cfg->caption_language.empty());
   // Right stick on by default: the axis is otherwise dead, and arrows are the only Leanback keys we
   // have actually verified, so this adds no new assumption.
   assert(cfg->right_stick_scroll == true);
@@ -666,7 +687,7 @@ void test_layers_absent_is_context_free() {
 
 void test_context_layer_overrides_then_falls_through() {
   KeymapConfig cfg;
-  cfg.base = {{"a", "select"}, {"b", "back"}, {"select", "toggle_captions"}};
+  cfg.base = {{"a", "select"}, {"b", "back"}, {"x", "playpause"}};
   cfg.osk = {{"b", "Delete"}};  // inside the OSK, B erases rather than leaving search
   Keymaps m = build_keymaps(cfg, nullptr);
 
@@ -677,7 +698,7 @@ void test_context_layer_overrides_then_falls_through() {
   assert(resolve_button(m, BTN_EAST, Layer::Osk, false, false) == "Delete");
   // A control the layer does not bind falls through to base — a context layer only overrides.
   assert(resolve_button(m, BTN_SOUTH, Layer::Osk, false, false) == "Enter");
-  assert(resolve_button(m, BTN_SELECT, Layer::Osk, false, false) == "c");
+  assert(resolve_button(m, BTN_X, Layer::Osk, false, false) == "MediaPlayPause");
 }
 
 void test_modifier_layer_wins_and_absorbs() {
@@ -756,6 +777,11 @@ void test_find_control_for_action() {
   assert(find_control_for_action({}, "show_controls") == -1);
   // Distinct actions must not be confused for one another.
   assert(find_control_for_action({{"start", "show_controls"}}, "player_menu") == -1);
+
+  assert(find_control_for_action({{"select", "toggle_captions"}, {"a", "select"}},
+                                 "toggle_captions") == BTN_SELECT);
+  assert(find_control_for_action({{"x", "toggle_captions"}}, "toggle_captions") == BTN_X);
+  assert(find_control_for_action({{"a", "select"}}, "toggle_captions") == -1);
 }
 
 void test_without_action() {
@@ -838,6 +864,8 @@ void test_shipped_app_json_keymap_is_current() {
 int main() {
   test_binding_accepts_dom_keys_verbatim();
   test_binding_translates_semantic_actions();
+  test_captions_is_a_launcher_action_not_a_key();
+  test_caption_language_subtag();
   test_deprecated_seek_aliases_still_resolve();
   test_scan_keys_dispatchable_but_still_unbound();
   test_binding_refuses_to_guess_unknown_actions();

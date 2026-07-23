@@ -8,9 +8,12 @@
 #include <unistd.h>
 
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <format>
+#include <optional>
 
+#include "caption_settings.hpp"
 #include "log.hpp"
 #include "osdmenu.hpp"
 #include "overlay.hpp"
@@ -53,6 +56,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       touch_toast_(opts.touch.toast),
       touch_haptic_(opts.touch.haptic),
       layers_(opts.layers),
+      captions_(opts.captions),
       onboarding_(opts.onboarding),
       update_prompt_(opts.update_prompt),
       osd_(opts.osd),
@@ -66,12 +70,10 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     info(std::format("input: Menu (code {}) opens the settings menu", menu_code_));
     keymap.base = without_action(keymap.base, "show_controls");
   }
-  // OSD nav buttons are FIXED (A select, B back, L1/R1 switch tab), independent of the user's
-  // keymap: a settings menu whose own navigation could be rebound by the config it edits is
-  // unusable.
   if (osd_) {
     osd_a_ = control_code("a");
     osd_b_ = control_code("b");
+    osd_x_ = control_code("x");
     osd_y_ = control_code("y");
     osd_lb_ = control_code("lb");
     osd_rb_ = control_code("rb");
@@ -121,6 +123,15 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       unmapped.push_back(std::format("keymap.{}={} (no DOM key)", name, value));
     else
       (name == "lt" ? lt_key_ : rt_key_) = std::move(key);
+  }
+
+  captions_code_ = find_control_for_action(keymap.base, "toggle_captions");
+  if (captions_code_ < 0) captions_code_ = find_control_for_action(keymap.base, "captions");
+  if (captions_code_ >= 0 && !captions_) {
+    warn("input: captions bound but no CaptionSettings — toggle disabled");
+    captions_code_ = -1;
+  } else if (captions_code_ >= 0) {
+    info(std::format("input: bind captions (code {}) -> player caption module", captions_code_));
   }
 
   for (const ButtonBinding& b : maps_.base.buttons)
@@ -325,6 +336,66 @@ void GamepadInput::announce_touch_lock(bool locked) {
     haptic_.rumble(0x3000, 0x8000, 90);
 }
 
+void GamepadInput::toggle_captions() {
+  if (!captions_) return;
+  const std::string r = client_.eval_string(captions_->toggle_js()).value_or("na");
+  info(std::format("input: captions toggle -> {}", r));
+  caption_apply_pending_ = false;
+
+  std::string on_lang;
+  bool off = false, none = false;
+  if (r.rfind("on:", 0) == 0)
+    on_lang = r.substr(3);
+  else if (r == "off")
+    off = true;
+  else if (r == "none")
+    none = true;
+  if (!on_lang.empty())
+    captions_->set_on(true);
+  else if (off)
+    captions_->set_on(false);
+  if (!captions_->toast_enabled()) return;
+  if (!on_lang.empty())
+    show_toast(client_, "Captions: " + language_name(on_lang), 1400);
+  else if (off)
+    show_toast(client_, "Captions off", 1400);
+  else if (none)
+    show_toast(client_, "No captions for this video", 1800);
+}
+
+void GamepadInput::tick_caption_apply(bool on_watch) {
+  constexpr int kMaxTicks = 40;
+  constexpr long kCaptionTickMs = 300;
+  constexpr int kRelaxTicks = 6;
+  if (!captions_ || !captions_->local_mode()) {
+    prev_video_up_ = on_watch;
+    caption_apply_pending_ = false;
+    return;
+  }
+  if (on_watch && !prev_video_up_) {
+    caption_apply_pending_ = true;
+    caption_apply_ticks_ = 0;
+    caption_next_ms_ = mono_ms();
+    caption_apply_last_.clear();
+  }
+  if (!on_watch) caption_apply_pending_ = false;
+  prev_video_up_ = on_watch;
+
+  if (!caption_apply_pending_) return;
+  if (mono_ms() < caption_next_ms_) return;
+  caption_next_ms_ = mono_ms() + kCaptionTickMs;
+
+  const bool relax = caption_apply_ticks_ >= kMaxTicks - kRelaxTicks;
+  const std::string r = client_.eval_string(captions_->apply_js(relax)).value_or("na");
+  captions_->note_apply(r);
+  ++caption_apply_ticks_;
+  if (r != "wait" && r != "na" && r != "pending" && r != caption_apply_last_) {
+    info(std::format("input: captions apply -> {}", r));
+    caption_apply_last_ = r;
+  }
+  if (r == "none" || caption_apply_ticks_ >= kMaxTicks) caption_apply_pending_ = false;
+}
+
 void GamepadInput::osd_event(int type, int code, int value) {
   if (type == EV_KEY) {
     if (value == 1) {  // press edge; fixed nav buttons
@@ -332,6 +403,8 @@ void GamepadInput::osd_event(int type, int code, int value) {
         osd_->exec("select");
       else if ((code == osd_b_ && osd_b_ >= 0) || (code == menu_code_ && menu_code_ >= 0))
         osd_->exec("back");
+      else if (code == osd_x_ && osd_x_ >= 0)
+        osd_->exec("delete");
       else if (code == osd_y_ && osd_y_ >= 0)
         osd_->exec("ignore");
       else if (code == osd_lb_ && osd_lb_ >= 0)
@@ -411,6 +484,10 @@ void GamepadInput::handle_event(int type, int code, int value) {
   if (type == EV_KEY) {
     if (handle_chord(code, value)) return;
     if (value != 1) return;  // press edge only (ignore release=0 and kernel autorepeat=2)
+    if (code == captions_code_ && captions_code_ >= 0) {
+      toggle_captions();
+      return;
+    }
     const std::string key = resolve_button(maps_, code, layer(), lt_down_, rt_down_);
     if (key.empty()) return;  // unbound, or absorbed by a held modifier layer
     info(std::format("input: btn {} -> {} [{}]", code, key, layer_name(layer())));
@@ -499,6 +576,7 @@ void GamepadInput::loop() {
     if (dir_key_) consider(next_repeat_ms_);
     if (fast_key_) consider(fast_next_ms_);
     if (chord_.pending()) consider(chord_.deadline_ms());
+    if (caption_apply_pending_) consider(caption_next_ms_);
 
     std::vector<pollfd> pfds;
     pfds.reserve(fds_.size());
@@ -528,6 +606,7 @@ void GamepadInput::loop() {
     const bool on_watch = layers_ && layers_->video_up();
     if (update_prompt_) update_prompt_->tick(on_watch);
     if (osd_) osd_->tick(on_watch);
+    tick_caption_apply(on_watch);
 
     // The first-run card is modal; a direction held when it appeared would keep auto-repeating into
     // the page behind it. Not the OSD: while it is open a held direction drives the menu.

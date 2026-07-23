@@ -4,6 +4,7 @@
 #include <format>
 #include <optional>
 
+#include "caption_settings.hpp"
 #include "log.hpp"
 
 namespace deckback {
@@ -32,6 +33,9 @@ OsdVerdict parse_verdict(std::string_view v) {
   constexpr std::string_view kAction = "action:";
   if (v.substr(0, kAction.size()) == kAction)
     return {OsdVerdict::Kind::Action, std::string(v.substr(kAction.size()))};
+  constexpr std::string_view kApply = "apply:";
+  if (v.substr(0, kApply.size()) == kApply)
+    return {OsdVerdict::Kind::Apply, std::string(v.substr(kApply.size()))};
   return {OsdVerdict::Kind::Consumed, {}};
 }
 
@@ -65,10 +69,12 @@ bool OsdMenuController::inject_open(DevToolsClient& client) {
   if (!ab.help.empty()) links.push_back({"Support", ab.help});
 
   ScriptParams pm;
-  pm.set("op", std::string_view("open"))
-      .set("tab", std::string_view("settings"))
-      .set("keys", keys)
-      .set("upd_has", has_update)
+  pm.set("op", std::string_view("open")).set("tab", std::string_view("settings")).set("keys", keys);
+  if (cfg_.captions)
+    pm.set_raw("cc", cfg_.captions->osd_model_json());
+  else
+    pm.set_raw("cc", std::string_view("null"));
+  pm.set("upd_has", has_update)
       .set("upd_status", status)
       .set("upd_notes", notes)
       .set("upd_buttons", osd_update_buttons(has_update))
@@ -114,6 +120,9 @@ std::string OsdMenuController::exec(std::string_view cmd) {
         cfg_.on_update_confirm();
       else if (pv.action == "update.ignore" && cfg_.on_update_ignore)
         cfg_.on_update_ignore();
+      break;
+    case OsdVerdict::Kind::Apply:
+      if (cfg_.captions) cfg_.captions->apply_action(pv.action);
       break;
     case OsdVerdict::Kind::Consumed:
       break;

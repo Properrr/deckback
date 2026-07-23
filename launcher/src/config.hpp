@@ -82,6 +82,32 @@ struct Config {
   // Hot-swappable.
   int skip_seconds = 10;
 
+  // Caption toggle (View by default): confirm each toggle with a brief on-screen toast ("Captions
+  // on"/"off"), so a press over the unobservable player is never a silent no-op. Hot-swappable.
+  bool captions_toast = true;
+  // Preferred caption language when captions turn ON (e.g. "en", "pt-BR"). Empty = follow the
+  // SteamOS system language (the launcher reads it from the LANG/LC_* locale). Legacy scalar: seeds
+  // `caption_languages` when that list is empty. Hot-swappable + user-overridable.
+  std::string caption_language;
+  // Ordered list of preferred caption languages, tried in order when captions turn ON. Entries are
+  // language codes; the special "system" means the SteamOS locale. Empty falls back to
+  // `caption_language`, then "system". Edited via the OSD ▸ Settings ▸ Captions sub-tab; persisted
+  // in user.json.
+  std::vector<std::string> caption_languages;
+  // How a track is chosen within a preferred language: "author_first" (authored > auto >
+  // translated, the default), "auto_first" (auto > authored > translated), "author_only", or
+  // "auto_only".
+  std::string caption_type = "author_first";
+  // Master caption kill switch: "local" (our preferred-language override + auto-apply on video
+  // start, the default) or "youtube" (defer to YouTube; View is a plain on/off toggle in the system
+  // language). Edited via the OSD Captions sub-tab; persisted in user.json.
+  std::string caption_control = "local";
+  // Whether the caption on/off state (and the last language) survive an app restart. Within a
+  // session the on/off state always carries across videos; this controls cross-restart persistence.
+  bool caption_remember = true;
+  // The persisted local on/off state (only trusted when caption_remember). Written by the launcher.
+  bool caption_on = false;
+
   // Phase 4/5 startup CDP policy, applied by the Navigator. `steer_av1` mirrors
   // quality.steer_av1_unsupported (AV1 hw decode on the Deck unproven/disputed — findings
   // durable/hardware.md); `mic_autogrant`

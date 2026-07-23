@@ -1,6 +1,16 @@
 # Deckback OSD Settings menu — design doc
 
-Status: **DESIGN — nothing implemented.** Branch `feature/osd-settings-menu`. Written 2026-07-15
+Status: **IMPLEMENTED** — the framework (tabs, Settings ▸ Keys read-only, Updates, About) shipped,
+and as of 2026-07-22 the **first WRITABLE sub-tab landed: Settings ▸ Captions**, together with the
+`user.json` sparse overlay (configurator C2) it writes through — `launcher/src/config_store.cpp`
+(the codebase's first config writer, atomic tmp+fsync+rename, allowlisted keys) and
+`caption_settings.cpp` (the shared caption model). The Captions sub-tab edits an ordered preferred-
+language list (add/remove + a full-language picker), the author/auto source policy, remember-last,
+and the toast; each edit returns the non-closing `apply:cc.<key>=<val>` verdict and persists live.
+Widget model (combo + langlist + picker) verified on-Deck over CDP. Remaining writable settings
+(button remap, hardware-decode toggles, reset-to-defaults) are still roadmap. Original design below.
+
+Status (original): **DESIGN — nothing implemented.** Branch `feature/osd-settings-menu`. Written 2026-07-15
 against launcher/config state at `main` commit `79eae9b` (Release v0.0.4). **Amended 2026-07-15
 after code-grounded reviews:** §12 is restructured around the tiers that actually exist (the focus
 model gets an executable L1 suite — there is no JS engine at L0), performance contract added

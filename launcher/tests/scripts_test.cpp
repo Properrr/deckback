@@ -70,6 +70,18 @@ void test_embedded_defaults_present() {
   assert(
       has(std::string(ScriptLibrary::instance().body("no_pointer")), "stopImmediatePropagation"));
   assert(has(std::string(ScriptLibrary::instance().body("toast")), "__deckback_toast"));
+  const std::string cc = ScriptLibrary::instance().render("toggle_captions");
+  assert(has(cc, "getOption"));
+  assert(has(cc, "setOption"));
+  assert(has(cc, "tracklist"));
+  assert(has(cc, "html5-video-player"));
+  assert(has(cc, "({})"));
+  const std::string cc_p = ScriptLibrary::instance().render(
+      "toggle_captions", ScriptParams()
+                             .set("langs", std::vector<std::string>{"en", "de"})
+                             .set("type", std::string_view("author_first")));
+  assert(has(cc_p, R"("langs":["en","de"])"));
+  assert(has(cc_p, R"("type":"author_first")"));
 }
 
 void test_overlays_use_a_csp_safe_style_path() {

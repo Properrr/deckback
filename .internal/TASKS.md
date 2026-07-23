@@ -357,9 +357,26 @@ The design doc is the source of truth; this file tracks *what to do next* and *w
 **Gate:** every Leanback surface controller-drivable; latency ≤ PS5 app; OSK works.
 *(buttons + hotplug verified on-Deck 2026-07-09; OSK and latency still unmeasured)*
 
-**Open caveat:** `toggle_captions` (Select→`c`) dispatches a trusted `c` keydown with the correct DOM
-`code=KeyC` — confirmed by a page-side key recorder — but could **not** be functionally verified: the
-test video `aqz-KE-bpKQ` reports `textTracks: 0`. Re-test on a video that actually has captions.
+**Open caveat (UPDATED 2026-07-22):** `toggle_captions` (View) **no longer sends `c`.** The old
+Select→`c` binding dispatched a trusted `KeyC` keydown that the page received and ignored —
+confirmed dead on-device (user report): `c` is the *desktop* youtube.com caption hotkey and
+youtube.com/tv (Leanback) honours no such key contract (input-ux.md §8.1). It is now a **launcher
+action** (like the chapter/skip seeks): the input layer evaluates `config/scripts/toggle_captions.js`
+over CDP, driving the HTML5 player's own caption module (`getOption`/`setOption` `tracklist`+`track`),
+and shows a toast with the new state (`captions_toast`). **Implemented + L0-tested; still needs
+on-Deck functional verification** — confirm on a captioned video that the CC actually toggles and the
+toast matches. The exact caption-module API is version-dependent, so `toggle_captions.js` is
+hot-swappable if a Cobalt bump moves it (no rebuild). **Verified on-Deck 2026-07-22 (flatpak, OLED):
+the toggle flips CC state and selects the SteamOS system language (`bind captions … lang 'en'`); the
+green-band-free player-module path is confirmed. Remaining: eyeball the toast + CC on a captioned
+video during normal play.**
+
+**Captions are now user-configurable (2026-07-22).** The View button's behaviour is edited in-app via
+**OSD ▸ Settings ▸ Captions** (`config_store.cpp` user.json overlay + `caption_settings.cpp`): an
+ordered preferred-language list (add/remove + full-language picker), author/auto source policy,
+remember-last, and the toast — persisted and applied live. The widget model (combo/langlist/picker,
+`apply:cc.*` verdict) is L0-tested and verified on-Deck over CDP; the launcher's Menu→open→persist
+round trip is mechanical (mirrors the verified Updates-button path) but not yet eyeballed on hardware.
 
 ## Phase 4 — Media pipeline & hardware decode  (8–12 ED)   → `config/app.json` (S0.5 UNGATED)
 

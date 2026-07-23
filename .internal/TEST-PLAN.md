@@ -146,8 +146,11 @@ Code exists, no test at any tier, never exercised on a device.
   even produces the `ABS_Z`/`ABS_RZ` analog axes `input.cpp` reads (input-ux §12). Two independent
   reasons the same buttons could be dead; a test must distinguish them.
 - **Auto-repeat acceleration** — the code path has never executed on a device.
-- `toggle_captions` functionality. The `c` keydown is confirmed dispatched with `code=KeyC`, but the
-  test video (`aqz-KE-bpKQ`) reports `textTracks: 0`, so the *effect* was never observed.
+- `toggle_captions` functionality (**mechanism changed 2026-07-22**). The old Select→`c` keydown was
+  confirmed dead on-device — Leanback ignores the desktop `c` hotkey — so captions now drive the
+  player's caption module over CDP (`config/scripts/toggle_captions.js`, a launcher action like the
+  seeks). Unverified on-Deck: that the module toggle actually turns CC on/off on a captioned video,
+  that the "no caption tracks" path reports correctly, and that the `captions_toast` feedback matches.
 - Mic auto-grant → a live capture stream with no prompt.
 - **Voice search end to end.** `voice_enabled` ships **false**: V0 (does Leanback render a soft-mic
   button under our Cobalt UA at all?) has never been run. The launcher's behaviour when it finds no

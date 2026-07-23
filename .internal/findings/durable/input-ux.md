@@ -51,7 +51,15 @@ on-device). Consequences:
 
 **Web Leanback key contract** (`youtube.com/tv`), the load-bearing detail since we inject keys:
 - **Guaranteed** (verified on-Deck, S0.6): `ArrowUp/Down/Left/Right`, `Enter`, `Escape`(27).
-- **Best-effort** (server-side, may shift; fine because our keymap is hot-swappable): `c` captions.
+- **`c` captions: CONFIRMED DEAD on Leanback (2026-07-22).** `c` is the *desktop* watch-page caption
+  hotkey; youtube.com/tv receives the keydown and does nothing (the "best-effort" hope below was
+  wrong — see §8.1: Google publishes no key contract for the TV app, so no desktop shortcut may be
+  assumed). Captions were moved OFF a keystroke entirely: `toggle_captions` is now a **launcher
+  action** driven over CDP (`config/scripts/toggle_captions.js`), which toggles the HTML5 player's
+  own caption module (`getOption`/`setOption` `tracklist`+`track`) the same way `chapter_seek.js`
+  drives seeking through the player API rather than a guessed key. The module name is version-
+  dependent (`captions` on HTML5, `cc` on legacy AS3 — the script probes both), so the script is
+  hot-swappable. **Implemented; on-Deck functional verification still pending.**
 
 > **⚠ Correction 2026-07-09 (research pass 5) — this section previously mixed two incompatible
 > keycode worlds.** See §8.1. Chrobalt is **Chromium**, so `KeyboardEvent.keyCode` is the **Windows

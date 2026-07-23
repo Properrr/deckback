@@ -1,6 +1,7 @@
 #include "config.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <fstream>
 #include <sstream>
 
@@ -54,6 +55,9 @@ constexpr Field<std::string> kStringFields[] = {
     {"cdm_sha256", &Config::cdm_sha256},
     {"log.log_directory", &Config::log_dir},
     {"power.resume_probe_host", &Config::resume_probe_host},
+    {"caption_language", &Config::caption_language},
+    {"caption_control", &Config::caption_control},
+    {"caption_type", &Config::caption_type},
 };
 
 constexpr Field<bool> kBoolFields[] = {
@@ -64,6 +68,9 @@ constexpr Field<bool> kBoolFields[] = {
     {"touch_lock_toast", &Config::touch_lock_toast},
     {"touch_lock_haptic", &Config::touch_lock_haptic},
     {"first_run_overlay", &Config::first_run_overlay},
+    {"captions_toast", &Config::captions_toast},
+    {"caption_remember", &Config::caption_remember},
+    {"caption_on", &Config::caption_on},
     {"right_stick_scroll", &Config::right_stick_scroll},
     {"quality.steer_av1_unsupported", &Config::steer_av1},
     {"mic_autogrant", &Config::mic_autogrant},
@@ -114,7 +121,7 @@ constexpr std::string_view kKeymapFields[] = {"keymap", "keymap_player", "keymap
 // Keys that are read outside the tables above, or that exist for humans/compatibility. Listed so
 // the unknown-key check does not report them.
 constexpr std::string_view kKnownExtraPaths[] = {
-    "schema_version",   "cobalt_flags", "power.self_update_mode",
+    "schema_version",   "cobalt_flags", "caption_languages", "power.self_update_mode",
     "self_update_mode",  // accepted at top level too
     "self_update",       // deprecated legacy boolean
 };
@@ -181,15 +188,19 @@ std::optional<long> bind_number(const json::Value& root, std::string_view path, 
     warn(std::string("config: '") + std::string(path) + "' must be a number — keeping the default");
     return std::nullopt;
   }
-  long value = static_cast<long>(*n);
-  if (value < r.min || value > r.max) {
-    const long clamped = std::clamp(value, r.min, r.max);
-    warn("config: '" + std::string(path) + "' = " + std::to_string(value) + " is outside " +
+  if (!std::isfinite(*n) || std::trunc(*n) != *n) {
+    warn(std::string("config: '") + std::string(path) +
+         "' must be an integer — keeping the default");
+    return std::nullopt;
+  }
+  if (*n < r.min || *n > r.max) {
+    const long clamped = *n < r.min ? r.min : r.max;
+    warn("config: '" + std::string(path) + "' = " + std::to_string(*n) + " is outside " +
          std::to_string(r.min) + ".." + std::to_string(r.max) + " — clamped to " +
          std::to_string(clamped));
-    value = clamped;
+    return clamped;
   }
-  return value;
+  return static_cast<long>(*n);
 }
 
 std::vector<std::string> bind_string_array(const json::Value& root, std::string_view path) {
@@ -309,15 +320,14 @@ std::optional<Config> Config::load(const std::string& path) {
 
   if (const json::Value* sv = root.find("schema_version")) {
     const auto n = sv->as_number();
-    if (!n) {
-      error("config: " + path + ": schema_version must be a number");
+    if (!n || !std::isfinite(*n) || std::trunc(*n) != *n || *n < 0) {
+      error("config: " + path + ": schema_version must be a non-negative integer");
       return std::nullopt;
     }
-    const int v = static_cast<int>(*n);
-    if (v > kSupportedSchemaVersion) {
+    if (*n > kSupportedSchemaVersion) {
       // Refusing is the point: a file written for a newer launcher may rely on settings this build
       // cannot honour, and half-applying it is worse than not starting.
-      error("config: " + path + ": schema_version " + std::to_string(v) +
+      error("config: " + path + ": schema_version " + std::to_string(*n) +
             " is newer than this launcher supports (" + std::to_string(kSupportedSchemaVersion) +
             ")");
       return std::nullopt;
@@ -333,6 +343,7 @@ std::optional<Config> Config::load(const std::string& path) {
     if (auto v = bind_number(root, f.path, f.range)) c.*(f.member) = *v;
 
   c.cobalt_flags = bind_string_array(root, "cobalt_flags");
+  c.caption_languages = bind_string_array(root, "caption_languages");
   c.keymap = bind_string_object(root, "keymap");
   c.keymap_player = bind_string_object(root, "keymap_player");
   c.keymap_osk = bind_string_object(root, "keymap_osk");
