@@ -15,6 +15,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # check-permissions.sh compares the manifest against every release tag, so the tags and
+          # their trees must be present. The default shallow, tagless checkout would leave it with
+          # nothing to compare and it refuses to pass vacuously. The repo is ~14 MB of history.
+          fetch-depth: 0
       - name: install deps
         # test_video_corruption.py exercises the green-band pixel verdict and needs Pillow; without it
         # the test ERRORs on import instead of running.

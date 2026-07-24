@@ -39,6 +39,9 @@
     };
   }
 
+  var NAV_HINT_DEFAULT = ' Tab   ←/→ Change · Reorder   ↑↓ Move';
+  var NAV_HINT_NOTES = ' Tab   ↑↓ Scroll notes   ←/→ Buttons';
+
   var RULES =
     "#__deckback_osd{position:fixed;inset:0;z-index:2147483646;background:rgba(8,8,8,0.95);" +
     "color:#fff;display:flex;flex-direction:column;gap:18px;padding:5vh 7vw;box-sizing:border-box;" +
@@ -327,7 +330,11 @@
     legend.appendChild(el('span', 'kb', 'X'));
     legend.appendChild(el('span', null, ' Remove   '));
     legend.appendChild(el('span', 'kb', 'L1/R1'));
-    legend.appendChild(el('span', null, ' Tab   ←/→ Change · Reorder   ↑↓ Move'));
+    // Per-tab, because the Updates tab rebinds ↑↓ to scroll the release notes. The notes are taller
+    // than the box in every real release, and a scrollbar with no documented way to move it reads as
+    // "the changelog is three lines long".
+    var navHint = el('span', null, NAV_HINT_DEFAULT);
+    legend.appendChild(navHint);
     hint.appendChild(legend);
 
     // Exit is a GLOBAL gesture, not a focusable widget: in the Keys sub-tab moveOrScroll routes ↑/↓
@@ -366,6 +373,7 @@
       picker: null,
       exitBar: exitBar,
       exitFill: exitFill,
+      navHint: navHint,
       exitEnabled: p.exit_enabled !== false
     };
 
@@ -443,6 +451,14 @@
         try { n.scrollIntoView({ block: 'nearest' }); } catch (_) {}
       }
     };
+    // The Updates panel's release-notes box, or null when the fetch produced nothing. Its presence
+    // is what decides whether ↑↓ scrolls or moves focus, so both the key routing and the hint read
+    // it from here rather than each testing for '.notes' their own way.
+    S.notesBox = function () {
+      return S.tab === 'updates' && S.panels.updates
+        ? S.panels.updates.querySelector('.notes')
+        : null;
+    };
     S.collect = function () {
       var nodes = S.panels[S.tab].querySelectorAll('[data-focus]');
       S.focusables = Array.prototype.slice.call(nodes);
@@ -463,6 +479,7 @@
       S.applyRing();
       var box = S.panels[S.tab] ? S.panels[S.tab].querySelector('.scroll') : null;
       if (box) applyScroll(box);
+      if (S.navHint) S.navHint.textContent = S.notesBox() ? NAV_HINT_NOTES : NAV_HINT_DEFAULT;
     };
     S.cycleTab = function (step) {
       var i = S.order.indexOf(S.tab);
@@ -637,6 +654,10 @@
         var n = S.focusables[S.focusIdx];
         if (n && n.getAttribute('data-role') === 'subsel') return S.scroll(dir);
       }
+      // Updates: ↑↓ scrolls the notes rather than hopping between the two action buttons, which sit
+      // in one horizontal row and are reached with ←/→ instead. Without this the changelog past the
+      // first few lines was unreachable — it had a thumb and no way to move it.
+      if (S.notesBox()) return S.scroll(dir);
       return S.focusables.length ? S.move(dir) : S.scroll(dir);
     }
     function edit(dir) {
@@ -646,6 +667,8 @@
       if (role === 'subsel') return cycleSub(dir);
       if (role === 'combo') return cycleCombo(n, dir);
       if (role === 'langremove') return moveLang(n, dir);
+      // The Updates actions are a horizontal row, and ↑↓ belongs to the notes there.
+      if (S.tab === 'updates') return S.move(dir);
       return 'consumed';
     }
     function moveLang(node, dir) {

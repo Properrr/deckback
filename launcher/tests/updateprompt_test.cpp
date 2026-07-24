@@ -189,6 +189,94 @@ static void test_markers() {
   fs::remove_all(dir);
 }
 
+// "What's new in the version you are running". summarize_releases only keeps releases NEWER than
+// local, so before this the Updates tab was blank whenever nothing was pending — which is nearly
+// always, and is what a user meant by "I didn't see a changelog" after restarting.
+void test_release_notes_for() {
+  const std::vector<ReleaseNote> notes = {
+      {"0.0.8", "Deckback v0.0.8", "### Fixed\n- Self-update works again"},
+      {"0.0.7", "Deckback v0.0.7", "### Added\n- Captions"},
+      {"0.0.6", "", "bare body"},
+  };
+  const std::string cur = release_notes_for(notes, "0.0.7", 4000);
+  assert(cur.find("Deckback v0.0.7") == 0);
+  assert(cur.find("Captions") != std::string::npos);
+  assert(cur.find("Self-update") == std::string::npos);  // only the asked-for version
+
+  // A release with no name falls back to the tag, so the heading is never empty.
+  assert(release_notes_for(notes, "0.0.6", 4000).find("v0.0.6") == 0);
+  // An unknown version yields nothing rather than the closest match.
+  assert(release_notes_for(notes, "0.9.9", 4000).empty());
+  // Equivalent-but-differently-written versions still match ("0.0.7" == "0.0.7.0").
+  assert(!release_notes_for(notes, "0.0.7.0", 4000).empty());
+  // The clamp applies, so a huge body cannot blow up the OSD payload.
+  assert(release_notes_for(notes, "0.0.7", 8).size() <= 8 + 4);
+}
+
+// The status/buttons the Updates tab shows. This is the function the v0.0.7 report was really
+// about: the tab claimed the update would apply after a restart while the portal had already
+// refused it, because the claim was made at button-press time and nothing ever revised it.
+void test_updates_view() {
+  const std::string_view idle = "No update announced yet.";
+
+  // Idle, updater live: only a manual check, and the idle text is passed through verbatim — the
+  // view must never invent a "you are up to date" the app has not earned.
+  UpdatesView v = updates_view(DeployPhase::Idle, "", false, "", "0.0.6", idle, true);
+  assert(v.status == idle && !v.has_update && v.can_check);
+
+  // Self-update off: nothing offered at all.
+  v = updates_view(DeployPhase::Idle, "", false, "", "0.0.6", idle, false);
+  assert(!v.has_update && !v.can_check);
+
+  // Announced update: the deploy pair, and the version named.
+  v = updates_view(DeployPhase::Idle, "", true, "0.0.7", "0.0.6", idle, true);
+  assert(v.has_update && !v.can_check);
+  assert(v.status.find("0.0.7") != std::string::npos);
+
+  // In flight: no buttons, and above all no claim of success.
+  v = updates_view(DeployPhase::Requested, "", true, "0.0.7", "0.0.6", idle, true);
+  assert(!v.has_update && !v.can_check);
+  assert(v.status.find("Updating") != std::string::npos);
+
+  // Done is the ONLY state that may promise a restart will apply it.
+  v = updates_view(DeployPhase::Done, "", false, "", "0.0.6", idle, true);
+  assert(v.status.find("Restart") != std::string::npos);
+  assert(!v.has_update && !v.can_check);
+
+  // Empty means the portal really did compare against the remote, so "latest" is earned here.
+  v = updates_view(DeployPhase::Empty, "", false, "", "0.0.6", idle, true);
+  assert(v.status.find("latest") != std::string::npos && v.can_check);
+
+  // A generic failure surfaces the portal's own message and allows a retry.
+  v = updates_view(DeployPhase::Failed, "network unreachable", true, "0.0.7", "0.0.6", idle, true);
+  assert(v.status.find("network unreachable") != std::string::npos);
+  assert(v.can_check);
+
+  // The permission refusal offers NOTHING: every button would fail identically. The text has to
+  // carry the only thing that works — updating from the host.
+  v = updates_view(DeployPhase::PermissionBlocked, "Self update not supported", true, "0.0.7",
+                   "0.0.6", idle, true);
+  assert(!v.has_update && !v.can_check);
+  assert(v.status.find("Desktop") != std::string::npos);
+  assert(v.status.find("install.sh") != std::string::npos);
+
+  // A deploy verdict outranks a still-set availability flag: it is the more recent truth.
+  v = updates_view(DeployPhase::Done, "", true, "0.0.7", "0.0.6", idle, true);
+  assert(!v.has_update);
+}
+
+// Which verdicts interrupt the user. A toast is a modal-ish interruption over playback, so it is
+// reserved for outcomes that change what they should do.
+void test_deploy_toast() {
+  assert(deploy_toast(DeployPhase::Done).find("restart") != std::string::npos);
+  assert(deploy_toast(DeployPhase::PermissionBlocked).find("Desktop Mode") != std::string::npos);
+  assert(!deploy_toast(DeployPhase::Failed).empty());
+  // "Nothing to do" must not interrupt: the tab the user is looking at already says it.
+  assert(deploy_toast(DeployPhase::Empty).empty());
+  assert(deploy_toast(DeployPhase::Requested).empty());
+  assert(deploy_toast(DeployPhase::Idle).empty());
+}
+
 DECKBACK_TEST_MAIN(updateprompt) {
   test_version_compare();
   test_parse_and_summarize();
@@ -196,6 +284,9 @@ DECKBACK_TEST_MAIN(updateprompt) {
   test_notes_to_plain();
   test_decision();
   test_markers();
+  test_release_notes_for();
+  test_updates_view();
+  test_deploy_toast();
   std::puts("updateprompt: ok");
   return 0;
 }

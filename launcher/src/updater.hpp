@@ -1,9 +1,11 @@
 #pragma once
 #include <atomic>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace deckback {
@@ -31,6 +33,19 @@ class UpdateState {
 // 0 Running, 1 Empty (nothing to do), 2 Done, 3 Failed. Pure decoder, always compiled.
 enum class UpdateProgress { Running, Empty, Done, Failed, Unknown };
 UpdateProgress decode_progress_status(std::uint32_t status);
+
+// True when a Failed Progress means "the new build asks for a permission the installed one lacks".
+//
+// flatpak-portal refuses such an update outright — transaction_ready() ->
+// flatpak_context_adds_permissions() -> G_DBUS_ERROR_NOT_SUPPORTED — and no retry, consent or
+// override from inside the sandbox can change that; the user must update once from the host. It is
+// the only deploy failure with a different remedy, so it gets told apart and named. v0.0.7 hit it
+// and, because nothing distinguished it, every 0.0.6 user simply saw "updating…" and stayed put.
+//
+// Keyed on the D-Bus error name (emit_progress's `error`, from g_dbus_error_encode_gerror), because
+// the message is passed through gettext and is not English on every host; the message substring is
+// only a fallback. Pure, always compiled.
+bool is_permission_change_failure(std::string_view error_name, std::string_view error_message);
 
 // flatpak-portal gates a self-update deploy on the permission store (table "flatpak", id
 // "updates"): "yes" deploys silently, anything else routes through an Access-portal consent dialog
@@ -82,6 +97,16 @@ struct UpdaterConfig {
   int cdp_port = 0;
   std::string toast_text = "Deckback update installed \xE2\x80\x94 restart to apply.";
   int toast_ms = 8000;
+  // Terminal deploy verdict (Done/Empty/Failed), with the portal's D-Bus error name and message on
+  // a failure. Called on the updater's own loop thread, so an implementation must only hand the
+  // result to whichever thread owns the UI — never draw from here.
+  //
+  // Set in notify mode, where UpdatePromptController owns every user-visible message. When it is
+  // null (auto mode) the updater falls back to its own "restart to apply" toast, so a deploy is
+  // still announced. Before this existed the ONLY record of a failure was a journal line, and the
+  // user got an unconditional success toast either way.
+  std::function<void(UpdateProgress, std::string error_name, std::string error_message)>
+      on_terminal;
 };
 
 class Updater {

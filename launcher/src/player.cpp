@@ -1,8 +1,10 @@
 #include "player.hpp"
 
+#include <cstdlib>
 #include <ctime>
 #include <format>
 
+#include "fileio.hpp"
 #include "log.hpp"
 #include "netprobe.hpp"
 #include "overlay.hpp"
@@ -38,7 +40,27 @@ std::string play_js() { return ScriptLibrary::instance().render("player_play"); 
 
 }  // namespace
 
-UnitState keep_awake_state() { return user_unit_state(kKeepAwakeUnit); }
+std::string keep_awake_heartbeat_path() {
+  std::string dir;
+  if (const char* v = std::getenv("XDG_DATA_HOME"); v && *v)
+    dir = std::string(v) + "/deckback";
+  else if (const char* h = std::getenv("HOME"); h && *h)
+    dir = std::string(h) + "/.local/share/deckback";
+  else
+    return {};
+  return dir + "/" + kKeepAwakeHeartbeat;
+}
+
+UnitState decide_keep_awake(std::optional<long> age_ms, long stale_ms) {
+  if (!age_ms) return UnitState::Unknown;
+  return *age_ms <= stale_ms ? UnitState::Active : UnitState::Inactive;
+}
+
+UnitState keep_awake_state() {
+  const std::string path = keep_awake_heartbeat_path();
+  if (path.empty()) return UnitState::Unknown;
+  return decide_keep_awake(file_age_ms(path));
+}
 
 PlayState decode_play_state(double bitmask) {
   PlayState s;

@@ -1,16 +1,17 @@
 #pragma once
 #include <atomic>
 #include <cstddef>
+#include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <vector>
 
 #include "devtools.hpp"
+#include "updater.hpp"  // UpdateProgress, UpdateState
 
 namespace deckback {
 
-class UpdateState;
 class Updater;
 class OsdMenuController;
 
@@ -59,6 +60,36 @@ std::string notes_to_plain(std::string_view markdown);
 ChangelogView summarize_releases(const std::vector<ReleaseNote>& notes,
                                  std::string_view local_version, std::size_t max_len);
 
+// Notes for exactly `version` — "what's new in the build you are running". summarize_releases only
+// keeps releases NEWER than local, so without this the Updates tab has nothing to show whenever no
+// update is pending, which is almost always. Empty when that version has no release entry. Pure.
+std::string release_notes_for(const std::vector<ReleaseNote>& notes, std::string_view version,
+                              std::size_t max_len);
+
+// Where a requested deploy has got to. Requested covers both "Update now" and "Check for updates":
+// they issue the identical portal call, and the portal answers Empty when there was nothing to do.
+// PermissionBlocked is split out from Failed because it is the one failure the user cannot retry
+// their way out of — see is_permission_change_failure.
+enum class DeployPhase { Idle, Requested, Done, Empty, Failed, PermissionBlocked };
+
+// Everything the Updates tab shows, derived in one place so the status text and the buttons can
+// never disagree — the v0.0.7 report was exactly that disagreement: a "will apply after restart"
+// message sitting above a deploy that had already been refused.
+struct UpdatesView {
+  std::string status;
+  bool has_update = false;  // offer Update now + Ignore this version
+  bool can_check = false;   // offer Check for updates
+};
+// A deploy verdict outranks availability: it is the more recent, more specific thing that happened.
+// `updater_present` is false when self-update is off, which is the one case with nothing to offer.
+// Pure.
+UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool update_available,
+                         std::string_view available_version, std::string_view local_version,
+                         std::string_view idle_status, bool updater_present);
+
+// The toast for a terminal deploy phase, or "" for phases that must not toast. Pure.
+std::string deploy_toast(DeployPhase phase);
+
 // Which UI to surface for the available commit `remote_commit`, given the commits already recorded
 // as card-shown / dot-dismissed. show_card is the one-time auto card (first time this commit is
 // seen); show_dot is the passive indicator (suppressed only if the user ignored this exact commit).
@@ -86,6 +117,10 @@ struct UpdatePromptConfig {
   int cdp_port = 0;
   std::string state_dir;
   std::string local_version;  // compiled kDeckbackVersion, e.g. "0.0.4"
+  // What the tab says before anything has happened — the configured policy, from main.cpp. Never a
+  // claim that the installed build is current: UpdateMonitor only ever reports positive
+  // availability, so silence is "nothing announced", not "you are up to date".
+  std::string idle_status;
   // GitHub releases API for the changelog. Overridable so a test can point at a fixture/none.
   std::string releases_url = "https://api.github.com/repos/properrr/deckback/releases";
   UpdateState* state = nullptr;      // shared availability, written by the updater. Not owned.
@@ -106,13 +141,24 @@ class UpdatePromptController {
   bool update_available() const;
 
   // OSD action callbacks (input thread).
-  void confirm_update();  // consent to deploy + toast; clears the badge until a newer commit
+  void confirm_update();  // consent to deploy; clears the badge until a newer commit
   void ignore_version();  // hide the badge until a newer commit (persisted marker)
+  // Ask the portal to update right now. The same call a confirm makes: the portal checks the remote
+  // itself and answers Empty when there is nothing newer, so this is a real check the user can run
+  // at any moment instead of waiting out UpdateMonitor's ~30 min poll.
+  void check_now();
+
+  // Terminal deploy verdict, called on the UPDATER's thread. Only records it; the input thread
+  // renders it on the next tick.
+  void on_deploy_result(UpdateProgress progress, const std::string& error_name,
+                        const std::string& error_message);
 
  private:
   void kick_changelog();
+  bool fetch_done() const;
   ChangelogView current_changelog() const;
-  void feed(bool has_update, const std::string& status, const std::string& notes);
+  void feed(bool has_update, bool can_check, const std::string& status, const std::string& notes);
+  void request_deploy(const char* why);
 
   UpdatePromptConfig cfg_;
   DevToolsClient client_;      // input-thread only (the confirm toast)
@@ -122,13 +168,22 @@ class UpdatePromptController {
 
   // Last values fed to the OSD, so tick() only calls set_update_model on a change.
   bool fed_has_ = false;
+  bool fed_check_ = false;
   bool fed_valid_ = false;
   std::string fed_status_, fed_notes_;
+
+  // Deploy phase, written by the updater thread and read by the input thread. `fresh_` makes the
+  // toast fire exactly once per verdict rather than on every tick that observes it.
+  mutable std::mutex deploy_mu_;
+  DeployPhase deploy_phase_ = DeployPhase::Idle;
+  std::string deploy_error_;
+  bool deploy_fresh_ = false;
 
   // Changelog fetch: 0 idle, 1 fetching, 2 done. cached_ is published by the release-store of
   // fetch_state_ = 2; the input thread reads it only after an acquire-load sees 2.
   std::atomic<int> fetch_state_{0};
   ChangelogView cached_;
+  std::string installed_notes_;  // release notes for the RUNNING version ("what's new"), same guard
   std::thread fetch_thread_;
 };
 

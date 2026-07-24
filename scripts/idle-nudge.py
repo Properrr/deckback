@@ -26,6 +26,14 @@ MAX_INTERVAL = 55       # margin under the 60 s floor even if over-tuned
 # is what disabled it on this Deck. It is inert without Deckback, so waiting costs nothing.
 MISSING_GRACE_SECONDS = 900
 HOME = os.path.expanduser("~")
+# Liveness hand-off to the sandboxed app. The launcher cannot ask systemd whether this unit is
+# running: that needs --talk-name=org.freedesktop.systemd1, and adding it to the manifest is what
+# broke self-update in v0.0.7 (flatpak-portal refuses any update that widens the sandbox, stranding
+# every installed user — findings/durable/self-update.md). So the helper reports its own liveness by
+# touching a file in the app's data dir instead. Same path inside and outside the sandbox: the
+# Flatpak points $XDG_DATA_HOME at ~/.var/app/<id>/data, so the app reads exactly what we write here,
+# and it costs no permission at all. Keep in sync with launcher/src/player.hpp.
+HEARTBEAT_NAME = "idle-nudge.alive"
 
 
 def log(msg):
@@ -49,6 +57,25 @@ def resolve_interval(cli_value=None):
 def missing_limit(interval, grace=MISSING_GRACE_SECONDS):
     """Consecutive absent polls before self-removal, derived from a wall-clock grace period."""
     return max(3, grace // max(1, interval))
+
+
+def heartbeat_path(home=HOME):
+    """Absolute path of the liveness file the launcher stats (launcher/src/player.cpp)."""
+    return os.path.join(home, ".var", "app", APP, "data", "deckback", HEARTBEAT_NAME)
+
+
+def write_heartbeat(path=None):
+    """Stamp the heartbeat. Best-effort: the app treats an absent file as 'cannot tell' and stays
+    quiet, so a failure here degrades to no warning rather than a wrong one — never to a crash that
+    would stop the nudging this helper actually exists to do."""
+    path = path or heartbeat_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w") as f:
+            f.write("")
+        return True
+    except OSError:
+        return False
 
 
 def deckback_installed(home=HOME):
@@ -144,6 +171,12 @@ def cmd_check():
     """Print whether playback is detected and from which source, then exit."""
     source, text = read_inhibitors()
     active = inhibitor_active(text)
+    hb = heartbeat_path()
+    if os.path.exists(hb):
+        log(f"heartbeat: {hb} ({time.time() - os.path.getmtime(hb):.0f}s old)")
+    else:
+        log(f"heartbeat: {hb} MISSING — the app cannot tell whether this helper runs, so it "
+            "will not warn about the screen dimming")
     log(f"playback detected: {active} (source: {source}, marker: {INHIBIT_MARKER!r})")
     if not active:
         log("no Deckback playback inhibitor found — is a video actually playing, and is the launcher "
@@ -180,6 +213,9 @@ def run_daemon(interval):
         f"self-remove after {limit} absent polls (~{limit * interval}s)")
     try:
         while True:
+            # Before anything that can fail: the heartbeat means "this helper is alive", not
+            # "playback is active", so it must be stamped on every pass whatever else happens.
+            write_heartbeat()
             if deckback_installed():
                 missing = 0
             else:

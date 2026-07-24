@@ -1,6 +1,8 @@
 #include "updater.hpp"
 
+#include <initializer_list>
 #include <string_view>
+#include <utility>
 
 #include "log.hpp"
 
@@ -38,6 +40,12 @@ constexpr const char* kPermUnsetName = "unset";
 constexpr std::string_view kFlatpakInfoAppSection = "[Application]";
 constexpr std::string_view kFlatpakInfoNameKey = "name=";
 
+// What flatpak-portal reports when it refuses a permission-widening self-update: the encoded
+// G_DBUS_ERROR_NOT_SUPPORTED it raises in transaction_ready(), plus a substring of the untranslated
+// message as a fallback for a portal that ever stops setting the name.
+constexpr std::string_view kNotSupportedError = "org.freedesktop.DBus.Error.NotSupported";
+constexpr std::string_view kPermissionMessageNeedle = "new permissions";
+
 // Reconnect backoff (durable/dbus-reconnect.md). Base 1s, doubling, capped 60s; give up (go inert
 // until relaunch) after kReconnectMaxTries consecutive failures.
 constexpr std::uint64_t kReconnectBaseMs = 1000;
@@ -60,6 +68,11 @@ UpdateProgress decode_progress_status(std::uint32_t status) {
     default:
       return UpdateProgress::Unknown;
   }
+}
+
+bool is_permission_change_failure(std::string_view error_name, std::string_view error_message) {
+  return error_name == kNotSupportedError ||
+         error_message.find(kPermissionMessageNeedle) != std::string_view::npos;
 }
 
 std::uint64_t reconnect_delay_ms(unsigned attempt) {
@@ -184,8 +197,11 @@ std::string read_flatpak_app_id() {
 // Wire format of the portal dicts this scans:
 //   Progress:        {n_ops:u, op:u, progress:u, status:u, error:s, error_message:s}
 //   UpdateAvailable: {running-commit:s, local-commit:s, remote-commit:s}
-void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u, const char* want_s,
-               std::string* out_s) {
+//
+// A signal is read once, so every field a caller needs must be collected in this single pass —
+// hence the list of string targets rather than one.
+void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u,
+               std::initializer_list<std::pair<const char*, std::string*>> strs) {
   if (sd_bus_message_enter_container(m, 'a', "{sv}") < 0) return;
   while (sd_bus_message_enter_container(m, 'e', "sv") > 0) {
     const char* key = nullptr;
@@ -193,6 +209,10 @@ void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u, const cha
       sd_bus_message_exit_container(m);
       break;
     }
+    std::string* want_str = nullptr;
+    for (const auto& [name, target] : strs)
+      if (std::strcmp(key, name) == 0) want_str = target;
+
     if (want_u && std::strcmp(key, want_u) == 0) {
       if (sd_bus_message_enter_container(m, 'v', "u") > 0) {
         sd_bus_message_read(m, "u", out_u);
@@ -200,10 +220,10 @@ void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u, const cha
       } else {
         sd_bus_message_skip(m, "v");
       }
-    } else if (want_s && std::strcmp(key, want_s) == 0) {
+    } else if (want_str) {
       const char* s = nullptr;
       if (sd_bus_message_enter_container(m, 'v', "s") > 0) {
-        if (sd_bus_message_read(m, "s", &s) >= 0 && s) *out_s = s;
+        if (sd_bus_message_read(m, "s", &s) >= 0 && s) *want_str = s;
         sd_bus_message_exit_container(m);
       } else {
         sd_bus_message_skip(m, "v");
@@ -733,7 +753,7 @@ class PortalUpdater final : public Updater {
   static int on_update_available(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<PortalUpdater*>(userdata);
     std::string remote;
-    scan_dict(m, nullptr, nullptr, "remote-commit", &remote);
+    scan_dict(m, nullptr, nullptr, {{"remote-commit", &remote}});
     const std::string short_commit = remote.substr(0, kShortCommitLen);
     info("updater: an update is available" +
          (remote.empty() ? std::string() : " (remote " + short_commit + ")"));
@@ -751,29 +771,42 @@ class PortalUpdater final : public Updater {
   static int on_progress(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<PortalUpdater*>(userdata);
     uint32_t status = 0;
-    std::string errmsg;
-    scan_dict(m, "status", &status, "error_message", &errmsg);
+    std::string errname, errmsg;
+    scan_dict(m, "status", &status, {{"error", &errname}, {"error_message", &errmsg}});
     const UpdateProgress p = decode_progress_status(status);
+    if (p == UpdateProgress::Running || p == UpdateProgress::Unknown) return 0;
+
+    const bool was_updating = self->updating_;
+    self->updating_ = false;
     switch (p) {
       case UpdateProgress::Done:
         info("updater: update deployed — it will apply the next time Deckback is launched");
-        if (self->updating_) self->announce_ready();
-        self->updating_ = false;
-        self->record_terminal(p, {});
         break;
       case UpdateProgress::Failed:
-        warn("updater: update failed: " + (errmsg.empty() ? "unknown error" : errmsg));
-        self->updating_ = false;
-        self->record_terminal(p, errmsg);
+        warn("updater: update failed: " + (errmsg.empty() ? "unknown error" : errmsg) +
+             (errname.empty() ? "" : " [" + errname + "]"));
+        if (is_permission_change_failure(errname, errmsg))
+          warn(
+              "updater: this build asks for a sandbox permission the installed one lacks, so the "
+              "portal will never deploy it — the user must update once from the host "
+              "(scripts/check-permissions.sh exists to stop this reaching a release)");
         break;
       case UpdateProgress::Empty:
-        self->updating_ = false;
-        self->record_terminal(p, {});
+        info(
+            "updater: nothing to deploy — the installed commit is already the newest on the "
+            "remote");
         break;
       case UpdateProgress::Running:
       case UpdateProgress::Unknown:
         break;
     }
+    self->record_terminal(p, errmsg);
+    // Notify mode owns every user-visible message (UpdatePromptController). Only fall back to the
+    // updater's own toast when nobody else is listening, or a deploy would announce itself twice.
+    if (self->cfg_.on_terminal)
+      self->cfg_.on_terminal(p, errname, errmsg);
+    else if (p == UpdateProgress::Done && was_updating)
+      self->announce_ready();
     return 0;
   }
 

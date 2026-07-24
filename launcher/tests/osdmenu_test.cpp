@@ -42,11 +42,25 @@ void test_button_is_redrawn_when_a_same_url_reload_wipes_it() {
 }
 
 void test_update_buttons() {
-  assert(osd_update_buttons(false).empty());
-  const auto b = osd_update_buttons(true);
+  // Self-update off: nothing to offer, and an enabled control that cannot work is worse than none.
+  assert(osd_update_buttons(false, false).empty());
+
+  const auto b = osd_update_buttons(true, false);
   assert(b.size() == 2);
   assert(b[0].first == "update.confirm");
   assert(b[1].first == "update.ignore");
+
+  // No announced update but a live updater: the manual check. Without it the tab is inert for the
+  // first ~30 min of every session, because UpdateMonitor only announces on its own poll — which is
+  // exactly what a user read as "it says there are no updates" right after restarting.
+  const auto c = osd_update_buttons(false, true);
+  assert(c.size() == 1);
+  assert(c[0].first == "update.check");
+
+  // An announced update wins: offering "check" alongside "update now" would be noise.
+  const auto d = osd_update_buttons(true, true);
+  assert(d.size() == 2);
+  assert(d[0].first == "update.confirm");
 }
 
 void test_parse_verdict() {

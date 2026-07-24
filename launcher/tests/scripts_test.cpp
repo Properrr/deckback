@@ -119,6 +119,20 @@ void test_osd_exit_is_a_global_hold_not_a_focusable_control() {
   assert(!has(b, "focusables.push(S.exitBar)"));
 }
 
+void test_osd_updates_tab_scrolls_the_release_notes() {
+  // The notes box is taller than its 44vh cap for every real release, and its two action buttons
+  // sit in one horizontal row. Before this, ↑/↓ hopped between those buttons and NOTHING moved the
+  // notes: the box drew a scroll thumb the user had no way to drag, so a full changelog looked like
+  // a truncated one. ↑/↓ scroll there and ←/→ move between the buttons instead.
+  const std::string b(ScriptLibrary::instance().body("osd"));
+  assert(has(b, "S.notesBox()"));
+  assert(has(b, "if (S.notesBox()) return S.scroll(dir);"));
+  assert(has(b, "if (S.tab === 'updates') return S.move(dir);"));
+  // ...and the hint bar has to say so, or a rebound key is just a different kind of invisible.
+  assert(has(b, "NAV_HINT_NOTES"));
+  assert(has(b, "Scroll notes"));
+}
+
 void test_toast_wraps_instead_of_clipping() {
   // `white-space: pre` never wraps, so a toast wider than the panel was clipped at BOTH edges (it
   // is centred with translateX(-50%)) — silently, with no ellipsis. Observed on-Deck with the
@@ -182,6 +196,7 @@ DECKBACK_TEST_MAIN(scripts) {
   test_overlays_use_a_csp_safe_style_path();
   test_toast_wraps_instead_of_clipping();
   test_osd_exit_is_a_global_hold_not_a_focusable_control();
+  test_osd_updates_tab_scrolls_the_release_notes();
   test_overlays_self_heal_across_body_swaps();
   // Keep this LAST: it mutates the process-wide singleton (a fresh process per test binary, so this
   // is safe, but ordering it last keeps the earlier assertions against pristine embedded defaults).

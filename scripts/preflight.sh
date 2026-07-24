@@ -50,6 +50,10 @@ run_shell() {
   # missing Pillow ERRORs the run — surface it as an environment gap, not a mystery test failure.
   python3 -c 'import PIL' 2>/dev/null || die_env "the harness suite needs Pillow (CI: python3-pil). Install it: pip install Pillow"
   ./tests/harness/run.sh || bad=1
+  # A manifest that adds a sandbox permission strands every installed user on their current version
+  # — flatpak-portal refuses the self-update outright (findings/durable/self-update.md). Cheap to
+  # check, invisible until a user reports "it says it updated but it didn't", so it runs every push.
+  ./scripts/check-permissions.sh || bad=1
   return "$bad"
 }
 

@@ -57,7 +57,12 @@ std::string update_policy_status(SelfUpdateMode mode) {
     case SelfUpdateMode::Off:
       return "Updates are off. Update Deckback in Discover or run flatpak update.";
     case SelfUpdateMode::Notify:
-      return "No update is currently available.";
+      // NOT "no update is available" — that was a claim the app had never earned. Nothing checks at
+      // launch; the portal announces availability on its own ~30 min poll and never announces the
+      // absence of one, so for the first half hour of every session silence means only that. A
+      // user who restarted expecting the update they had just approved read that line as proof the
+      // update had landed.
+      return "No update announced yet. Deckback checks about every half hour — or check now.";
     case SelfUpdateMode::Auto:
       return "Automatic updates are enabled. New versions install when they are available.";
   }
@@ -422,6 +427,10 @@ int main(int argc, char** argv) {
                           [&update_prompt] {
                             if (update_prompt) update_prompt->ignore_version();
                           },
+                      .on_update_check =
+                          [&update_prompt] {
+                            if (update_prompt) update_prompt->check_now();
+                          },
                       // Ordered: checkpoint BEFORE the shutdown request, or "your place is saved"
                       // is a lie. request_shutdown() is the only path the watchdog scores as
                       // success rather than a crash to restart, so this must never just kill the
@@ -433,26 +442,35 @@ int main(int argc, char** argv) {
                             info("exit: user confirmed — shutting down");
                             Watchdog::request_shutdown();
                           }});
-    osd->set_update_model(false, update_policy_status(cfg->self_update_mode), "");
+    osd->set_update_model(false, cfg->self_update_mode != SelfUpdateMode::Off,
+                          update_policy_status(cfg->self_update_mode), "");
   }
 
   // Self-update. Detection (portal UpdateMonitor) runs in notify + auto; 'off' never constructs the
   // updater. auto_deploy distinguishes them: auto deploys on detection, notify only publishes
   // availability into update_state and waits for the user's "Update now" via update_prompt.
   if (cfg->self_update_mode != SelfUpdateMode::Off) {
-    updater = Updater::create(
-        UpdaterConfig{.auto_deploy = (cfg->self_update_mode == SelfUpdateMode::Auto),
-                      .state = &update_state,
-                      .cdp_port = cdp_nav ? cfg->remote_debugging_port : 0});
+    updater = Updater::create(UpdaterConfig{
+        .auto_deploy = (cfg->self_update_mode == SelfUpdateMode::Auto),
+        .state = &update_state,
+        .cdp_port = cdp_nav ? cfg->remote_debugging_port : 0,
+        // Runs on the updater's loop thread. update_prompt is emplaced below and updater->start()
+        // is called after it, and shutdown stops the updater first, so the reference is live for
+        // every call. Null in auto mode, where the updater keeps announcing deploys itself.
+        .on_terminal = [&update_prompt](UpdateProgress p, std::string name, std::string msg) {
+          if (update_prompt) update_prompt->on_deploy_result(p, name, msg);
+        }});
     info(std::format("startup: self-update mode = {}",
                      self_update_mode_name(cfg->self_update_mode)));
     if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav) {
-      update_prompt.emplace(UpdatePromptConfig{.cdp_port = cfg->remote_debugging_port,
-                                               .state_dir = resolve_state_dir(runtime_dir),
-                                               .local_version = kDeckbackVersion,
-                                               .state = &update_state,
-                                               .updater = updater.get(),
-                                               .osd = osd ? &*osd : nullptr});
+      update_prompt.emplace(
+          UpdatePromptConfig{.cdp_port = cfg->remote_debugging_port,
+                             .state_dir = resolve_state_dir(runtime_dir),
+                             .local_version = kDeckbackVersion,
+                             .idle_status = update_policy_status(cfg->self_update_mode),
+                             .state = &update_state,
+                             .updater = updater.get(),
+                             .osd = osd ? &*osd : nullptr});
       // Test aid: force the notify UI (dot + one-time card + changelog) without waiting for the
       // portal's ~30-min poll. DECKBACK_FAKE_UPDATE=<any-commit-string> publishes availability at
       // launch. Confirming the update still routes through the real portal deploy.

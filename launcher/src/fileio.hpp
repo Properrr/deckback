@@ -23,6 +23,12 @@ bool write_file(const std::string& path, std::string_view bytes);
 // True when `path` exists and is a regular file (not a directory or a dangling symlink).
 bool file_exists(const std::string& path);
 
+// Milliseconds since `path` was last modified, or nullopt when it does not exist / cannot be
+// stat'ed. Wall-clock based (the mtime is compared against CLOCK_REALTIME), because the writer is a
+// different process on the host side and only the real clock is shared between them. A file stamped
+// in the future reads as age 0 rather than a negative age.
+std::optional<long> file_age_ms(const std::string& path);
+
 // ---- state markers ------------------------------------------------------------------------------
 //
 // The launcher records three one-line facts across restarts: the first-run card was shown, the

@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -297,6 +298,37 @@ void test_keep_awake_not_probed_while_idle() {
   assert(!any_request_contains(server.take_requests(), kKeepAwakeNeedle));
 }
 
+// The heartbeat verdict that replaced asking systemd over D-Bus. That question needed
+// --talk-name=org.freedesktop.systemd1, and adding it to the manifest is what broke self-update in
+// v0.0.7 (flatpak-portal refuses an update that widens the sandbox), so the helper now reports its
+// own liveness by touching a file. The absent case is the load-bearing one: a helper installed
+// before heartbeats existed writes nothing, and calling that "not running" would warn every
+// existing user that their perfectly good helper is dead.
+void test_decide_keep_awake() {
+  assert(decide_keep_awake(std::nullopt) == UnitState::Unknown);
+  assert(decide_keep_awake(0) == UnitState::Active);
+  assert(decide_keep_awake(kKeepAwakeStaleMs - 1) == UnitState::Active);
+  assert(decide_keep_awake(kKeepAwakeStaleMs) == UnitState::Active);  // boundary is inclusive
+  assert(decide_keep_awake(kKeepAwakeStaleMs + 1) == UnitState::Inactive);
+  // The window must clear several poll intervals: after a resume the file is stale until the
+  // helper's next tick, and a false "helper not running" toast is worse than a late true one.
+  assert(kKeepAwakeStaleMs >= 5 * 25'000);
+}
+
+// Both sides must name the same file or the hand-off silently never happens: the helper writes
+// ~/.var/app/<id>/data/deckback/idle-nudge.alive, which is what $XDG_DATA_HOME/deckback resolves to
+// inside the sandbox. Pinned against scripts/idle-nudge.py::heartbeat_path.
+void test_keep_awake_heartbeat_path() {
+  const char* const prev = std::getenv("XDG_DATA_HOME");
+  ::setenv("XDG_DATA_HOME", "/home/deck/.var/app/io.github.properrr.deckback/data", 1);
+  assert(keep_awake_heartbeat_path() ==
+         "/home/deck/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive");
+  ::unsetenv("XDG_DATA_HOME");
+  ::setenv("HOME", "/home/deck", 1);
+  assert(keep_awake_heartbeat_path() == "/home/deck/.local/share/deckback/idle-nudge.alive");
+  if (prev) ::setenv("XDG_DATA_HOME", prev, 1);
+}
+
 }  // namespace
 
 DECKBACK_TEST_MAIN(player) {
@@ -315,6 +347,8 @@ DECKBACK_TEST_MAIN(player) {
   test_keep_awake_silent_when_helper_active();
   test_keep_awake_silent_when_state_unknown();
   test_keep_awake_not_probed_while_idle();
+  test_decide_keep_awake();
+  test_keep_awake_heartbeat_path();
   std::puts("player_test: ok");
   return 0;
 }

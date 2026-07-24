@@ -30,7 +30,11 @@ inline constexpr const char* kOsdButtonElementId = "__deckback_settings_btn";
 std::string osd_status_line(std::string_view local_version, std::string_view available_version,
                             bool has_update);
 
-std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update);
+// Updates-tab actions. `has_update` offers the deploy pair; `can_check` offers a manual check —
+// UpdateMonitor only announces availability on its own ~30 min poll, so without this the tab is
+// inert for the first half hour of every session and a user has no way to ask.
+std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update,
+                                                                    bool can_check);
 
 struct OsdVerdict {
   // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
@@ -55,6 +59,7 @@ struct OsdMenuConfig {
   CaptionSettings* captions = nullptr;
   std::function<void()> on_update_confirm;
   std::function<void()> on_update_ignore;
+  std::function<void()> on_update_check;
   // Fired when the Exit row's hold completes. Null leaves the row inert.
   std::function<void()> on_exit;
   // How long A must be held on the Exit row. Also drives the fill animation, so the bar and the
@@ -92,7 +97,8 @@ class OsdMenuController {
   // Thread-safe: feed the Updates tab + button badge. `status` is supplied by the update-policy
   // owner rather than inferred from `has_update`: false means either "no update" or "not checked",
   // and the OSD must never turn that ambiguity into a false "latest" claim.
-  void set_update_model(bool has_update, std::string_view status, std::string_view notes);
+  void set_update_model(bool has_update, bool can_check, std::string_view status,
+                        std::string_view notes);
   bool update_available() const;
 
   // Navigator thread, on a full page reload.
@@ -123,6 +129,7 @@ class OsdMenuController {
 
   mutable std::mutex model_mu_;
   bool has_update_ = false;
+  bool can_check_ = false;
   std::string status_;
   std::string notes_;
 };

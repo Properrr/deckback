@@ -22,9 +22,12 @@ std::string osd_status_line(std::string_view local_version, std::string_view ava
   return "Update status is not available.";
 }
 
-std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update) {
-  if (!has_update) return {};
-  return {{"update.confirm", "Update now"}, {"update.ignore", "Ignore this version"}};
+std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update,
+                                                                    bool can_check) {
+  if (has_update)
+    return {{"update.confirm", "Update now"}, {"update.ignore", "Ignore this version"}};
+  if (can_check) return {{"update.check", "Check for updates"}};
+  return {};
 }
 
 OsdVerdict parse_verdict(std::string_view v) {
@@ -56,11 +59,12 @@ bool OsdMenuController::inject_open(DevToolsClient& client) {
   for (const ControlRow& r : controls_overlay_rows(cfg_.overlay))
     keys.push_back({r.control, r.action});
 
-  bool has_update;
+  bool has_update, can_check;
   std::string status, notes;
   {
     std::lock_guard lk(model_mu_);
     has_update = has_update_;
+    can_check = can_check_;
     status = status_;
     notes = notes_;
   }
@@ -80,7 +84,7 @@ bool OsdMenuController::inject_open(DevToolsClient& client) {
   pm.set("upd_has", has_update)
       .set("upd_status", status)
       .set("upd_notes", notes)
-      .set("upd_buttons", osd_update_buttons(has_update))
+      .set("upd_buttons", osd_update_buttons(has_update, can_check))
       .set("about_name", ab.name.empty() ? std::string("Deckback") : ab.name)
       .set("about_summary", ab.summary)
       .set("about_desc", ab.description)
@@ -131,6 +135,8 @@ std::string OsdMenuController::exec(std::string_view cmd) {
         cfg_.on_update_confirm();
       else if (pv.action == "update.ignore" && cfg_.on_update_ignore)
         cfg_.on_update_ignore();
+      else if (pv.action == "update.check" && cfg_.on_update_check)
+        cfg_.on_update_check();
       break;
     case OsdVerdict::Kind::Apply:
       if (cfg_.captions) cfg_.captions->apply_action(pv.action);
@@ -202,10 +208,11 @@ void OsdMenuController::draw_button() {
 
 void OsdMenuController::hide_button() { button_.hide("osd_button_hide"); }
 
-void OsdMenuController::set_update_model(bool has_update, std::string_view status,
+void OsdMenuController::set_update_model(bool has_update, bool can_check, std::string_view status,
                                          std::string_view notes) {
   std::lock_guard lk(model_mu_);
   has_update_ = has_update;
+  can_check_ = can_check;
   status_ = std::string(status);
   notes_ = std::string(notes);
   badge_dirty_ = true;

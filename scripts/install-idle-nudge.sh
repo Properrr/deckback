@@ -16,12 +16,19 @@ python3 -c 'import evdev' 2>/dev/null || {
 }
 
 here="$(cd "$(dirname "$0")" && pwd)"
+# Seed the liveness heartbeat the app stats (scripts/idle-nudge.py heartbeat_path). The daemon
+# refreshes it every poll; creating it here is what makes a helper that is installed but FAILS to
+# start detectable — the file simply goes stale and the app warns. Without this seed a dead service
+# is indistinguishable from one that was never installed, and the app stays silent about both.
+heartbeat="$HOME/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive"
+mkdir -p "$(dirname "$heartbeat")" && : >"$heartbeat"
+
 install -Dm755 "$here/idle-nudge.py" "$HOME/.local/bin/deckback-idle-nudge"
 install -Dm644 "$here/deckback-idle-nudge.service" \
   "$HOME/.config/systemd/user/deckback-idle-nudge.service"
 systemctl --user daemon-reload
 systemctl --user enable deckback-idle-nudge.service
-systemctl --user restart deckback-idle-nudge.service   # restart (not just --now) so a reinstall reloads updated code
+systemctl --user restart deckback-idle-nudge.service # restart (not just --now) so a reinstall reloads updated code
 systemctl --user --no-pager --full status deckback-idle-nudge.service || true
 echo
 echo "Installed. The helper nudges only while Deckback is playing a video; it does nothing otherwise,"

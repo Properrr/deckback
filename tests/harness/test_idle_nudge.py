@@ -171,6 +171,46 @@ class TestDeckbackInstalled(unittest.TestCase):
             self.assertTrue(idle.deckback_installed(home=home))
 
 
+class TestHeartbeat(unittest.TestCase):
+    """The liveness hand-off to the sandboxed app.
+
+    The app cannot ask systemd whether this unit runs — that needs --talk-name=org.freedesktop.
+    systemd1, and adding it to the manifest is exactly what broke self-update in v0.0.7. So the
+    helper stamps a file the app stats instead. Two things must hold or the replacement is worse
+    than what it replaced: the path has to be the one the Flatpak's $XDG_DATA_HOME resolves to
+    (write the wrong path and the app silently never sees a heartbeat), and stamping must never be
+    able to take the nudging down with it.
+    """
+
+    def test_path_is_the_flatpak_data_dir(self):
+        # $XDG_DATA_HOME inside the sandbox is ~/.var/app/<id>/data, so the app reads
+        # $XDG_DATA_HOME/deckback/idle-nudge.alive == this path. Pinned literally: a refactor that
+        # "tidies" this path breaks the hand-off with no error on either side.
+        self.assertEqual(
+            idle.heartbeat_path(home="/home/deck"),
+            "/home/deck/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive",
+        )
+
+    def test_write_creates_parents_and_refreshes_mtime(self):
+        with tempfile.TemporaryDirectory() as home:
+            path = os.path.join(home, "data", "deckback", "idle-nudge.alive")
+            self.assertTrue(idle.write_heartbeat(path))
+            self.assertTrue(os.path.exists(path))
+            os.utime(path, (0, 0))
+            self.assertTrue(idle.write_heartbeat(path))
+            self.assertGreater(os.path.getmtime(path), 0)
+
+    def test_write_failure_is_survivable(self):
+        # An unwritable destination must return False, not raise: run_daemon() stamps the heartbeat
+        # at the top of every pass, so an exception here would kill the nudging outright — trading a
+        # missing warning for the very screen-dimming the helper exists to prevent.
+        with tempfile.TemporaryDirectory() as home:
+            blocker = os.path.join(home, "blocked")
+            with open(blocker, "w"):
+                pass
+            self.assertFalse(idle.write_heartbeat(os.path.join(blocker, "deckback", "hb")))
+
+
 class TestLazyEvdev(unittest.TestCase):
     def test_module_imported_without_evdev_binding(self):
         # The detection logic must be importable where python-evdev is absent (all of CI). If evdev

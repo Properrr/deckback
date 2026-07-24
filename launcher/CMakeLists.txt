@@ -253,7 +253,12 @@ if(BUILD_TESTING)
     add_test(NAME js_toggle_captions
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/toggle_captions.test.js)
+    # Drives the OSD Updates tab through a mock DOM. A source grep cannot tell you a key reaches
+    # the content; this presses the key and checks the notes actually moved.
+    add_test(NAME js_osd_updates_nav
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/osd_updates_nav.test.js)
   else()
-    message(STATUS "node not found — skipping the JS caption test (js_toggle_captions)")
+    message(STATUS "node not found — skipping the JS tests (js_toggle_captions, js_osd_updates_nav)")
   endif()
 endif()

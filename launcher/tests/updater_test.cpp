@@ -97,7 +97,8 @@ DECKBACK_TEST_MAIN(updater) {
   // A notify-mode instance (auto_deploy=false) with a CDP port set is still a no-op off-Deck: no
   // toast can fire without a delivered update, and request_update() is safe before/after
   // start/stop.
-  auto up2 = Updater::create(UpdaterConfig{.auto_deploy = false, .cdp_port = 65000});
+  auto up2 = Updater::create(
+      UpdaterConfig{.auto_deploy = false, .cdp_port = 65000, .on_terminal = nullptr});
   up2->request_update();  // no pending update, no portal: must not crash
   up2->start();
   up2->request_update();
@@ -106,9 +107,21 @@ DECKBACK_TEST_MAIN(updater) {
   // An auto-deploy instance is lifecycle-safe off-Deck too: the consent seeder finds no
   // /.flatpak-info outside a sandbox and skips, and a missing portal still leaves the updater
   // inert.
-  auto up3 = Updater::create(UpdaterConfig{.auto_deploy = true});
+  auto up3 = Updater::create(UpdaterConfig{.auto_deploy = true, .on_terminal = nullptr});
   up3->start();
   up3->stop();
+
+  // The one deploy failure with a different remedy: the portal refusing a build that widens the
+  // sandbox. Keyed on the D-Bus error NAME, because the message is run through gettext and is not
+  // English on every host — matching only the message would leave a localized Deck showing a
+  // generic "try again" for something retrying can never fix.
+  assert(is_permission_change_failure("org.freedesktop.DBus.Error.NotSupported", ""));
+  assert(is_permission_change_failure(
+      "", "Self update not supported, new version requires new permissions"));
+  assert(is_permission_change_failure("org.freedesktop.DBus.Error.NotSupported",
+                                      "Selbst-Update nicht unterstützt"));
+  assert(!is_permission_change_failure("org.freedesktop.DBus.Error.Failed", "network unreachable"));
+  assert(!is_permission_change_failure("", ""));
 
   // UpdateState is the updater->UI hand-off: availability + the commit, nothing else. Dismissal
   // ("ignore this version") is keyed to the commit via the on-disk dot marker

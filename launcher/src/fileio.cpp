@@ -1,6 +1,7 @@
 #include "fileio.hpp"
 
 #include <sys/stat.h>
+#include <time.h>
 
 #include <filesystem>
 #include <format>
@@ -33,6 +34,16 @@ bool write_file(const std::string& path, std::string_view bytes) {
 bool file_exists(const std::string& path) {
   struct stat st {};
   return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
+}
+
+std::optional<long> file_age_ms(const std::string& path) {
+  struct stat st {};
+  if (::stat(path.c_str(), &st) != 0) return std::nullopt;
+  timespec now{};
+  if (::clock_gettime(CLOCK_REALTIME, &now) != 0) return std::nullopt;
+  const long age =
+      (now.tv_sec - st.st_mtim.tv_sec) * 1000L + (now.tv_nsec - st.st_mtim.tv_nsec) / 1'000'000L;
+  return age > 0 ? age : 0;
 }
 
 std::string read_marker(const std::string& path) {

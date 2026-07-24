@@ -19,13 +19,31 @@ namespace {
 
 constexpr std::size_t kMaxNotesLen = 4000;
 constexpr long kReleasesTimeoutSec = 6;
-constexpr std::string_view kNoUpdateStatus = "No update is currently available.";
+constexpr int kDeployToastMs = 9000;
 constexpr std::string_view kIgnoredStatus =
     "This available version is ignored. A newer version will appear here.";
-constexpr std::string_view kRequestedStatus =
-    "Update requested. It will apply the next time you open Deckback.";
 constexpr std::string_view kReleaseNotesFallback =
     "Release notes: github.com/properrr/deckback/releases";
+constexpr std::string_view kOffStatus = "Updates are off.";
+
+// Deploy-phase copy. Every one of these is only ever shown after the portal actually said so — the
+// bug this replaces was announcing success at the moment the button was pressed, which is before
+// anything is known.
+constexpr std::string_view kRequestedStatus = "Updating\xE2\x80\xA6 this can take a minute.";
+constexpr std::string_view kDoneStatus = "Update installed. Restart Deckback to start using it.";
+constexpr std::string_view kEmptyStatus = "You are on the latest version.";
+// The refusal a user cannot retry their way out of, so the text is the workaround rather than an
+// apology. The command is the same one-liner the README documents for installing; run from the host
+// it updates through flatpak directly, which is not subject to the portal's permission rule.
+constexpr std::string_view kPermissionBlockedStatus =
+    "This version needs new system permissions, so Deckback cannot install it by itself. In "
+    "Desktop "
+    "Mode, run:  curl -fsSL https://properrr.github.io/deckback/install.sh | bash";
+constexpr std::string_view kPermissionBlockedToast =
+    "Update needs new permissions \xE2\x80\x94 install it from Desktop Mode (see Settings "
+    "\xE2\x96\xB8 Updates)";
+constexpr std::string_view kFailedToast =
+    "Update failed \xE2\x80\x94 see Settings \xE2\x96\xB8 Updates";
 
 // Split "v0.0.10" into {0,0,10}. `valid` is false if any field is empty or non-numeric — a
 // malformed string (e.g. a "-rc1" pre-release suffix) must never read as newer than a real release.
@@ -212,6 +230,91 @@ ChangelogView summarize_releases(const std::vector<ReleaseNote>& notes,
   return view;
 }
 
+std::string release_notes_for(const std::vector<ReleaseNote>& notes, std::string_view version,
+                              std::size_t max_len) {
+  for (const ReleaseNote& n : notes) {
+    if (compare_versions(n.version, version) != 0) continue;
+    std::string out = n.title.empty() ? ("v" + n.version) : n.title;
+    const std::string body = notes_to_plain(n.body);
+    if (!body.empty()) {
+      out += "\n";
+      out += body;
+    }
+    if (out.size() > max_len) {
+      out.resize(max_len);
+      out += "\n…";
+    }
+    return out;
+  }
+  return {};
+}
+
+UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool update_available,
+                         std::string_view available_version, std::string_view local_version,
+                         std::string_view idle_status, bool updater_present) {
+  UpdatesView v;
+  switch (phase) {
+    case DeployPhase::Requested:
+      // No buttons: the portal is mid-transaction and a second Update() would be ignored anyway.
+      v.status = std::string(kRequestedStatus);
+      return v;
+    case DeployPhase::Done:
+      // Nothing more to do here — the new commit binds on the next launch, not on another press.
+      v.status = std::string(kDoneStatus);
+      return v;
+    case DeployPhase::Empty:
+      // The portal really did compare against the remote, so this is the one place we may say
+      // "latest" outright.
+      v.status = std::string(kEmptyStatus);
+      v.can_check = updater_present;
+      return v;
+    case DeployPhase::PermissionBlocked:
+      // Deliberately offers nothing: every button here would fail identically, and an enabled
+      // control that cannot work is worse than none.
+      v.status = std::string(kPermissionBlockedStatus);
+      return v;
+    case DeployPhase::Failed:
+      v.status =
+          error_message.empty()
+              ? "The update could not be installed. It will be retried later."
+              : std::string("The update could not be installed: ") + std::string(error_message);
+      v.can_check = updater_present;  // transient causes (network, remote) are worth retrying
+      return v;
+    case DeployPhase::Idle:
+      break;
+  }
+  if (!updater_present) {
+    v.status = std::string(kOffStatus);
+    return v;
+  }
+  if (update_available) {
+    v.status = osd_status_line(local_version, available_version, true);
+    v.has_update = true;
+    return v;
+  }
+  v.status = std::string(idle_status);
+  v.can_check = true;
+  return v;
+}
+
+std::string deploy_toast(DeployPhase phase) {
+  switch (phase) {
+    case DeployPhase::Done:
+      return "Deckback update installed \xE2\x80\x94 restart to apply.";
+    case DeployPhase::PermissionBlocked:
+      return std::string(kPermissionBlockedToast);
+    case DeployPhase::Failed:
+      return std::string(kFailedToast);
+    // Empty is a successful check that found nothing. Toasting it would interrupt playback to say
+    // "nothing happened"; the Updates tab the user is already looking at says it instead.
+    case DeployPhase::Empty:
+    case DeployPhase::Requested:
+    case DeployPhase::Idle:
+      return {};
+  }
+  return {};
+}
+
 NotifyDecision decide_notification(std::string_view remote_commit,
                                    std::string_view card_shown_commit,
                                    std::string_view dot_dismissed_commit) {
@@ -252,37 +355,62 @@ bool UpdatePromptController::update_available() const {
 void UpdatePromptController::tick(bool on_watch) {
   (void)on_watch;
   if (!cfg_.osd) return;
-  if (!cfg_.state || !cfg_.state->available()) {
-    feed(false, std::string(kNoUpdateStatus), "");
-    return;
+  // Unconditional: the changelog is now "what's new", not just "what you'd be getting", so it must
+  // be there whether or not an update is pending. One fetch per process (kick_changelog CASes).
+  kick_changelog();
+
+  DeployPhase phase = DeployPhase::Idle;
+  std::string deploy_error;
+  bool fresh = false;
+  {
+    std::lock_guard lk(deploy_mu_);
+    phase = deploy_phase_;
+    deploy_error = deploy_error_;
+    fresh = std::exchange(deploy_fresh_, false);
   }
-  const std::string commit = cfg_.state->commit();
-  if (!commit.empty() && commit != last_commit_) {
-    last_commit_ = commit;
-    const NotifyDecision d =
-        decide_notification(commit, read_update_marker(update_card_marker_path(cfg_.state_dir)),
-                            read_update_marker(update_dot_marker_path(cfg_.state_dir)));
-    notify_ = d.show_dot;  // an un-ignored update is available
-    hidden_status_ = notify_ ? "" : std::string(kIgnoredStatus);
-    if (notify_) kick_changelog();
+  // Exactly once per verdict, and only from here: this is the input thread, which owns client_.
+  if (fresh) {
+    if (const std::string t = deploy_toast(phase); !t.empty())
+      show_toast(client_, t, kDeployToastMs);
   }
-  if (!notify_) {
-    feed(false, hidden_status_.empty() ? std::string(kNoUpdateStatus) : hidden_status_, "");
-    return;
+
+  if (cfg_.state && cfg_.state->available()) {
+    const std::string commit = cfg_.state->commit();
+    if (!commit.empty() && commit != last_commit_) {
+      last_commit_ = commit;
+      const NotifyDecision d =
+          decide_notification(commit, read_update_marker(update_card_marker_path(cfg_.state_dir)),
+                              read_update_marker(update_dot_marker_path(cfg_.state_dir)));
+      notify_ = d.show_dot;  // an un-ignored update is available
+      hidden_status_ = notify_ ? "" : std::string(kIgnoredStatus);
+    }
   }
+
   const ChangelogView cv = current_changelog();
-  feed(true, osd_status_line(cfg_.local_version, cv.available_version, true),
-       cv.notes.empty() ? std::string(kReleaseNotesFallback) : cv.notes);
+  const bool announce = notify_ && phase == DeployPhase::Idle;
+  const std::string idle =
+      (!hidden_status_.empty() && phase == DeployPhase::Idle) ? hidden_status_ : cfg_.idle_status;
+  const UpdatesView v = updates_view(phase, deploy_error, announce, cv.available_version,
+                                     cfg_.local_version, idle, cfg_.updater != nullptr);
+
+  // Prefer the pending release's notes; fall back to the running version's, so the tab is never
+  // empty. Only link out when the fetch produced nothing at all.
+  std::string notes = cv.notes.empty() ? installed_notes_ : cv.notes;
+  if (notes.empty() && fetch_done()) notes = std::string(kReleaseNotesFallback);
+  feed(v.has_update, v.can_check, v.status, notes);
 }
 
-void UpdatePromptController::feed(bool has_update, const std::string& status,
+void UpdatePromptController::feed(bool has_update, bool can_check, const std::string& status,
                                   const std::string& notes) {
-  if (fed_valid_ && has_update == fed_has_ && status == fed_status_ && notes == fed_notes_) return;
+  if (fed_valid_ && has_update == fed_has_ && can_check == fed_check_ && status == fed_status_ &&
+      notes == fed_notes_)
+    return;
   fed_valid_ = true;
   fed_has_ = has_update;
+  fed_check_ = can_check;
   fed_status_ = status;
   fed_notes_ = notes;
-  if (cfg_.osd) cfg_.osd->set_update_model(has_update, status, notes);
+  if (cfg_.osd) cfg_.osd->set_update_model(has_update, can_check, status, notes);
 }
 
 void UpdatePromptController::kick_changelog() {
@@ -294,33 +422,78 @@ void UpdatePromptController::kick_changelog() {
   }
   fetch_thread_ = std::thread([this] {
     ChangelogView v;
-    if (const auto json = github_get(cfg_.releases_url))
-      v = summarize_releases(parse_github_releases(*json), cfg_.local_version, kMaxNotesLen);
-    else
+    std::string installed;
+    if (const auto json = github_get(cfg_.releases_url)) {
+      const std::vector<ReleaseNote> notes = parse_github_releases(*json);
+      v = summarize_releases(notes, cfg_.local_version, kMaxNotesLen);
+      installed = release_notes_for(notes, cfg_.local_version, kMaxNotesLen);
+    } else {
       warn("update: could not fetch release notes from GitHub — showing a link instead");
+    }
     cached_ = std::move(v);
+    installed_notes_ = std::move(installed);
     fetch_state_.store(2, std::memory_order_release);
   });
 }
 
+bool UpdatePromptController::fetch_done() const {
+  return fetch_state_.load(std::memory_order_acquire) == 2;
+}
+
 ChangelogView UpdatePromptController::current_changelog() const {
-  if (fetch_state_.load(std::memory_order_acquire) == 2) return cached_;
+  if (fetch_done()) return cached_;
   return {};  // not ready yet: the menu shows the releases-link fallback
 }
 
-void UpdatePromptController::confirm_update() {
+void UpdatePromptController::request_deploy(const char* why) {
+  {
+    std::lock_guard lk(deploy_mu_);
+    deploy_phase_ = DeployPhase::Requested;
+    deploy_error_.clear();
+    deploy_fresh_ = false;  // Requested never toasts; the tab shows it
+  }
   notify_ = false;
-  hidden_status_ = std::string(kRequestedStatus);
-  feed(false, hidden_status_, "");
+  hidden_status_.clear();
   if (cfg_.updater) cfg_.updater->request_update();
-  show_toast(client_, "Updating\xE2\x80\xA6 it will apply the next time you open Deckback.", 6000);
-  info("update: user confirmed — deploy requested");
+  info(std::string("update: ") + why + " — deploy requested");
+}
+
+// Deliberately says nothing about the outcome. The portal has not answered yet, and claiming
+// success here is exactly the bug a user hit on v0.0.7: a "will apply after restart" toast over a
+// deploy the portal had already refused. The verdict arrives via on_deploy_result.
+void UpdatePromptController::confirm_update() { request_deploy("user confirmed"); }
+
+void UpdatePromptController::check_now() { request_deploy("user asked to check"); }
+
+void UpdatePromptController::on_deploy_result(UpdateProgress progress,
+                                              const std::string& error_name,
+                                              const std::string& error_message) {
+  DeployPhase phase = DeployPhase::Idle;
+  switch (progress) {
+    case UpdateProgress::Done:
+      phase = DeployPhase::Done;
+      break;
+    case UpdateProgress::Empty:
+      phase = DeployPhase::Empty;
+      break;
+    case UpdateProgress::Failed:
+      phase = is_permission_change_failure(error_name, error_message)
+                  ? DeployPhase::PermissionBlocked
+                  : DeployPhase::Failed;
+      break;
+    case UpdateProgress::Running:
+    case UpdateProgress::Unknown:
+      return;  // not terminal
+  }
+  std::lock_guard lk(deploy_mu_);
+  deploy_phase_ = phase;
+  deploy_error_ = error_message;
+  deploy_fresh_ = true;
 }
 
 void UpdatePromptController::ignore_version() {
   notify_ = false;
   hidden_status_ = std::string(kIgnoredStatus);
-  feed(false, hidden_status_, "");
   if (cfg_.state) write_update_marker(update_dot_marker_path(cfg_.state_dir), cfg_.state->commit());
   info("update: user ignored this version — hidden until a newer release");
 }

@@ -1,5 +1,78 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★★ PERMISSION ADDS BREAK SELF-UPDATE — v0.0.7 SHIPPED ONE (2026-07-24, OLED, user-reported)
+
+**Read this before touching `finish-args`.** A user on 0.0.6 was offered 0.0.7, pressed *Update
+now*, was told "new version will be applied after restart", restarted, and was still on 0.0.6 with
+the tab reading "no updates". Nothing about the report was a mystery once the journal was read:
+
+```
+18:53:49  updater: an update is available (remote f627b22147d3)
+19:06:23  updater: update requested; deploying in the background
+19:06:23  update: user confirmed — deploy requested
+19:06:25  updater: update failed: Self update not supported, new version requires new permissions
+```
+
+**Cause, traced not guessed.** v0.0.7 added one line to the manifest —
+`--talk-name=org.freedesktop.systemd1`, so `player.cpp` could ask systemd whether
+`deckback-idle-nudge.service` was alive. flatpak-portal refuses any self-update that widens the
+sandbox (`portal/flatpak-portal.c` `transaction_ready()`, confirmed in the 1.16.0 source the Deck
+runs):
+
+```c
+/* Actual app updates need to not increase premission requirements */
+if (type == UPDATE && g_str_has_prefix (ref, "app/"))
+    if (... || flatpak_context_adds_permissions (old_context, new_context))
+      g_set_error (..., "Self update not supported, new version requires new permissions");
+```
+
+`flatpak_context_adds_permissions` (common/flatpak-context.c) compares shares, sockets, devices,
+features, **bus policies**, filesystems and generic policy. A talk-name counts. User `flatpak
+override`s are NOT consulted, so there is no client-side workaround, no consent path, and no retry
+that helps — unlike the *consent* gate, which does have a bypass we already use (the permission-store
+seed, ★ SOLUTION below).
+
+**Three properties that make this far worse than it looks:**
+1. The comparison is against **what is deployed on that user's machine**, not the previous release,
+   and flatpak jumps straight to the newest commit. One addition strands every user installed before
+   it through *every* later release, permanently, until they update by hand.
+2. It is **invisible**. The failure was a single journal line. The app had already toasted success
+   the instant the button was pressed.
+3. `Progress` status 3 arrives with a usable `error` name, so it was always distinguishable — nothing
+   was looking.
+
+**Fixed in 0.0.8:**
+- The talk-name is **gone**. The helper now reports its own liveness by touching
+  `$XDG_DATA_HOME/deckback/idle-nudge.alive` (the Flatpak points that at `~/.var/app/<id>/data`, so
+  host and sandbox name the same file) and `decide_keep_awake()` reads its age. Costs no permission.
+  Absent reads as **Unknown, never Inactive** — a helper installed before heartbeats existed writes
+  nothing, and warning those users that a working helper is dead would be worse than silence. The
+  installer seeds the file so an installed-but-dead service still goes stale and warns.
+- `scripts/check-permissions.sh` (in `just preflight`, so every push) diffs `finish-args` against
+  **every release tag that can self-update at all**, and fails on any addition. Re-running it with
+  v0.0.7's manifest reproduces the failure exactly. `ALLOW_PERMISSION_ADD=1` is the deliberate
+  override; a release using it must tell users to re-run the installer.
+- `is_permission_change_failure()` keys on the D-Bus error **name**
+  (`org.freedesktop.DBus.Error.NotSupported`), not the message — the message goes through gettext
+  and is not English on every host. The Updates tab then offers nothing (every button would fail
+  identically) and shows the one thing that works.
+
+**The recovery path, and why it works:** `scripts/web-install.sh` runs `flatpak install --user -y`,
+which on an installed app performs the update and auto-confirms the permission change. It runs on
+the **host**, so the portal's rule does not apply. Re-running the one-line installer in Desktop Mode
+is therefore a complete, one-command fix for a stranded install — worth remembering as the standing
+answer whenever this class of thing happens.
+
+**Also fixed, same report — the app lied about the outcome.** `confirm_update()` toasted "it will
+apply the next time you open Deckback" at button-press time, before the portal had answered, and
+`Progress` Failed only ever reached the journal. Terminal verdicts now route through
+`UpdaterConfig::on_terminal` → `UpdatePromptController::on_deploy_result` → `updates_view()`, one
+pure function deriving status *and* buttons together so they cannot disagree. And the idle text is
+no longer "No update is currently available." — UpdateMonitor only ever announces availability, on
+its own ~30 min poll, so silence means "nothing announced", not "you are current". A *Check for
+updates* button now issues `Update()` directly (the portal answers `Empty` when there is nothing to
+do), which is a real check the user can run at any moment.
+
 ## ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK, REAL REMOTE (2026-07-15, OLED, Game Mode)
 
 The on-Deck notify round-trip that every section below calls "still pending" **ran end-to-end and

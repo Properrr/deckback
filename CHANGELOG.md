@@ -8,6 +8,32 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-07-24
+
+### Fixed
+- **Updating from inside the app works again.** On 0.0.7 the update would appear, "Update now"
+  would say it had worked, and the next launch would still be on the old version — with the app
+  then reporting no updates. 0.0.7 asked for one extra system permission, and Flatpak refuses to
+  install an update that wants more access than the version you already have. That permission is
+  gone, so 0.0.6 and 0.0.7 can both update to this release normally.
+- **Deckback no longer claims an update succeeded before it has.** The confirmation appeared the
+  instant you pressed the button, whatever happened afterwards. It now waits for the real answer
+  and tells you which one it got: installed, already up to date, or failed and why. If an update
+  ever is refused for needing new permissions, Deckback now says so and gives you the one command
+  that fixes it.
+- **"No update is currently available" is gone.** Deckback never checked at startup — it waits for
+  the system to announce one, which happens about every half hour — so that line was a guess
+  presented as a fact, and read as "your update already installed". It now says what it actually
+  knows.
+
+### Added
+- **Check for updates.** A button in **Settings ▸ Updates** that asks right now instead of waiting
+  for the next automatic check, and tells you if you are already on the latest version.
+- **The changelog is readable.** Release notes were cut off after a few lines with no way to scroll
+  them. In the Updates tab, **↑/↓ now scroll the notes** and **←/→ move between the buttons**; the
+  hint bar at the bottom says so. Deckback also shows what changed in the version you are running,
+  not only in one you have not installed yet.
+
 ## [0.0.7] - 2026-07-23
 
 ### Added
@@ -150,7 +176,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.7...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.8...HEAD
+[0.0.8]: https://github.com/properrr/deckback/releases/tag/v0.0.8
 [0.0.7]: https://github.com/properrr/deckback/releases/tag/v0.0.7
 [0.0.6]: https://github.com/properrr/deckback/releases/tag/v0.0.6
 [0.0.5]: https://github.com/properrr/deckback/releases/tag/v0.0.5

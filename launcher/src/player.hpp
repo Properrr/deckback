@@ -15,7 +15,31 @@ namespace deckback {
 // mid-video and nothing in the sandbox can stop it (findings durable/keep-awake.md).
 inline constexpr const char* kKeepAwakeUnit = "deckback-idle-nudge.service";
 
-// Default keep-awake probe. Unknown when we may not ask, which must not produce a warning.
+// How we learn whether that unit is alive. Asking systemd directly needs
+// --talk-name=org.freedesktop.systemd1, and ADDING that to the manifest is what broke self-update
+// in v0.0.7 — flatpak-portal refuses any update that widens the sandbox, so every installed user
+// was stranded (findings/durable/self-update.md). The helper instead touches a file in the app's
+// own data dir, which it can already write as the same user and which costs no permission at all.
+inline constexpr const char* kKeepAwakeHeartbeat = "idle-nudge.alive";
+// The helper refreshes the heartbeat once per poll (25 s, scripts/idle-nudge.py DEFAULT_INTERVAL).
+// Six missed polls before calling it dead: after a resume the file is stale until the helper's next
+// tick, and a false "the helper is not running" toast is worse than a late true one.
+inline constexpr long kKeepAwakeStaleMs = 150'000;
+
+// Absolute path of the heartbeat, under the same $XDG_DATA_HOME/deckback the profile lives in — the
+// Flatpak points that at ~/.var/app/<id>/data, which resolves to the identical path on the host, so
+// both sides name the same file without either knowing about the sandbox.
+std::string keep_awake_heartbeat_path();
+
+// Pure verdict from one heartbeat observation. `age_ms` is nullopt when the file does not exist.
+//
+// Absent reads as Unknown, never Inactive. A helper installed before heartbeats existed writes
+// nothing, so treating absence as "not running" would warn every existing user that their working
+// helper is dead. The cost is that a genuinely missing helper is not reported until the user
+// re-runs the installer, which is the honest trade: we cannot distinguish the two.
+UnitState decide_keep_awake(std::optional<long> age_ms, long stale_ms = kKeepAwakeStaleMs);
+
+// Default keep-awake probe: decide_keep_awake() over the heartbeat file.
 UnitState keep_awake_state();
 
 // On resume, wait until host:port is reachable before nudging the player (timeout_ms 0 = skip).
