@@ -114,6 +114,9 @@ class OsdMenuController {
   OsdMenuConfig cfg_;
   DevToolsClient client_;
 
+  // Patch the Updates panel of an already-open menu (input thread).
+  void push_update_model();
+
   std::atomic<bool> open_{false};
   std::atomic<bool> reloaded_{false};
 
@@ -122,6 +125,10 @@ class OsdMenuController {
   // documentElement without any signal, and a local flag alone would pin the button gone forever.
   PageOverlay button_;
   bool badge_dirty_ = true;
+  // A model change that an OPEN menu has not been shown yet. The menu is otherwise a snapshot taken
+  // at open, so a verdict arriving mid-session would only appear on the next open — which for a
+  // "Check for updates" press is never, because the answer arrives a moment after the press.
+  std::atomic<bool> model_dirty_{false};
 
   // The menu's own liveness question is richer than element presence (the keep-alive re-appends a
   // detached node), so it asks the script for its state — but on the same schedule.

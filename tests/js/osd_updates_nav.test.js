@@ -200,6 +200,56 @@ function exec(S, cmd) { return S.exec(cmd); }
   check(exec(S, 'select') === 'action:update.check', 'A runs the manual check');
 }
 
+// A verdict arriving while the menu is OPEN must patch the panel in place. The menu is otherwise a
+// snapshot taken at open time, so the answer to a check — which lands under a second after the
+// press, with the menu still up — would never be seen. Reported on-device as "the button does
+// nothing": it worked, the reply just had nowhere to go.
+{
+  const { S } = open({ upd_has: false, upd_buttons: [['update.check', 'Check for updates']] });
+  exec(S, 'tab_next');
+  const status = () => S.panels.updates.querySelector('.status').textContent;
+  const labels = () =>
+    S.panels.updates.querySelector('.actions').children.map((c) => c.getAttribute('data-action'));
+
+  // In flight: the buttons go away, because pressing anything again would be ignored anyway.
+  let rc = S.setUpdate({ upd_has: false, upd_status: 'Updating… this can take a minute.', upd_buttons: [] });
+  check(rc === 'ok', 'setUpdate patches an open menu');
+  check(status() === 'Updating… this can take a minute.', 'the status line updates in place');
+  check(labels().length === 0, 'the buttons clear while a deploy is in flight');
+  check(S.focusIdx === -1, 'focus is released when nothing is focusable');
+
+  // The verdict: the user sees the answer without reopening anything.
+  rc = S.setUpdate({
+    upd_has: false,
+    upd_status: 'You are on the latest version.',
+    upd_buttons: [['update.check', 'Check for updates']],
+  });
+  check(rc === 'ok', 'setUpdate patches again');
+  check(status() === 'You are on the latest version.', 'the verdict lands in the open panel');
+  check(labels().join() === 'update.check', 'the check button comes back');
+  check(S.focusIdx === 0, 'focus is restored onto the rebuilt button');
+  check(exec(S, 'select') === 'action:update.check', 'and the rebuilt button is still live');
+
+  // An update appearing mid-session swaps in the deploy pair and lights the tab badge.
+  S.setUpdate({
+    upd_has: true,
+    upd_status: 'v0.0.9 is available. You have v0.0.8.',
+    upd_buttons: [['update.confirm', 'Update now'], ['update.ignore', 'Ignore this version']],
+  });
+  check(labels().join() === 'update.confirm,update.ignore', 'the deploy pair replaces the check button');
+  check(S.tabs.updates.classList.contains('badge'), 'the Updates tab badges when an update appears');
+}
+
+// A patch aimed at a menu that is gone must say so, not throw — the launcher clears its captured
+// state on 'gone', which is what keeps capture and paint from drifting apart.
+{
+  const { S } = open();
+  S.root.remove();
+  const fn = eval(body);
+  check(fn({ op: 'upd', upd_status: 'x' }) === 'gone', 'a patch on a torn-down menu reports gone');
+  void S;
+}
+
 if (failures) {
   console.error(failures + ' failure(s)');
   process.exit(1);

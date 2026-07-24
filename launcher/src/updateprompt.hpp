@@ -87,7 +87,8 @@ UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool
                          std::string_view available_version, std::string_view local_version,
                          std::string_view idle_status, bool updater_present);
 
-// The toast for a terminal deploy phase, or "" for phases that must not toast. Pure.
+// The toast for a terminal deploy phase, or "" for the non-terminal ones. Only used when the OSD is
+// closed — an open Updates panel already shows the same thing, patched in place. Pure.
 std::string deploy_toast(DeployPhase phase);
 
 // Which UI to surface for the available commit `remote_commit`, given the commits already recorded

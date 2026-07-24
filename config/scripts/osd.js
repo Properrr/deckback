@@ -719,6 +719,40 @@
       }
       return 'consumed';
     };
+    // Re-render the Updates panel from a fresh model. A check is a query: the menu stays open, so
+    // the answer has to land in the panel the user is still looking at. Rebuilds the status line and
+    // the buttons (which change with the verdict — "Check for updates" becomes nothing once a deploy
+    // is in flight) and repairs focus, since the node the ring pointed at may be gone.
+    S.setUpdate = function (m) {
+      var panel = S.panels.updates;
+      if (!panel) return 'gone';
+      var st = panel.querySelector('.status');
+      if (st) st.textContent = m.upd_status || '';
+
+      var actions = panel.querySelector('.actions');
+      if (actions) {
+        var wasFocused = S.tab === 'updates' && S.focusables.length ? S.focusIdx : -1;
+        while (actions.children.length) actions.removeChild(actions.children[0]);
+        var btns = m.upd_buttons || [];
+        for (var j = 0; j < btns.length; j++) {
+          var b = el('div', 'btn', btns[j][1]);
+          b.setAttribute('data-focus', '1');
+          b.setAttribute('data-action', btns[j][0]);
+          actions.appendChild(b);
+        }
+        if (S.tab === 'updates') {
+          S.clearRing();
+          S.collect();
+          S.focusIdx = S.focusables.length
+            ? Math.min(wasFocused < 0 ? 0 : wasFocused, S.focusables.length - 1)
+            : -1;
+          S.applyRing();
+        }
+      }
+      if (S.tabs.updates) S.tabs.updates.classList.toggle('badge', !!m.upd_has);
+      return 'ok';
+    };
+
     S.state = function () {
       if (!S.root || !S.root.isConnected) return 'gone';
       return 'tab=' + S.tab + ';idx=' + S.focusIdx + ';sub=' + S.sub + ';pick=' + (S.picker ? 1 : 0);
@@ -739,6 +773,10 @@
   if (op === 'open') return build(p);
   var S = window.__dbOSD;
   if (!S) return 'gone';
+  if (op === 'upd') {
+    if (!S.root || !S.root.isConnected) return 'gone';
+    return S.setUpdate(p);
+  }
   var live = !!(S.root && S.root.isConnected);
   if (op === 'close') {
     S.close();

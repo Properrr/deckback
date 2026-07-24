@@ -130,13 +130,18 @@ std::string OsdMenuController::exec(std::string_view cmd) {
       close_menu();
       break;
     case OsdVerdict::Kind::Action:
+      // "Check for updates" is a QUERY, so the menu stays up and its answer (which lands under a
+      // second later) patches the panel in place. Closing here was the whole bug: the verdict
+      // arrived with nothing on screen to receive it, so the button looked inert.
+      if (pv.action == "update.check") {
+        if (cfg_.on_update_check) cfg_.on_update_check();
+        break;
+      }
       close_menu();
       if (pv.action == "update.confirm" && cfg_.on_update_confirm)
         cfg_.on_update_confirm();
       else if (pv.action == "update.ignore" && cfg_.on_update_ignore)
         cfg_.on_update_ignore();
-      else if (pv.action == "update.check" && cfg_.on_update_check)
-        cfg_.on_update_check();
       break;
     case OsdVerdict::Kind::Apply:
       if (cfg_.captions) cfg_.captions->apply_action(pv.action);
@@ -153,6 +158,11 @@ std::string OsdMenuController::exec(std::string_view cmd) {
 void OsdMenuController::tick(bool on_watch) {
   const bool just_reloaded = reloaded_.exchange(false, std::memory_order_acquire);
   if (just_reloaded) button_.set_painted(false);
+
+  if (open_.load(std::memory_order_acquire) &&
+      model_dirty_.exchange(false, std::memory_order_acq_rel)) {
+    push_update_model();
+  }
 
   if (open_.load(std::memory_order_acquire)) {
     // The menu is allowed to stay up over playback (Menu opens it there, and Exit is most wanted
@@ -210,12 +220,33 @@ void OsdMenuController::hide_button() { button_.hide("osd_button_hide"); }
 
 void OsdMenuController::set_update_model(bool has_update, bool can_check, std::string_view status,
                                          std::string_view notes) {
-  std::lock_guard lk(model_mu_);
-  has_update_ = has_update;
-  can_check_ = can_check;
-  status_ = std::string(status);
-  notes_ = std::string(notes);
-  badge_dirty_ = true;
+  {
+    std::lock_guard lk(model_mu_);
+    has_update_ = has_update;
+    can_check_ = can_check;
+    status_ = std::string(status);
+    notes_ = std::string(notes);
+    badge_dirty_ = true;
+  }
+  model_dirty_.store(true, std::memory_order_release);
+}
+
+// Patch an already-open menu with the current model. Same input-thread client as every other op.
+void OsdMenuController::push_update_model() {
+  bool has_update, can_check;
+  std::string status;
+  {
+    std::lock_guard lk(model_mu_);
+    has_update = has_update_;
+    can_check = can_check_;
+    status = status_;
+  }
+  ScriptParams pm;
+  pm.set("op", std::string_view("upd"))
+      .set("upd_has", has_update)
+      .set("upd_status", status)
+      .set("upd_buttons", osd_update_buttons(has_update, can_check));
+  if (eval_op(client_, pm) == "gone") open_.store(false, std::memory_order_release);
 }
 
 bool OsdMenuController::update_available() const {

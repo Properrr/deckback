@@ -271,8 +271,11 @@ void test_deploy_toast() {
   assert(deploy_toast(DeployPhase::Done).find("restart") != std::string::npos);
   assert(deploy_toast(DeployPhase::PermissionBlocked).find("Desktop Mode") != std::string::npos);
   assert(!deploy_toast(DeployPhase::Failed).empty());
-  // "Nothing to do" must not interrupt: the tab the user is looking at already says it.
-  assert(deploy_toast(DeployPhase::Empty).empty());
+  // Empty MUST speak. The user pressed a button to ask; a silent answer is indistinguishable from a
+  // dead button, which is exactly how it was reported on-device. (The caller suppresses this while
+  // the Updates panel is open, since the panel says the same thing.)
+  assert(deploy_toast(DeployPhase::Empty).find("latest") != std::string::npos);
+  // Non-terminal states have no verdict to announce.
   assert(deploy_toast(DeployPhase::Requested).empty());
   assert(deploy_toast(DeployPhase::Idle).empty());
 }

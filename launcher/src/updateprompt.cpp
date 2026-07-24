@@ -305,9 +305,13 @@ std::string deploy_toast(DeployPhase phase) {
       return std::string(kPermissionBlockedToast);
     case DeployPhase::Failed:
       return std::string(kFailedToast);
-    // Empty is a successful check that found nothing. Toasting it would interrupt playback to say
-    // "nothing happened"; the Updates tab the user is already looking at says it instead.
+    // Empty answers a question the user explicitly asked, so it needs an answer. It was silent at
+    // first on the reasoning that the Updates tab would show it — but a check used to close the
+    // menu, so the reply arrived with nothing on screen and the button looked inert. The menu now
+    // stays open and this only fires when it is NOT (see the caller): the panel says it otherwise.
     case DeployPhase::Empty:
+      return std::string(kEmptyStatus);
+    // Never terminal, nothing to announce.
     case DeployPhase::Requested:
     case DeployPhase::Idle:
       return {};
@@ -369,7 +373,9 @@ void UpdatePromptController::tick(bool on_watch) {
     fresh = std::exchange(deploy_fresh_, false);
   }
   // Exactly once per verdict, and only from here: this is the input thread, which owns client_.
-  if (fresh) {
+  // A toast is the fallback surface: when the menu is open the Updates panel is patched in place
+  // and a toast on top of it would just be the same sentence twice.
+  if (fresh && !(cfg_.osd && cfg_.osd->open())) {
     if (const std::string t = deploy_toast(phase); !t.empty())
       show_toast(client_, t, kDeployToastMs);
   }
