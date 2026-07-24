@@ -323,57 +323,6 @@ std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arr
   return k.empty() ? std::string(base_arrow) : k;  // unbound: a D-pad press is just its arrow
 }
 
-std::pair<int, int> parse_chord(std::string_view chord) {
-  const size_t plus = chord.find('+');
-  if (plus == std::string_view::npos) return {-1, -1};
-  auto trim_lower = [](std::string_view v) {
-    size_t b = 0, e = v.size();
-    while (b < e && (v[b] == ' ' || v[b] == '\t')) ++b;
-    while (e > b && (v[e - 1] == ' ' || v[e - 1] == '\t')) --e;
-    return ascii_lower(v.substr(b, e - b));
-  };
-  auto lookup = [](const std::string& n) -> int {
-    for (const ControlCode& c : kControlCodes)
-      if (c.name == n) return c.code;
-    return -1;
-  };
-  const int a = lookup(trim_lower(chord.substr(0, plus)));
-  const int b = lookup(trim_lower(chord.substr(plus + 1)));
-  if (a < 0 || b < 0 || a == b) return {-1, -1};
-  return {a, b};
-}
-
-TouchLockChord::Action TouchLockChord::on_chord(bool both_down, long now_ms) {
-  if (!both_down) {
-    engaged_ = false;  // the chord may adjudicate again on the next press
-    waiting_ = false;
-    return Action::None;
-  }
-  if (engaged_) return Action::None;  // one action per engagement; a held chord does not repeat
-  // A repeat report while the hold is already counting down must not restart it: evdev sends
-  // value==2 for autorepeat, and Steam merges pads so the same press can arrive twice. Re-arming
-  // here would push the deadline out on every event and the unlock would never mature.
-  if (waiting_) return on_tick(now_ms);
-  if (!locked_) {
-    engaged_ = true;
-    locked_ = true;
-    return Action::Lock;
-  }
-  // Locked: arm the deliberate-unlock hold. It matures in on_tick(), not here — a chord press that
-  // is released early must leave the lock in place.
-  waiting_ = true;
-  hold_start_ms_ = now_ms;
-  return on_tick(now_ms);  // an unlock_hold_ms of 0 unlocks on the press, as configured
-}
-
-TouchLockChord::Action TouchLockChord::on_tick(long now_ms) {
-  if (!waiting_ || now_ms < deadline_ms()) return Action::None;
-  waiting_ = false;
-  engaged_ = true;  // consumed: keeping the chord held must not immediately re-lock
-  locked_ = false;
-  return Action::Unlock;
-}
-
 int find_control_for_action(const std::vector<std::pair<std::string, std::string>>& keymap,
                             std::string_view action) {
   for (const auto& [name, value] : keymap) {

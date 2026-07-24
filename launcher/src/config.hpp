@@ -47,25 +47,17 @@ struct Config {
   // grab the panel from inside (findings durable/touch-lock.md). `disable_touch` makes touch inert
   // two ways: the Navigator injects `no_pointer.js` to swallow every pointer/mouse/touch event in
   // the page (Option A), and `TouchModeGuard` holds gamescope's global touch mode at hover while
-  // our window is focused (Option B). Default on. This SUPERSEDES the touch_lock_* fields below,
-  // whose EVIOCGRAB lock is proven non-functional on SteamOS — they ship disabled and remain only
-  // so a remote config cannot resurrect a dead lock by accident.
+  // our window is focused (Option B). Default on.
+  //
+  // The `touch_lock_*` / `block_touchscreen` keys this replaced are gone: their EVIOCGRAB lock was
+  // proven non-functional on SteamOS, so the code is deleted rather than shipped disabled. The keys
+  // still parse (config.cpp lists them as known-and-ignored) so an older hot-swapped app.json does
+  // not warn.
   bool disable_touch = true;
 
-  // DEAD — retained disabled. `block_touchscreen` was the initial EVIOCGRAB lock state; while
-  // `touch_lock_enabled`, the `touch_lock_chord` combo toggled it. Proven not to block touch on
-  // this platform (durable/touch-lock.md); replaced by `disable_touch`. Do not re-enable without a
-  // hardware retest of the grab.
-  bool block_touchscreen = false;
-  bool touch_lock_enabled = false;
-  std::string touch_lock_chord = "l3+r3";
-  int touch_lock_unlock_hold_ms = 800;
-  bool touch_lock_toast = true;
-  bool touch_lock_haptic = true;
-
-  // First-run controls overlay (findings input-ux §17). `View (⧉)` = captions and `L3+R3` = touch
-  // lock are unguessable, and SUPPORT.md is invisible from Game Mode. Shown once; the same rows
-  // remain available in Settings ▸ Keys via the fixed Menu button.
+  // First-run controls overlay (findings input-ux §17). `View (⧉)` = captions is unguessable, and
+  // SUPPORT.md is invisible from Game Mode. Shown once; the same rows remain available in
+  // Settings ▸ Keys via the fixed Menu button.
   bool first_run_overlay = true;
 
   // Right-stick fast list traversal (findings input-ux §7/§15). The second axis is otherwise

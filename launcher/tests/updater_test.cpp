@@ -11,9 +11,11 @@
 #include <cstdio>
 #include <string>
 
+#include "harness.hpp"
+
 using namespace deckback;
 
-int main() {
+DECKBACK_TEST_MAIN(updater) {
   // The Progress.status decode the whole feature hinges on (findings/durable/self-update.md:
   // "correctness hinges on 2 == Done"). Pure + always-compiled, so this runs in CI where the
   // sd-bus portal path compiles out. An off-by-one here would silently never apply an update.

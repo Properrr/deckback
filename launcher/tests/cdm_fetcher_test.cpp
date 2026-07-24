@@ -14,9 +14,11 @@
 #include <cstdio>
 #include <string>
 
+#include "harness.hpp"
+
 using deckback::CdmFetcher;
 
-int main() {
+DECKBACK_TEST_MAIN(cdm_fetcher) {
   // The path the launcher actually builds, from a normal profile dir.
   const std::string real = CdmFetcher::installed_path("/home/deck/.local/share/deckback/profile");
   assert(real ==

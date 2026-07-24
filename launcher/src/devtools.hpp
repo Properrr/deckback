@@ -5,6 +5,8 @@
 #include <string>
 #include <string_view>
 
+#include "json.hpp"
+
 namespace deckback {
 
 // Minimal Chrome DevTools Protocol (CDP) client for talking to Cobalt's --remote-debugging-port.
@@ -174,9 +176,9 @@ class DevToolsClient {
  private:
   bool dispatch_mouse(std::string_view type, double x, double y, std::string_view button,
                       int buttons, int click_count);
-  // Runtime.evaluate `expression` and return the raw `"value":` token of the reply — the shared
-  // front half of every eval_*() method.
-  std::optional<std::string> eval_token(std::string_view expression);
+  // Runtime.evaluate `expression` and return the reply's `result.result.value` — the shared front
+  // half of every eval_*() method.
+  std::optional<json::Value> eval_value(std::string_view expression);
 
   // The shared connection. Never null. Clients for the same host:port hold the same session, so
   // this is where the socket, the reader thread and the sticky state actually live.

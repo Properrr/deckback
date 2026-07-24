@@ -9,6 +9,7 @@
 #include <thread>
 
 #include "config.hpp"
+#include "harness.hpp"
 
 namespace fs = std::filesystem;
 using namespace deckback;
@@ -71,7 +72,7 @@ void test_shutdown_is_success() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(watchdog) {
   g_dir = fs::temp_directory_path() / "deckback_watchdog_test";
   fs::remove_all(g_dir);
   fs::create_directories(g_dir);

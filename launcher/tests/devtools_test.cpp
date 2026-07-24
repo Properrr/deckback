@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "fake_cdp_server.hpp"
+#include "harness.hpp"
 
 using namespace deckback;
 using deckback::testing::FakeServer;
@@ -107,6 +108,12 @@ void test_integration() {
   // String reads are unescaped (\/ -> /).
   auto href = client.eval_string("WANT_STR document.location.href");
   assert(href.has_value() && *href == "https://www.youtube.com/tv#/");
+
+  // ...and a page string that merely contains the failure markers is a VALUE, not a failure. The
+  // client reads `error`/`exceptionDetails` at their documented paths; the substring search this
+  // replaced would have thrown this reply away and logged a CDP error that never happened.
+  auto trap = client.eval_string("WANT_TRAP document.title");
+  assert(trap.has_value() && *trap == "{\"error\":1} exceptionDetails");
 
   // The UA override and navigate commands are accepted (no CDP error in the reply).
   assert(client.set_user_agent_override(
@@ -392,7 +399,7 @@ void test_unreachable_server() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(devtools) {
   test_codec_roundtrips();
   test_codec_masking_actually_masks();
   test_codec_incomplete_is_needmore();

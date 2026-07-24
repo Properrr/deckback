@@ -116,6 +116,8 @@ class FakeServer {
   // Whether the persistent Settings button is still painted. Lets the OSD unit test model a
   // same-URL document reload: the old local `button_shown_` flag survives, the DOM does not.
   void set_osd_button_present(bool present) { osd_button_present_.store(present); }
+  // Model a Leanback reload deleting an injected overlay node out from under us.
+  void set_overlay_present(bool present) { overlay_present_.store(present); }
 
   // How many WebSocket sessions and /json/list probes this server has served. Every DevToolsClient
   // for one host:port shares a single CdpSession, so N clients must produce exactly ONE of each --
@@ -203,6 +205,11 @@ class FakeServer {
       } else if (e.find("/*osd-button-state*/") != std::string::npos) {
         result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
                  (osd_button_present_.load() ? "true" : "false") + "}}";
+        // PageOverlay's "is my node still in the document?" probe. Settable so a test can model the
+        // thing that actually happens on a Deck: Leanback reloads and silently deletes it.
+      } else if (e.find("/*overlay-state*/") != std::string::npos) {
+        result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
+                 (overlay_present_.load() ? "true" : "false") + "}}";
       } else if (e.find("\\\"op\\\":\\\"state\\\"") != std::string::npos) {
         // The osd.js expression is JSON-escaped into the CDP frame, so the {"op":"state"} arg
         // arrives as \"op\":\"state\". Match that, and reply with whatever paint state the test
@@ -213,8 +220,15 @@ class FakeServer {
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"ok\"}}";
       else if (e.find("\\\"op\\\":\\\"close\\\"") != std::string::npos)
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"closed\"}}";
+      // The REAL CDP shape: a thrown expression nests `exceptionDetails` inside `result`, alongside
+      // the RemoteObject. This used to emit it at the top level — which no Chromium ever sends, and
+      // which only "worked" against a client that searched the whole payload for the key rather
+      // than reading its documented path. A fake that models the wrong shape cannot test the
+      // client that reads the right one.
       else if (e.find("WANT_EXC") != std::string::npos)
-        result = "\"exceptionDetails\":{\"text\":\"boom\"}";
+        result =
+            "\"result\":{\"result\":{\"type\":\"object\",\"subtype\":\"error\"},"
+            "\"exceptionDetails\":{\"text\":\"boom\"}}";
       // The error page's retry flag. Modelled as a real one-shot: the expression both reads and
       // clears `window.__deckbackRetry`, so a launcher that forgets to consume it would retry
       // forever off a single keypress — and only a stateful fake can catch that.
@@ -248,6 +262,13 @@ class FakeServer {
         result =
             "\"result\":{\"result\":{\"type\":\"string\","
             "\"value\":\"https:\\/\\/www.youtube.com\\/tv#\\/\"}}";
+      // A page string that merely CONTAINS the failure markers. Nothing here is a CDP error, so the
+      // client must return the string. Reading `error` / `exceptionDetails` by path rather than by
+      // searching the payload is what makes that possible.
+      else if (e.find("WANT_TRAP") != std::string::npos)
+        result =
+            "\"result\":{\"result\":{\"type\":\"string\","
+            "\"value\":\"{\\\"error\\\":1} exceptionDetails\"}}";
       else if (e.find("pause()") != std::string::npos)
         result = "\"result\":{\"result\":{\"type\":\"number\",\"value\":123.5}}";
       else if (e.find("play()") != std::string::npos)
@@ -270,6 +291,7 @@ class FakeServer {
   std::atomic<int> http_gets_{0};
   std::atomic<bool> error_page_up_{false};
   std::atomic<bool> osd_button_present_{true};
+  std::atomic<bool> overlay_present_{true};
   std::string nav_error_;                          // guarded by req_mu_
   std::string osd_state_ = "tab=settings;idx=-1";  // guarded by req_mu_
   std::atomic<bool> saw_reload_{false};

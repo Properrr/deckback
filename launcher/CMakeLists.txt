@@ -147,6 +147,9 @@ add_library(deckback_core STATIC
   src/json.cpp
   src/config.cpp
   src/config_store.cpp
+  src/fileio.cpp
+  src/pageoverlay.cpp
+  src/http.cpp
   src/caption_settings.cpp
   src/platform.cpp
   src/updater.cpp
@@ -168,7 +171,6 @@ add_library(deckback_core STATIC
   src/onboarding.cpp
   src/osdmenu.cpp
   src/about.cpp
-  src/touch.cpp
   src/touchmode.cpp
   src/netprobe.cpp
   src/audio.cpp
@@ -206,50 +208,45 @@ if(BUILD_TESTING)
   # the assertions out (tests silently pass) and trip -Werror=unused-variable. -UNDEBUG on the test
   # TU keeps assertions live regardless of the build type; src/ contains no assert(), so building
   # deckback_core with NDEBUG costs no coverage.
-  function(deckback_test name)
-    add_executable(${name} tests/${name}.cpp)
-    target_link_libraries(${name} PRIVATE deckback_core)
-    target_include_directories(${name} PRIVATE tests)
-    target_compile_options(${name} PRIVATE -UNDEBUG)
-    add_test(NAME ${name} COMMAND ${name})
+  # Tests are GROUPED into a few binaries rather than one per file. Each was its own executable,
+  # statically linking the whole of deckback_core -- 25 link steps of a multi-megabyte archive.
+  # tests/harness.hpp explains the mechanism; what matters here is that grouping costs nothing in
+  # reporting or isolation: add_test still registers every case by NAME, and each invocation runs
+  # that one case in its own process.
+  #
+  # deckback_test_group(<group> <case>...) builds tests/group_<group>.cpp plus each case's TU.
+  function(deckback_test_group group)
+    set(target group_${group})
+    list(TRANSFORM ARGN PREPEND "tests/" OUTPUT_VARIABLE case_sources)
+    list(TRANSFORM case_sources APPEND "_test.cpp")
+    add_executable(${target} tests/group_${group}.cpp ${case_sources})
+    target_link_libraries(${target} PRIVATE deckback_core)
+    target_include_directories(${target} PRIVATE tests)
+    target_compile_options(${target} PRIVATE -UNDEBUG)
+    # The two config-reading cases live in different groups, and the define is just a path, so it is
+    # simpler and harmless to give it to every group than to track which one needs it.
+    target_compile_definitions(${target} PRIVATE
+      DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
+    foreach(case IN LISTS ARGN)
+      add_test(NAME ${case}_test COMMAND ${target} ${case})
+    endforeach()
   endfunction()
 
-  deckback_test(json_test)
-  deckback_test(config_test)
-  deckback_test(config_store_test)
-  deckback_test(caption_settings_test)
-  deckback_test(caption_fuzz_test)
-  deckback_test(log_test)
-  deckback_test(devtools_test)
-  deckback_test(player_test)
-  deckback_test(watchdog_test)
-  deckback_test(sha256_test)
-  deckback_test(profile_test)
-  deckback_test(util_test)
-  deckback_test(about_test)
-  deckback_test(scripts_test)
-  deckback_test(navigator_test)
-  deckback_test(overlay_test)
-  deckback_test(errorpage_test)
-  deckback_test(osdmenu_test)
-  deckback_test(cdm_fetcher_test)
-  deckback_test(touchmode_test)
-  # The portal path is NOT verified here -- that is a Deck job (durable/self-update.md:
+  deckback_test_group(pure
+    json util sha256 config config_store caption_settings caption_fuzz about scripts log profile)
+
+  deckback_test_group(cdp devtools navigator player errorpage)
+
+  # onboarding/input read the real shipped config, so a keymap change cannot make the launcher and
+  # the first-run card advertise a control that does not work.
+  # updateprompt pins the self-update notify UI off-Deck: semantic version compare, GitHub-releases
+  # parse, changelog summary, the show-card/show-dot decision, and the dismissal state files.
+  deckback_test_group(ui onboarding osdmenu overlay updateprompt input)
+
+  # The updater's portal path is NOT verified here -- that is a Deck job (durable/self-update.md:
   # --selftest-update + a staging-repo round-trip). These pin what holds off-Deck: the pure
   # Progress.status decode (2 == Done), the factory, and a crash-free / idempotent lifecycle.
-  deckback_test(updater_test)
-  # Self-update notify UI: semantic version compare, GitHub-releases parse, changelog summary, the
-  # show-card/show-dot decision, and the dismissal state files.
-  deckback_test(updateprompt_test)
-
-  # These two read the real shipped config, so a keymap change cannot make the launcher and the
-  # first-run card advertise a control that does not work.
-  deckback_test(input_test)
-  deckback_test(onboarding_test)
-  foreach(t input_test onboarding_test)
-    target_compile_definitions(${t} PRIVATE
-      DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
-  endforeach()
+  deckback_test_group(sys watchdog updater cdm_fetcher touchmode)
 
   find_program(NODE_EXECUTABLE NAMES node nodejs)
   if(NODE_EXECUTABLE)

@@ -9,6 +9,7 @@
 #include <sstream>
 
 #include "config.hpp"
+#include "fileio.hpp"
 #include "log.hpp"
 
 namespace deckback {
@@ -38,11 +39,9 @@ ConfigStore::ConfigStore(std::string path) : path_(std::move(path)) {}
 
 void ConfigStore::load() {
   overlay_.clear();
-  std::ifstream f(path_, std::ios::binary);
-  if (!f) return;
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  json::ParseResult pr = json::parse(ss.str());
+  const auto text = read_file(path_);
+  if (!text) return;
+  json::ParseResult pr = json::parse(*text);
   if (!pr.ok()) {
     warn("config: " + path_ + ":" + std::to_string(pr.error.line) + ": " + pr.error.message +
          " — ignoring user overrides");

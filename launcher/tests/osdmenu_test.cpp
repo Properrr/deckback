@@ -8,6 +8,7 @@
 #include <string>
 
 #include "fake_cdp_server.hpp"
+#include "harness.hpp"
 
 using namespace deckback;
 
@@ -193,7 +194,7 @@ void test_hold_ms_is_shared_with_the_page() {
   assert(saw);
 }
 
-int main() {
+DECKBACK_TEST_MAIN(osdmenu) {
   test_status_line();
   test_button_is_redrawn_when_a_same_url_reload_wipes_it();
   test_update_buttons();

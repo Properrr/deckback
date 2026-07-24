@@ -9,6 +9,8 @@
 #include <string>
 #include <vector>
 
+#include "harness.hpp"
+
 using namespace deckback;
 
 static void test_split_whitespace() {
@@ -52,7 +54,7 @@ static void test_mono_ms_monotonic() {
   assert(a > 0 && b >= a);
 }
 
-int main() {
+DECKBACK_TEST_MAIN(util) {
   test_split_whitespace();
   test_js_string_escape();
   test_ascii_lower();

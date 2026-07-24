@@ -1,10 +1,9 @@
 #include "scripts.hpp"
 
 #include <format>
-#include <fstream>
-#include <sstream>
 
 #include "devtools.hpp"
+#include "fileio.hpp"
 #include "log.hpp"
 #include "scripts_registry.hpp"  // GENERATED: kEmbeddedScripts[] {name, body}
 #include "util.hpp"              // js_string_escape
@@ -106,11 +105,9 @@ void ScriptLibrary::load_overrides(const std::string& dir) {
   if (dir.empty()) return;
   int n = 0;
   for (auto& [name, body] : scripts_) {
-    std::ifstream f(dir + "/" + name + ".js", std::ios::binary);
-    if (!f) continue;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    std::string override_body = ss.str();
+    auto loaded = read_file(dir + "/" + name + ".js");
+    if (!loaded) continue;
+    std::string override_body = std::move(*loaded);
     // A present-but-empty file is a mistake (an editor truncation, a failed write); keeping the
     // embedded default is safer than injecting nothing and silently disabling the behaviour.
     if (override_body.find_first_not_of(" \t\r\n") == std::string::npos) continue;

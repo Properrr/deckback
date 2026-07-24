@@ -1,14 +1,13 @@
-// Touch-lock feedback (findings input-ux §4): the CDP-injected toast and the force-feedback effect.
+// On-screen + in-hand feedback: the CDP-injected toast and the force-feedback effect.
 //
-// The toast exists because the lock is otherwise unobservable — a locked touchscreen and a hung
-// browser look identical. So the failure this file guards against is a toast that *silently does
-// not appear*: `Runtime.evaluate` on malformed JS raises a JS exception the launcher deliberately
-// ignores (a failed toast must not break the lock), which means an escaping bug produces no error
-// anywhere. Only a test can catch it.
+// The toast exists because the player is otherwise unobservable — a caption toggle that did
+// nothing and one that worked look identical. So the failure this file guards against is a toast
+// that *silently does not appear*: `Runtime.evaluate` on malformed JS raises a JS exception the
+// launcher deliberately ignores (a failed toast must not break the action it reports), which means
+// an escaping bug produces no error anywhere. Only a test can catch it.
 //
-// What is NOT covered here, and cannot be: whether EVIOCGRAB actually starves gamescope of touch
-// events, and whether the pad accepts our FF upload. Both need the Deck (.internal/TEST-PLAN.md
-// §2).
+// What is NOT covered here, and cannot be: whether the pad accepts our FF upload. That needs the
+// Deck (.internal/TEST-PLAN.md §2).
 #include "overlay.hpp"
 
 #include <cassert>
@@ -17,6 +16,7 @@
 
 #include "fake_cdp_server.hpp"
 #include "haptic.hpp"
+#include "harness.hpp"
 #include "scripts.hpp"
 
 using namespace deckback;
@@ -120,10 +120,10 @@ void test_show_toast_evaluates_on_the_page() {
 }
 
 void test_show_toast_survives_a_dead_engine() {
-  // The contract: feedback is secondary to the action it reports. If CDP is down, the touch lock
-  // must still engage — so show_toast must return, not throw, not block.
+  // The contract: feedback is secondary to the action it reports. If CDP is down, the caption
+  // toggle must still fire — so show_toast must return, not throw, not block.
   DevToolsClient c("127.0.0.1", 8);  // nothing listening
-  show_toast(c, "Touchscreen locked", 2000);
+  show_toast(c, "Captions on", 2000);
   hide_toast(c);
 }
 
@@ -164,7 +164,7 @@ void test_haptic_attach_fails_cleanly_on_a_non_device() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(overlay) {
   test_toast_js_shape();
   test_toast_js_escapes_quotes_and_backslashes();
   test_toast_js_escapes_newlines();

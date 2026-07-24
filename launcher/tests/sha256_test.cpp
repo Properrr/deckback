@@ -4,9 +4,11 @@
 #include <cstdio>
 #include <string>
 
+#include "harness.hpp"
+
 using deckback::sha256_hex;
 
-int main() {
+DECKBACK_TEST_MAIN(sha256) {
   // FIPS 180-4 / standard test vectors.
   assert(sha256_hex("") == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
   assert(sha256_hex("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");

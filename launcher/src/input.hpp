@@ -7,7 +7,6 @@
 #include "keymap.hpp"
 #include "layers.hpp"
 #include "onboarding.hpp"
-#include "touch.hpp"
 #include "worker.hpp"
 
 namespace deckback {
@@ -16,28 +15,16 @@ class UpdatePromptController;
 class OsdMenuController;
 class CaptionSettings;
 
-// Runtime touchscreen-lock policy for the input layer (findings input-ux §4). Sourced from Config.
-struct TouchConfig {
-  bool lock_enabled = false;    // whether the chord toggles the touchscreen lock
-  std::string chord = "l3+r3";  // the toggling controller chord
-  bool block_initial = false;   // start with the touchscreen already locked
-  long unlock_hold_ms = 800;    // hold the chord this long to unlock (locking is immediate)
-  bool toast = true;            // announce lock/unlock with an on-screen toast
-  bool haptic = true;           // ...and a controller rumble pulse
-};
-
 // Everything GamepadInput is wired to. Bundled so the call site in main() labels what it passes.
 //
 //   keymap       every layer; an empty `base` selects the built-in defaults (a -> select, b ->
 //                back).
-//   touch        the runtime touchscreen lock (default-constructed = feature off).
 //   fast_scroll  right-stick fast list traversal (input-ux §7).
 //   layers       context source (browse/player/osk), written by PlayerController's poll thread;
 //                nullptr pins the input to the Browse layer. Not owned.
 //   onboarding   the first-run controls card (input-ux §17); nullptr = feature off. Not owned.
 struct GamepadOptions {
   KeymapConfig keymap;
-  TouchConfig touch;
   FastScrollConfig fast_scroll;
   int skip_seconds = 10;  // ± jump for a trigger bound to skip_back/skip_fwd (input-ux §18)
   // Caption-button behaviour (language priority, source policy, toast). Owned by main and shared
@@ -85,8 +72,6 @@ class GamepadInput {
       const char* base_arrow);  // resolve one arrow under the layer/modifiers and send
   void dispatch_scroll(const char* base_arrow);  // right-stick step: OSD scroll when open, else key
   void update_fast_scroll();                     // re-evaluate the right stick after an axis change
-  bool handle_chord(int code,
-                    int value);  // track/toggle the touch-lock chord; true = event consumed
   // While the controls card is up it is modal: it swallows every event, and a button press
   // dismisses it. Returns true when the event was consumed.
   bool handle_onboarding(int type, int code, int value);
@@ -95,8 +80,6 @@ class GamepadInput {
   void osd_event(int type, int code, int value);
   // When the menu is closed, open it on the Menu press edge (off playback). True = consumed.
   bool osd_open_edge(int type, int code, int value);
-  void apply_touch_lock(TouchLockChord::Action a);  // engage/release the grab and report it
-  void announce_touch_lock(bool locked);            // toast + rumble; never fails the lock
   // Toggle Leanback captions over CDP (config/scripts/toggle_captions.js) and toast the new state.
   // youtube.com/tv ignores the desktop `c` hotkey, so captions are a launcher action driven through
   // the player's caption module, not a dispatched key (findings input-ux.md §8.1).
@@ -110,15 +93,6 @@ class GamepadInput {
   std::vector<int> fds_;
   std::vector<std::string> paths_;  // parallel to fds_; lets discover_new_devices() skip open nodes
 
-  // Runtime touchscreen lock (findings input-ux §4).
-  TouchGuard touch_;
-  bool block_initial_ = false;
-  int chord_a_code_ = -1, chord_b_code_ = -1;  // the two chord buttons (<0 = chord disabled)
-  bool chord_a_down_ = false, chord_b_down_ = false;
-  TouchLockChord chord_;
-  std::string chord_label_;  // as written in config, so the toast can name the real chord
-  bool touch_toast_ = true;
-  bool touch_haptic_ = true;
   void ensure_haptic();  // lazy-attach on first pulse; no pad exists at construction
   // Rumble needs its own O_RDWR fd on the pad; the input fds are O_RDONLY. Attached lazily on the
   // first pulse, because at construction no device has been discovered yet.

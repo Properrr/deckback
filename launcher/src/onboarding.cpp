@@ -1,10 +1,10 @@
 #include "onboarding.hpp"
 
-#include <cstdio>
 #include <filesystem>
 #include <format>
 
-#include "keymap.hpp"  // resolve_binding, parse_chord
+#include "fileio.hpp"
+#include "keymap.hpp"  // resolve_binding
 #include "log.hpp"
 #include "scripts.hpp"
 
@@ -89,22 +89,6 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx) {
   rows.push_back({"Menu (☰)", "Settings"});
   rows.push_back({"D-pad / Left stick", "Move focus"});
   if (ctx.right_stick_scroll) rows.push_back({"Right stick", "Fast scroll"});
-
-  if (ctx.touch_lock_enabled) {
-    const auto [a, b] = parse_chord(ctx.touch_lock_chord);
-    if (a >= 0) {
-      // Print the chord the config actually names, uppercased ("l3+r3" -> "L3 + R3"). A card that
-      // says L3+R3 while the config binds Menu+View is a card that lies.
-      std::string pretty;
-      for (char c : ctx.touch_lock_chord) {
-        if (c == '+')
-          pretty += " + ";
-        else
-          pretty += static_cast<char>(c >= 'a' && c <= 'z' ? c - 32 : c);
-      }
-      rows.push_back({pretty, "Lock touchscreen (hold to unlock)"});
-    }
-  }
   return rows;
 }
 
@@ -137,26 +121,18 @@ bool first_run_pending(const std::string& marker_path) {
 }
 
 bool mark_first_run_done(const std::string& marker_path) {
-  std::error_code ec;
-  std::filesystem::path p(marker_path);
-  if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
-  std::FILE* f = std::fopen(marker_path.c_str(), "w");
-  if (!f) {
-    // A read-only state dir must not mean the card reappears on every single launch — but it also
-    // must not crash. Warn once and move on; the user sees it again next boot, which is the mild
-    // failure of the two.
-    warn(std::format("onboarding: cannot write {} — the controls card will show again",
-                     marker_path));
-    return false;
-  }
-  std::fputs("1\n", f);
-  std::fclose(f);
-  return true;
+  // A read-only state dir must not mean the card reappears on every single launch — but it also
+  // must not crash. write_marker warns and returns false; the user sees it again next boot, which
+  // is the mild failure of the two.
+  return write_marker(marker_path, "1", "the controls card will show again");
 }
 
 OnboardingController::OnboardingController(std::string host, int port, OverlayContext ctx,
                                            std::string marker_path)
-    : client_(std::move(host), port), ctx_(std::move(ctx)), marker_path_(std::move(marker_path)) {}
+    : client_(std::move(host), port),
+      ctx_(std::move(ctx)),
+      marker_path_(std::move(marker_path)),
+      card_(client_, kOverlayElementId) {}
 
 bool OnboardingController::show(bool first_run_only) {
   if (first_run_only && !first_run_pending(marker_path_)) return false;
@@ -165,11 +141,10 @@ bool OnboardingController::show(bool first_run_only) {
   const auto rows = controls_overlay_rows(ctx_);
   if (rows.empty()) return false;  // nothing to teach
 
-  if (!client_.eval_void(overlay_js(rows, "Controls", "Press any button to continue"))) {
+  if (!card_.draw_js(overlay_js(rows, "Controls", "Press any button to continue"))) {
     warn("onboarding: could not draw the controls card (engine unreachable)");
     return false;
   }
-  state_.set(true);
   // Recorded on *show*, not on dismiss: if the app is killed while the card is up, the user has
   // still seen it, and a card that reappears until it is politely dismissed is a card that
   // reappears after every crash.
@@ -179,9 +154,14 @@ bool OnboardingController::show(bool first_run_only) {
 }
 
 void OnboardingController::hide() {
-  if (!state_.set(false)) return;  // already hidden; do not spend a CDP round trip per button press
-  client_.eval_void(overlay_hide_js());
+  if (!visible()) return;
+  card_.hide("overlay_hide");
   info("onboarding: controls card dismissed");
+}
+
+void OnboardingController::tick() {
+  if (card_.lost())
+    info("onboarding: the page reloaded the controls card away — releasing the input capture");
 }
 
 }  // namespace deckback

@@ -10,6 +10,8 @@
 #include <fstream>
 #include <string>
 
+#include "harness.hpp"
+
 using deckback::Config;
 using deckback::SelfUpdateMode;
 
@@ -216,7 +218,7 @@ void test_empty_object_is_all_defaults() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(config) {
   test_happy_path();
   test_missing_file_is_an_error();
   test_malformed_config_is_refused_not_defaulted();

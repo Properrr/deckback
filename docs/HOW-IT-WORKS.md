@@ -176,8 +176,9 @@ navigate; the cursor was gone.
 ⛔ The earlier design — an `EVIOCGRAB` exclusive grab of the FTS3528 touch panel (`touch.cpp`,
 toggled by an L3+R3 chord with toast + haptic) — is **proven dead** on SteamOS (physical test
 *2026-07-10*): the launcher can't open the panel node as the seat user, and even with access the
-grab doesn't block touch because **gamescope, not the app, reads the panel**. That machinery ships
-disabled (`touch_lock_enabled: false`) and is retained only as a documented dead end. See
+grab doesn't block touch because **gamescope, not the app, reads the panel**. That machinery has
+been **deleted** rather than shipped disabled; the `touch_lock_*` config keys still parse and are
+ignored, so an old hot-swapped `app.json` neither resurrects it nor warns. See
 [`.internal/findings/durable/touch-lock.md`](../.internal/findings/durable/touch-lock.md).
 
 ### Hardware video decode (VA-API) ⛔ Blocked — ships software decode

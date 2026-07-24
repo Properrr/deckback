@@ -18,6 +18,7 @@
 #include "caption_settings.hpp"
 #include "config.hpp"
 #include "config_store.hpp"
+#include "harness.hpp"
 #include "json.hpp"
 
 using namespace deckback;
@@ -272,7 +273,7 @@ void test_adversarial_inputs() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(caption_fuzz) {
   test_all_combos_persist_across_restart();
   test_on_state_persistence_gated_by_remember();
   test_state_machine_transitions();

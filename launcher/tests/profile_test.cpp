@@ -5,9 +5,11 @@
 #include <filesystem>
 #include <fstream>
 
+#include "harness.hpp"
+
 namespace fs = std::filesystem;
 
-int main() {
+DECKBACK_TEST_MAIN(profile) {
   const fs::path root = fs::temp_directory_path() / "deckback-profile-test";
   fs::remove_all(root);
   fs::create_directories(root / "runtime" / "deckback-profile/Local Storage");
@@ -31,4 +33,5 @@ int main() {
   assert(contents == "durable");
 
   fs::remove_all(root);
+  return 0;
 }

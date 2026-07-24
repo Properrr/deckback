@@ -131,8 +131,9 @@ navigate. The **controller is never affected**. To get tap-to-activate back, set
 
 > An earlier version tried to *lock* the panel with an exclusive `EVIOCGRAB` grab, toggled by an
 > L3+R3 chord. That approach is **dead**: on SteamOS the compositor — not the app — reads the
-> touchscreen, so the grab does nothing. The old `touch_lock_*` settings ship disabled and have no
-> effect; `disable_touch` above is the supported mechanism.
+> touchscreen, so the grab does nothing. That code has been removed. If your `app.json` still has
+> the old `touch_lock_*` settings they are simply ignored; `disable_touch` above is the supported
+> mechanism.
 
 ## When it can't connect
 

@@ -12,6 +12,7 @@
 
 #include "config.hpp"
 #include "config_store.hpp"
+#include "harness.hpp"
 
 using namespace deckback;
 
@@ -198,7 +199,7 @@ void test_control_and_on_state() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(caption_settings) {
   test_language_tables();
   test_toggle_and_apply_js();
   test_youtube_mode();

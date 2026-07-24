@@ -5,6 +5,7 @@
 #include <cstring>
 #include <string>
 
+#include "harness.hpp"
 #include "scripts.hpp"  // the pointer-swallow script now lives in the ScriptLibrary registry
 
 using deckback::focus_class_is_ours;
@@ -18,7 +19,7 @@ static std::string wm_class(const char* instance, const char* klass) {
   return s;
 }
 
-int main() {
+DECKBACK_TEST_MAIN(touchmode) {
   // --- Option B focus matcher: only OUR content_shell windows count as focused. ---
   assert(focus_class_is_ours(wm_class("content_shell", "Content_shell")));
   assert(focus_class_is_ours(wm_class("chromium-content_shell", "chromium-content_shell")));

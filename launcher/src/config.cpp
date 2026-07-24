@@ -2,22 +2,13 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
-#include <sstream>
 
+#include "fileio.hpp"
 #include "json.hpp"
 #include "log.hpp"
 
 namespace deckback {
 namespace {
-
-std::optional<std::string> slurp(const std::string& path) {
-  std::ifstream f(path, std::ios::binary);
-  if (!f) return std::nullopt;
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  return ss.str();
-}
 
 // ---- the schema ---------------------------------------------------------------------------------
 //
@@ -48,7 +39,6 @@ struct Range {
 constexpr Field<std::string> kStringFields[] = {
     {"url", &Config::url},
     {"user_agent", &Config::user_agent},
-    {"touch_lock_chord", &Config::touch_lock_chord},
     {"error_title", &Config::error_title},
     {"error_hint", &Config::error_hint},
     {"cdm_url", &Config::cdm_url},
@@ -63,10 +53,6 @@ constexpr Field<std::string> kStringFields[] = {
 constexpr Field<bool> kBoolFields[] = {
     {"watchdog.restart_on_crash", &Config::watchdog_restart_on_crash},
     {"disable_touch", &Config::disable_touch},
-    {"block_touchscreen", &Config::block_touchscreen},
-    {"touch_lock_enabled", &Config::touch_lock_enabled},
-    {"touch_lock_toast", &Config::touch_lock_toast},
-    {"touch_lock_haptic", &Config::touch_lock_haptic},
     {"first_run_overlay", &Config::first_run_overlay},
     {"captions_toast", &Config::captions_toast},
     {"caption_remember", &Config::caption_remember},
@@ -89,7 +75,6 @@ struct IntField {
 constexpr IntField kIntFields[] = {
     {"remote_debugging_port", &Config::remote_debugging_port, {0, 65535}},
     {"watchdog.max_restarts_per_minute", &Config::watchdog_max_restarts_per_minute, {1, 1000}},
-    {"touch_lock_unlock_hold_ms", &Config::touch_lock_unlock_hold_ms, {0, 60'000}},
     // The right stick's raw evdev range is ±32767; a deadzone at or past that kills the feature.
     {"right_stick_deadzone", &Config::right_stick_deadzone, {1, 32'000}},
     {"right_stick_slow_ms", &Config::right_stick_slow_ms, {10, 5'000}},
@@ -121,9 +106,23 @@ constexpr std::string_view kKeymapFields[] = {"keymap", "keymap_player", "keymap
 // Keys that are read outside the tables above, or that exist for humans/compatibility. Listed so
 // the unknown-key check does not report them.
 constexpr std::string_view kKnownExtraPaths[] = {
-    "schema_version",   "cobalt_flags", "caption_languages", "power.self_update_mode",
+    "schema_version",
+    "cobalt_flags",
+    "caption_languages",
+    "power.self_update_mode",
     "self_update_mode",  // accepted at top level too
     "self_update",       // deprecated legacy boolean
+    // REMOVED, still accepted silently. These configured the EVIOCGRAB touchscreen lock, which was
+    // proven non-functional on SteamOS (durable/touch-lock.md) and is now deleted rather than
+    // shipped disabled; `disable_touch` replaces it. Kept here — and only here — so an older
+    // hot-swapped app.json does not spray unknown-key warnings for settings that were never load
+    // bearing. Do not reintroduce the fields without a hardware retest of the grab.
+    "block_touchscreen",
+    "touch_lock_enabled",
+    "touch_lock_chord",
+    "touch_lock_unlock_hold_ms",
+    "touch_lock_toast",
+    "touch_lock_haptic",
 };
 
 // Sections the launcher deliberately does not consume: they document intent for humans and for the
@@ -297,7 +296,7 @@ const char* self_update_mode_name(SelfUpdateMode m) {
 }
 
 std::optional<Config> Config::load(const std::string& path) {
-  auto text = slurp(path);
+  auto text = read_file(path);
   if (!text) {
     error("config: cannot read " + path);
     return std::nullopt;

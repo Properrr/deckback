@@ -135,118 +135,27 @@ std::string base64(const unsigned char* data, size_t n) {
 // coincide for everything we emit, so this is the shared helper.
 std::string json_escape(std::string_view s) { return js_string_escape(s); }
 
-// Reverse json_escape for a value pulled out of a CDP reply (URLs, titles). Handles the escapes CDP
-// actually emits; a stray backslash is passed through. Sufficient for our primitive string reads.
-std::string json_unescape(std::string_view s) {
-  std::string out;
-  out.reserve(s.size());
-  for (size_t i = 0; i < s.size(); ++i) {
-    if (s[i] != '\\' || i + 1 >= s.size()) {
-      out.push_back(s[i]);
-      continue;
-    }
-    switch (s[++i]) {
-      case 'n':
-        out.push_back('\n');
-        break;
-      case 'r':
-        out.push_back('\r');
-        break;
-      case 't':
-        out.push_back('\t');
-        break;
-      case '"':
-        out.push_back('"');
-        break;
-      case '\\':
-        out.push_back('\\');
-        break;
-      case '/':
-        out.push_back('/');
-        break;
-      case 'u': {
-        if (i + 4 < s.size()) {
-          int cp = 0;
-          bool ok = true;
-          for (int j = 1; j <= 4; ++j) {
-            char c = s[i + j];
-            cp <<= 4;
-            if (c >= '0' && c <= '9')
-              cp |= c - '0';
-            else if (c >= 'a' && c <= 'f')
-              cp |= c - 'a' + 10;
-            else if (c >= 'A' && c <= 'F')
-              cp |= c - 'A' + 10;
-            else {
-              ok = false;
-              break;
-            }
-          }
-          if (ok) {
-            i += 4;
-            if (cp < 0x80) {
-              out.push_back(static_cast<char>(cp));
-            } else if (cp < 0x800) {
-              out.push_back(static_cast<char>(0xC0 | (cp >> 6)));
-              out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-            } else {
-              out.push_back(static_cast<char>(0xE0 | (cp >> 12)));
-              out.push_back(static_cast<char>(0x80 | ((cp >> 6) & 0x3F)));
-              out.push_back(static_cast<char>(0x80 | (cp & 0x3F)));
-            }
-            break;
-          }
-        }
-        out.push_back('\\');
-        out.push_back('u');
-        break;
-      }
-      default:
-        out.push_back('\\');
-        out.push_back(s[i]);
-    }
-  }
-  return out;
-}
-
-// Parse the top-level `"id":<n>` of a CDP reply. nullopt for events (which carry no id). Parsing
-// the integer (rather than substring-matching) avoids `"id":4` false-matching inside `"id":42`.
-std::optional<uint64_t> response_id(const std::string& body) {
-  size_t k = body.find("\"id\":");
-  if (k == std::string::npos) return std::nullopt;
-  size_t p = k + 5;
-  while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) ++p;
+// Decode one CDP frame. A REPLY carries a top-level `id`; an EVENT does not and is dropped.
+//
+// The `"id":` pre-check is not redundant with the parse: `Page.enable`/`Network.enable` turn on an
+// event firehose whose payloads are far larger than any reply we ask for, and every one of them
+// would otherwise be fully parsed only to be thrown away. This keeps the parse on the reply path.
+struct Reply {
   uint64_t id = 0;
-  bool any = false;
-  while (p < body.size() && body[p] >= '0' && body[p] <= '9') {
-    id = id * 10 + static_cast<uint64_t>(body[p] - '0');
-    ++p;
-    any = true;
-  }
-  return any ? std::optional<uint64_t>(id) : std::nullopt;
-}
-
-// Find `"value":` in a CDP RemoteObject reply and return the raw token that follows (true/false/a
-// number/a quoted string). Our expressions only ever return primitives, so the first match is ours.
-std::optional<std::string> extract_value_token(const std::string& body) {
-  size_t k = body.find("\"value\":");
-  if (k == std::string::npos) return std::nullopt;
-  size_t p = k + 8;
-  while (p < body.size() && (body[p] == ' ' || body[p] == '\t')) ++p;
-  if (p >= body.size()) return std::nullopt;
-  if (body[p] == '"') {
-    size_t end = p + 1;
-    while (end < body.size() && body[end] != '"') {
-      if (body[end] == '\\') ++end;
-      ++end;
-    }
-    return body.substr(p, end - p + 1);
-  }
-  size_t end = p;
-  while (end < body.size() && body[end] != ',' && body[end] != '}') ++end;
-  std::string tok = body.substr(p, end - p);
-  while (!tok.empty() && (tok.back() == ' ' || tok.back() == '\t')) tok.pop_back();
-  return tok;
+  json::Value body;
+};
+std::optional<Reply> decode_reply(const std::string& payload) {
+  if (payload.find("\"id\":") == std::string::npos) return std::nullopt;
+  json::ParseResult parsed = json::parse(payload);
+  if (!parsed.ok()) return std::nullopt;
+  const json::Value* id = parsed.value->find("id");
+  if (!id) return std::nullopt;
+  const auto n = id->as_number();
+  if (!n || *n < 0) return std::nullopt;
+  Reply r;
+  r.id = static_cast<uint64_t>(*n);
+  r.body = std::move(*parsed.value);
+  return r;
 }
 
 int connect_tcp(const std::string& host, int port, int timeout_ms) {
@@ -381,8 +290,9 @@ class CdpSession {
     return fd_ >= 0;
   }
 
-  // Send `method` and wait for its reply. nullopt on transport error, CDP error, or timeout.
-  std::optional<std::string> request(std::string_view method, std::string_view params_json) {
+  // Send `method` and wait for its reply. nullopt on transport error, CDP error, or timeout. The
+  // reply is already parsed — the reader thread does it once, so no caller re-scans the bytes.
+  std::optional<json::Value> request(std::string_view method, std::string_view params_json) {
     if (!ensure_connected()) return std::nullopt;
 
     const uint64_t id = next_id_.fetch_add(1) + 1;
@@ -405,7 +315,7 @@ class CdpSession {
     std::unique_lock lk(slot->mu);
     const bool got = slot->cv.wait_for(lk, std::chrono::milliseconds(kRequestTimeoutMs),
                                        [&] { return slot->done; });
-    std::optional<std::string> body = got ? std::move(slot->body) : std::nullopt;
+    std::optional<json::Value> body = got ? std::move(slot->body) : std::nullopt;
     lk.unlock();
     forget(id);
 
@@ -416,8 +326,11 @@ class CdpSession {
       return std::nullopt;
     }
     if (!body) return std::nullopt;  // reader saw the socket die
-    if (body->find("\"exceptionDetails\"") != std::string::npos ||
-        body->find("\"error\":") != std::string::npos) {
+    // Failure is checked by PATH, not by searching the bytes. The substring check this replaced
+    // matched `"error":` and `"exceptionDetails"` anywhere in the payload — including inside a
+    // string the page returned, so `eval_string()` on a document whose title contained `"error":`
+    // reported a CDP failure that never happened.
+    if (body->find("error") || body->find("result.exceptionDetails")) {
       warn(std::format("devtools: {} returned an error", method));
       return std::nullopt;
     }
@@ -463,7 +376,7 @@ class CdpSession {
     std::mutex mu;
     std::condition_variable cv;
     bool done = false;
-    std::optional<std::string> body;
+    std::optional<json::Value> body;
   };
 
   void forget(uint64_t id) {
@@ -641,19 +554,19 @@ class CdpSession {
     }
     // A reply carries an id; a CDP EVENT does not, and is dropped. Events are where an
     // event-driven navigator/player would hook in -- the demux is the prerequisite for that.
-    auto id = response_id(f.payload);
-    if (!id) return true;
+    std::optional<Reply> reply = decode_reply(f.payload);
+    if (!reply) return true;
     std::shared_ptr<Pending> slot;
     {
       std::lock_guard lk(pending_mu_);
-      auto it = pending_.find(*id);
+      auto it = pending_.find(reply->id);
       if (it == pending_.end()) return true;  // a reply nobody is waiting for any more
       slot = it->second;
     }
     {
       std::lock_guard lk(slot->mu);
       slot->done = true;
-      slot->body = f.payload;
+      slot->body = std::move(reply->body);
     }
     slot->cv.notify_all();
     return true;
@@ -703,13 +616,16 @@ class CdpSession {
     close(fd);
     if (!resp) return std::nullopt;
 
-    size_t k = resp->find("\"webSocketDebuggerUrl\"");
-    if (k == std::string::npos) return std::nullopt;
-    size_t q = resp->find('"', resp->find(':', k) + 1);
-    if (q == std::string::npos) return std::nullopt;
-    size_t end = resp->find('"', q + 1);
-    if (end == std::string::npos) return std::nullopt;
-    const std::string url = resp->substr(q + 1, end - q - 1);  // ws://host:port/devtools/page/ID
+    // http_get returns headers + body; the JSON starts after the blank line.
+    const size_t sep = resp->find("\r\n\r\n");
+    if (sep == std::string::npos) return std::nullopt;
+    const json::ParseResult targets = json::parse(std::string_view(*resp).substr(sep + 4));
+    if (!targets.ok()) return std::nullopt;
+    const std::vector<json::Value>* list = targets.value->as_array();
+    if (!list || list->empty()) return std::nullopt;
+    const json::Value* ws = list->front().find("webSocketDebuggerUrl");
+    if (!ws || !ws->as_string()) return std::nullopt;
+    const std::string url = *ws->as_string();  // ws://host:port/devtools/page/ID
 
     size_t scheme = url.find("://");
     if (scheme == std::string::npos) return std::nullopt;
@@ -805,37 +721,36 @@ DevToolsClient::~DevToolsClient() = default;
 
 bool DevToolsClient::connected() { return session_->connected(); }
 
-std::optional<std::string> DevToolsClient::eval_token(std::string_view expression) {
+// The evaluated primitive, at its exact CDP path (`result.result.value` of a RemoteObject).
+// Returned by value because the parsed reply dies with this call. The scan this replaced took the
+// FIRST `"value":` anywhere in the payload, which is only the right answer as long as nothing else
+// in the reply carries that key.
+std::optional<json::Value> DevToolsClient::eval_value(std::string_view expression) {
   auto body =
       session_->request("Runtime.evaluate",
                         std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
                                     json_escape(expression)));
   if (!body) return std::nullopt;
-  return extract_value_token(*body);
+  const json::Value* v = body->find("result.result.value");
+  if (!v) return std::nullopt;  // an `undefined` result carries no `value` at all
+  return *v;
 }
 
 std::optional<bool> DevToolsClient::eval_bool(std::string_view expression) {
-  auto tok = eval_token(expression);
-  if (!tok) return std::nullopt;
-  if (*tok == "true") return true;
-  if (*tok == "false") return false;
-  return std::nullopt;
+  auto v = eval_value(expression);
+  return v ? v->as_bool() : std::nullopt;
 }
 
 std::optional<double> DevToolsClient::eval_number(std::string_view expression) {
-  auto tok = eval_token(expression);
-  if (!tok || tok->empty()) return std::nullopt;
-  try {
-    return std::stod(*tok);
-  } catch (...) {
-    return std::nullopt;
-  }
+  auto v = eval_value(expression);
+  return v ? v->as_number() : std::nullopt;
 }
 
 std::optional<std::string> DevToolsClient::eval_string(std::string_view expression) {
-  auto tok = eval_token(expression);
-  if (!tok || tok->size() < 2 || tok->front() != '"' || tok->back() != '"') return std::nullopt;
-  return json_unescape(std::string_view(*tok).substr(1, tok->size() - 2));
+  auto v = eval_value(expression);
+  if (!v) return std::nullopt;
+  const std::string* s = v->as_string();  // already unescaped by the parser
+  return s ? std::optional(*s) : std::nullopt;
 }
 
 bool DevToolsClient::eval_void(std::string_view expression) {
@@ -862,15 +777,8 @@ DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url)
   st.sent = true;
   // Page.navigate answers with `errorText` on a failed navigation and omits the field on success —
   // it does not report failure as a CDP error, so a body proves nothing.
-  const std::string needle = "\"errorText\":\"";
-  auto at = body->find(needle);
-  if (at != std::string::npos) {
-    const size_t start = at + needle.size();
-    size_t end = start;
-    while (end < body->size() && (*body)[end] != '"') end += ((*body)[end] == '\\') ? 2 : 1;
-    if (end <= body->size())
-      st.error_text = json_unescape(std::string_view(*body).substr(start, end - start));
-  }
+  if (const json::Value* e = body->find("result.errorText"))
+    if (const std::string* s = e->as_string()) st.error_text = *s;
   return st;
 }
 

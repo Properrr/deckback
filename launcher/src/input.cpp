@@ -26,8 +26,8 @@ namespace {
 
 constexpr long kInitialDelayMs = 350;  // hold-to-repeat: delay before the first auto-repeat
 
-// Exit hold completed. A single firm pulse, distinct from the touch-lock pair: it is the only
-// confirmation the hold took, and the app is about to disappear.
+// Exit hold completed. A single firm pulse: it is the only confirmation the hold took, and the app
+// is about to disappear.
 constexpr uint16_t kExitRumbleStrong = 0xE000;
 constexpr uint16_t kExitRumbleWeak = 0x6000;
 constexpr uint16_t kExitRumbleMs = 220;
@@ -56,11 +56,6 @@ std::string device_name(int fd) {
 
 GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     : client_(std::move(host), port),
-      block_initial_(opts.touch.block_initial),
-      chord_(opts.touch.unlock_hold_ms),
-      chord_label_(opts.touch.chord),
-      touch_toast_(opts.touch.toast),
-      touch_haptic_(opts.touch.haptic),
       layers_(opts.layers),
       captions_(opts.captions),
       onboarding_(opts.onboarding),
@@ -84,18 +79,6 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     osd_lb_ = control_code("lb");
     osd_rb_ = control_code("rb");
   }
-  if (opts.touch.lock_enabled) {
-    const auto [a, b] = parse_chord(opts.touch.chord);
-    chord_a_code_ = a;
-    chord_b_code_ = b;
-    if (chord_a_code_ < 0)
-      warn(std::format("input: touch_lock_chord '{}' unrecognised — chord lock disabled",
-                       opts.touch.chord));
-    else
-      info(std::format("input: touch lock chord = {} (codes {}+{}), unlock hold {} ms",
-                       opts.touch.chord, chord_a_code_, chord_b_code_, opts.touch.unlock_hold_ms));
-  }
-
   std::vector<std::string> unmapped;
   maps_ = build_keymaps(keymap, &unmapped);
 
@@ -290,50 +273,6 @@ void GamepadInput::update_fast_scroll() {
   fast_next_ms_ = mono_ms() + t.interval_ms;
 }
 
-bool GamepadInput::handle_chord(int code, int value) {
-  if (chord_a_code_ < 0) return false;  // chord disabled
-  if (code != chord_a_code_ && code != chord_b_code_) return false;
-  const bool down = (value != 0);  // press or kernel autorepeat = held; release = up
-  if (code == chord_a_code_)
-    chord_a_down_ = down;
-  else
-    chord_b_down_ = down;
-  apply_touch_lock(chord_.on_chord(chord_a_down_ && chord_b_down_, mono_ms()));
-  return true;  // the chord buttons are ours; don't also treat them as mapped buttons
-}
-
-void GamepadInput::apply_touch_lock(TouchLockChord::Action a) {
-  if (a == TouchLockChord::Action::None) return;
-  const bool want = (a == TouchLockChord::Action::Lock);
-  if (!touch_.set_blocked(want)) {
-    // The grab failed (TouchGuard already warned). Do not let the machine believe it succeeded, and
-    // do not tell the user the touchscreen is locked when it is not.
-    chord_.set_locked(!want);
-    return;
-  }
-  info(std::format("input: touchscreen {} (chord)", want ? "LOCKED" : "unlocked"));
-  announce_touch_lock(want);
-}
-
-void GamepadInput::announce_touch_lock(bool locked) {
-  // The lock is otherwise *invisible*: a locked screen and a hung screen look identical, and that
-  // ambiguity is the bug report this exists to prevent (findings input-ux §4).
-  if (touch_toast_) {
-    show_toast(client_,
-               locked ? std::format("Touchscreen locked\nHold {} to unlock", chord_label_)
-                      : "Touchscreen unlocked",
-               locked ? 2600 : 1600);
-  }
-  if (!touch_haptic_) return;
-  ensure_haptic();
-  // Two magnitudes, not one: locking and unlocking must feel different in the pocket, since the
-  // user may trip the chord without looking at the screen.
-  if (locked)
-    haptic_.rumble(0xC000, 0x4000, 180);
-  else
-    haptic_.rumble(0x3000, 0x8000, 90);
-}
-
 void GamepadInput::ensure_haptic() {
   if (haptic_tried_) return;
   // Deferred to the first pulse: at construction no pad has been discovered yet. Once only — a pad
@@ -428,13 +367,10 @@ void GamepadInput::osd_event(int type, int code, int value) {
     // Modal capture must not freeze physical state machines that started before the menu opened:
     // swallowing a trigger release leaves its next press dead or its modifier layer stuck. Presses
     // still stay modal — only release bookkeeping is allowed through.
-    if (value == 0) {
-      if (code == osd_y_ && osd_y_ >= 0 && exit_hold_deadline_ != 0) {
-        exit_hold_deadline_ = 0;  // released before the hold completed — no exit
-        osd_->exec("hold_cancel");
-        osd_->exec("ignore");  // ...so Y still reads as a tap
-      }
-      handle_chord(code, value);
+    if (value == 0 && code == osd_y_ && osd_y_ >= 0 && exit_hold_deadline_ != 0) {
+      exit_hold_deadline_ = 0;  // released before the hold completed — no exit
+      osd_->exec("hold_cancel");
+      osd_->exec("ignore");  // ...so Y still reads as a tap
     }
     return;  // swallow every button while the menu is up
   }
@@ -505,7 +441,6 @@ void GamepadInput::handle_event(int type, int code, int value) {
   if (handle_onboarding(type, code, value)) return;
   if (osd_open_edge(type, code, value)) return;
   if (type == EV_KEY) {
-    if (handle_chord(code, value)) return;
     if (value != 1) return;  // press edge only (ignore release=0 and kernel autorepeat=2)
     if (code == captions_code_ && captions_code_ >= 0) {
       toggle_captions();
@@ -578,10 +513,6 @@ void GamepadInput::handle_event(int type, int code, int value) {
 }
 
 void GamepadInput::loop() {
-  if (block_initial_) {
-    chord_.set_locked(touch_.set_blocked(true));
-    if (chord_.locked()) info("input: touchscreen starts LOCKED (config block_touchscreen)");
-  }
   rescan_devices();
   long last_scan = mono_ms();
 
@@ -595,10 +526,9 @@ void GamepadInput::loop() {
       if (d < timeout) timeout = d;
     };
     // Directional auto-repeat, then the timers that mature with no further evdev event coming: the
-    // right stick held at a constant deflection, and the deliberate-unlock chord hold.
+    // right stick held at a constant deflection, and the Exit hold.
     if (dir_key_) consider(next_repeat_ms_);
     if (fast_key_) consider(fast_next_ms_);
-    if (chord_.pending()) consider(chord_.deadline_ms());
     if (caption_apply_pending_) consider(caption_next_ms_);
     if (exit_hold_deadline_ != 0) consider(exit_hold_deadline_);
 
@@ -632,11 +562,12 @@ void GamepadInput::loop() {
     if (osd_) osd_->tick(on_watch);
     tick_caption_apply(on_watch);
 
+    // Health-check the first-run card BEFORE acting on its visibility: a reload deletes it without
+    // telling us, and both effects below are gated on believing it is still up.
+    if (onboarding_) onboarding_->tick();
     // The first-run card is modal; a direction held when it appeared would keep auto-repeating into
     // the page behind it. Not the OSD: while it is open a held direction drives the menu.
     if (onboarding_ && onboarding_->visible()) set_direction(nullptr);
-
-    if (chord_.pending()) apply_touch_lock(chord_.on_tick(mono_ms()));
 
     // Hold-to-confirm completed on the OSD's Exit row. Rumble first: it is the only feedback that
     // the hold took, and the app is about to go away.
@@ -685,7 +616,6 @@ void GamepadInput::loop() {
   }
   close_devices();
   haptic_.detach();
-  if (chord_.locked()) touch_.set_blocked(false);  // never leave the touchscreen grabbed on exit
 }
 
 }  // namespace deckback

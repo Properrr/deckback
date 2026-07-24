@@ -176,46 +176,4 @@ int control_code(std::string_view name);
 std::vector<std::pair<std::string, std::string>> without_action(
     const std::vector<std::pair<std::string, std::string>>& keymap, std::string_view action);
 
-// Parse a touch-lock chord string ("l3+r3", "select+start", ...) into the two evdev EV_KEY codes it
-// names. Control names are the doc's plus l3/r3 (stick clicks). Returns {-1,-1} when the string is
-// malformed, names an unknown control, or repeats one control — the caller then disables the chord.
-std::pair<int, int> parse_chord(std::string_view chord);
-
-// The lock/unlock policy of the touch-lock chord. Pure and clock-injected.
-//
-// Locking and unlocking are deliberately NOT symmetric. Locking is what the user asked for and is
-// cheap to undo, so it happens on the press. Unlocking must be *deliberate*: `l3+r3` is two stick
-// clicks, which a resting thumb finds by accident, and an accidental unlock hands the touchscreen
-// back to a palm already resting on the panel — the exact failure the lock exists to prevent. So
-// unlock requires holding the chord for `unlock_hold_ms`.
-//
-// One action per engagement: continuing to hold the chord after it locked must not then unlock it.
-class TouchLockChord {
- public:
-  enum class Action { None, Lock, Unlock };
-
-  explicit TouchLockChord(long unlock_hold_ms)
-      : unlock_hold_ms_(unlock_hold_ms < 0 ? 0 : unlock_hold_ms) {}
-
-  // Both chord buttons held / not held. Locks immediately; arms the unlock hold.
-  Action on_chord(bool both_down, long now_ms);
-  // Call from the poll loop; matures a pending unlock. A held chord emits no further evdev events.
-  Action on_tick(long now_ms);
-
-  bool locked() const { return locked_; }
-  // Reconcile with reality when the EVIOCGRAB itself failed: the machine must never claim a lock
-  // the kernel refused.
-  void set_locked(bool v) { locked_ = v; }
-
-  bool pending() const { return waiting_; }  // an unlock hold is counting down
-  long deadline_ms() const { return hold_start_ms_ + unlock_hold_ms_; }
-
- private:
-  long unlock_hold_ms_;
-  bool locked_ = false;
-  bool engaged_ = false;  // the chord is down and has already been adjudicated
-  bool waiting_ = false;  // ...and it is an unlock hold that has not matured
-  long hold_start_ms_ = 0;
-};
-
 }  // namespace deckback

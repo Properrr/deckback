@@ -1,18 +1,18 @@
 #pragma once
-#include <atomic>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "devtools.hpp"
+#include "pageoverlay.hpp"
 
 namespace deckback {
 
 // First-run controls overlay (findings input-ux §7; doc P3).
 //
-// Two of this app's controls are unguessable. `View (⧉)` toggles captions and `L3+R3` locks the
-// touchscreen — neither appears anywhere in Leanback's own UI, and `docs/SUPPORT.md` and
+// This app's controls are unguessable from Leanback's own UI — `View (⧉)` toggles captions and
+// Menu opens Settings, neither of which YouTube advertises — and `docs/SUPPORT.md` and
 // `install.sh` are invisible from Game Mode. Every console app and every Deck-Verified title shows
 // a one-shot controls card for exactly this reason.
 //
@@ -37,12 +37,10 @@ struct ControlRow {
 struct OverlayContext {
   std::vector<std::pair<std::string, std::string>> keymap;  // app.json `keymap`, in written order
   bool right_stick_scroll = true;
-  bool touch_lock_enabled = true;
-  std::string touch_lock_chord = "l3+r3";
 };
 
 // The rows to print. Order follows `keymap` as written, then the controls the launcher owns rather
-// than the keymap (sticks, touch-lock chord). Controls that dispatch nothing are dropped.
+// than the keymap (Menu, the sticks). Controls that dispatch nothing are dropped.
 std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx);
 
 // Deck control id ("lb", "select") -> the label printed on the hardware ("L1", "View (⧉)"). Returns
@@ -53,6 +51,10 @@ std::string control_label(std::string_view name);
 // have no phrase for is returned as-is: a user who hot-swapped `"a": "MediaTrackNext"` is better
 // served by seeing `MediaTrackNext` than by seeing nothing.
 std::string action_label(std::string_view value);
+
+// The DOM id config/scripts/overlay.js assigns to the card. Also the handle PageOverlay probes to
+// notice the page removing it, so the two must not drift.
+inline constexpr const char* kOverlayElementId = "__deckback_help";
 
 // The JS that draws the modal card, and the JS that removes it. Pure, so the escaping is testable.
 std::string overlay_js(const std::vector<ControlRow>& rows, std::string_view title,
@@ -67,19 +69,6 @@ bool mark_first_run_done(const std::string& marker_path);
 
 // ---- the controller ----------------------------------------------------------------------------
 
-// Shared visibility flag. The input thread reads it on every event; the navigator thread (which
-// learns when the page finished loading) and the input thread both write it. Relaxed atomic, as
-// with LayerState: losing this race by one event dispatches one keystroke into Leanback behind the
-// card, which is recoverable.
-class OverlayState {
- public:
-  bool visible() const { return visible_.load(std::memory_order_relaxed); }
-  bool set(bool v) { return visible_.exchange(v, std::memory_order_relaxed) != v; }
-
- private:
-  std::atomic<bool> visible_{false};
-};
-
 class OnboardingController {
  public:
   OnboardingController(std::string host, int port, OverlayContext ctx, std::string marker_path);
@@ -88,13 +77,22 @@ class OnboardingController {
   // the user re-opening the card deliberately and no marker is touched.
   bool show(bool first_run_only);
   void hide();
-  bool visible() const { return state_.visible(); }
+
+  // Is the card on screen? Read by the input thread on every event: while it is up the card is
+  // modal, so this gates swallowing the event and pinning the D-pad.
+  bool visible() const { return card_.painted(); }
+
+  // Per input-tick health check. The card is drawn into Leanback's document, and a reload deletes
+  // it without telling us — which used to leave `visible()` true forever after, eating the user's
+  // next button press to dismiss a card that was no longer there and freezing the D-pad until they
+  // pressed one. Throttled; a no-op when the card is down.
+  void tick();
 
  private:
   DevToolsClient client_;
   OverlayContext ctx_;
   std::string marker_path_;
-  OverlayState state_;
+  PageOverlay card_;
 };
 
 }  // namespace deckback

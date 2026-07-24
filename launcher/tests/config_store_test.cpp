@@ -9,6 +9,7 @@
 #include <string>
 
 #include "config.hpp"
+#include "harness.hpp"
 #include "json.hpp"
 
 using namespace deckback;
@@ -127,7 +128,7 @@ void test_corrupt_overlay_is_ignored_not_fatal() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(config_store) {
   test_dump_round_trips_through_parse();
   test_dump_escapes_and_keeps_integers();
   test_set_persist_reload_apply();

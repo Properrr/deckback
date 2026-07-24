@@ -399,8 +399,7 @@ int main(int argc, char** argv) {
   std::optional<GamepadInput> gamepad;
   if (cdp_nav && cfg->first_run_overlay) {
     onboarding.emplace("127.0.0.1", cfg->remote_debugging_port,
-                       OverlayContext{cfg->keymap, cfg->right_stick_scroll, cfg->touch_lock_enabled,
-                                      cfg->touch_lock_chord},
+                       OverlayContext{cfg->keymap, cfg->right_stick_scroll},
                        first_run_marker_path(resolve_state_dir(runtime_dir)));
   }
 
@@ -412,8 +411,7 @@ int main(int argc, char** argv) {
         OsdMenuConfig{.cdp_host = "127.0.0.1",
                       .cdp_port = cfg->remote_debugging_port,
                       .local_version = kDeckbackVersion,
-                      .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll,
-                                                cfg->touch_lock_enabled, cfg->touch_lock_chord},
+                      .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll},
                       .about = parse_metainfo(load_metainfo().value_or("")),
                       .captions = &captions,
                       .on_update_confirm =
@@ -484,16 +482,12 @@ int main(int argc, char** argv) {
       });
     navigator->start();
     // Phase 3 input: gamepad evdev -> DOM key events over CDP (S0.6 mechanism), bindings from
-    // config/app.json:keymap so a Leanback change can be hotfixed without a rebuild. The touch
-    // config drives the runtime touchscreen block/unblock (findings input-ux §4). `layers` carries
-    // the context (browse/player/osk) the player poll observed; it is only live when `player`
-    // exists.
+    // config/app.json:keymap so a Leanback change can be hotfixed without a rebuild. `layers`
+    // carries the context (browse/player/osk) the player poll observed; it is only live when
+    // `player` exists.
     GamepadOptions gp;
     gp.keymap = KeymapConfig{cfg->keymap, cfg->keymap_player, cfg->keymap_osk, cfg->keymap_lt,
                              cfg->keymap_rt};
-    gp.touch =
-        TouchConfig{cfg->touch_lock_enabled,        cfg->touch_lock_chord, cfg->block_touchscreen,
-                    cfg->touch_lock_unlock_hold_ms, cfg->touch_lock_toast, cfg->touch_lock_haptic};
     gp.fast_scroll = FastScrollConfig{cfg->right_stick_scroll, cfg->right_stick_deadzone,
                                       cfg->right_stick_slow_ms, cfg->right_stick_fast_ms};
     gp.skip_seconds = cfg->skip_seconds;

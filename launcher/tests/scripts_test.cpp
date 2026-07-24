@@ -11,6 +11,8 @@
 #include <fstream>
 #include <string>
 
+#include "harness.hpp"
+
 using namespace deckback;
 
 static bool has(const std::string& hay, const std::string& needle) {
@@ -168,7 +170,7 @@ void test_runtime_override_shadows_the_default() {
   fs::remove_all(dir, ec);
 }
 
-int main() {
+DECKBACK_TEST_MAIN(scripts) {
   test_params_empty_is_empty_object();
   test_params_numbers_and_bools();
   test_params_strings_are_escaped_once();

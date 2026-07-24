@@ -41,7 +41,9 @@ OsdVerdict parse_verdict(std::string_view v) {
 }
 
 OsdMenuController::OsdMenuController(OsdMenuConfig cfg)
-    : cfg_(std::move(cfg)), client_(cfg_.cdp_host, cfg_.cdp_port) {}
+    : cfg_(std::move(cfg)),
+      client_(cfg_.cdp_host, cfg_.cdp_port),
+      button_(client_, kOsdButtonElementId) {}
 
 std::string OsdMenuController::eval_op(DevToolsClient& client, const ScriptParams& params) {
   std::string js = ScriptLibrary::instance().render("osd", params);
@@ -144,7 +146,7 @@ std::string OsdMenuController::exec(std::string_view cmd) {
 
 void OsdMenuController::tick(bool on_watch) {
   const bool just_reloaded = reloaded_.exchange(false, std::memory_order_acquire);
-  if (just_reloaded) button_shown_ = false;
+  if (just_reloaded) button_.set_painted(false);
 
   if (open_.load(std::memory_order_acquire)) {
     // The menu is allowed to stay up over playback (Menu opens it there, and Exit is most wanted
@@ -158,32 +160,19 @@ void OsdMenuController::tick(bool on_watch) {
   }
 
   const bool want = !on_watch;
-  if (want) reconcile_button();
-  if (want && (!button_shown_ || badge_dirty_))
+  // PageOverlay::lost() is the reconcile: the Navigator only announces a non-app -> app transition,
+  // so a same-URL reload leaves it announced while documentElement (and the button) is gone.
+  if (want) button_.lost();
+  if (want && (!button_.painted() || badge_dirty_))
     draw_button();
-  else if (!want && button_shown_)
+  else if (!want && button_.painted())
     hide_button();
-}
-
-void OsdMenuController::reconcile_button() {
-  if (!button_shown_) return;
-  // Navigator only announces a transition from a non-app URL to the TV app. A same-URL reload
-  // (including the common wake path) leaves it announced, but has still wiped documentElement and
-  // the Settings button. Probe the actual paint periodically so our local flag cannot pin it gone.
-  const auto now = std::chrono::steady_clock::now();
-  if (now - last_button_reconcile_ < std::chrono::milliseconds(750)) return;
-  last_button_reconcile_ = now;
-  const std::optional<bool> present =
-      client_.eval_bool("/*osd-button-state*/!!document.getElementById('__deckback_settings_btn')");
-  if (present && !*present) button_shown_ = false;
 }
 
 void OsdMenuController::reconcile_open() {
   // Throttled: the input loop can tick every few ms while a direction auto-repeats, but this is a
   // health check, not per-frame work.
-  const auto now = std::chrono::steady_clock::now();
-  if (now - last_reconcile_ < std::chrono::milliseconds(750)) return;
-  last_reconcile_ = now;
+  if (!menu_probe_.due()) return;
 
   const std::string js =
       ScriptLibrary::instance().render("osd", ScriptParams().set("op", std::string_view("state")));
@@ -203,18 +192,15 @@ void OsdMenuController::draw_button() {
     std::lock_guard lk(model_mu_);
     has_update = has_update_;
   }
-  const bool drawn = ScriptLibrary::instance().invoke(
-      client_, "osd_button",
-      ScriptParams().set("label", std::string_view("Settings")).set("badge", has_update));
-  // Do not cache a failed draw: a startup/reload transport blip must retry on the next input tick.
-  button_shown_ = drawn;
-  if (drawn) badge_dirty_ = false;
+  // PageOverlay::draw does not cache a failed draw, so a startup/reload transport blip retries on
+  // the next input tick instead of pinning the button as present.
+  if (button_.draw(
+          "osd_button",
+          ScriptParams().set("label", std::string_view("Settings")).set("badge", has_update)))
+    badge_dirty_ = false;
 }
 
-void OsdMenuController::hide_button() {
-  ScriptLibrary::instance().invoke(client_, "osd_button_hide");
-  button_shown_ = false;
-}
+void OsdMenuController::hide_button() { button_.hide("osd_button_hide"); }
 
 void OsdMenuController::set_update_model(bool has_update, std::string_view status,
                                          std::string_view notes) {

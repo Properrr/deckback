@@ -54,7 +54,7 @@ if grep -qE '^\s*-\s*--device=all\b' "$manifest"; then
 fi
 
 # The inverse: the three features that depend on evdev (gamepad, FF_RUMBLE haptics, touchscreen
-# EVIOCGRAB) all fail *silently* without it. This used to be a post-install `flatpak override`.
+# FF_RUMBLE) all fail *silently* without it. This used to be a post-install `flatpak override`.
 grep -qE '^\s*-\s*--device=input\b' "$manifest" ||
   die_assert "finish-args lacks --device=input — gamepad and touch lock would be silent no-ops"
 

@@ -36,10 +36,11 @@ struct ReleaseNote {
   std::string body;     // release notes (markdown text)
 };
 
-// Parse the GitHub `/releases` JSON array into notes (tag_name, name, body). Best-effort and
-// tolerant of field order and unknown fields; entries without a tag are skipped. Not a full JSON
-// parser — it scans the string fields it needs, like config.cpp's extractor. Pure.
-std::vector<ReleaseNote> parse_github_releases(const std::string& json);
+// Parse the GitHub `/releases` JSON array into notes (tag_name, name, body). Goes through the real
+// parser (json.hpp), so escapes and \uXXXX decode correctly and a "name"/"body" cannot bleed across
+// release objects. Entries without a tag are skipped; unparseable input warns and yields nothing
+// (the card then shows the releases link). Pure.
+std::vector<ReleaseNote> parse_github_releases(const std::string& text);
 
 // What the card should say about the available version.
 struct ChangelogView {

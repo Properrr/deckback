@@ -11,6 +11,8 @@
 #include <filesystem>
 #include <string>
 
+#include "harness.hpp"
+
 using namespace deckback;
 
 static void test_version_compare() {
@@ -71,6 +73,37 @@ static void test_parse_and_summarize() {
   // Malformed JSON must not crash and yields nothing usable.
   assert(parse_github_releases("not json at all").empty());
   assert(parse_github_releases("").empty());
+}
+
+// These are the cases the hand-rolled byte-scanner this parser replaced got wrong. It found a key
+// with an unanchored find() over the raw text and read whatever followed the next colon, so a value
+// that merely *contained* the key name won; and it decoded escapes itself. Release notes are
+// attacker-adjacent input we render into an overlay, so the escaping has to be the real thing.
+static void test_release_parsing_handles_hostile_strings() {
+  const std::string json = R"([
+    {
+      "tag_name": "v1.2.3",
+      "name": "quote \" backslash \\ and a brace }",
+      "body": "mentions \"tag_name\": \"v9.9.9\" inside the text\nand • a bullet"
+    },
+    {"tag_name": "v1.0.0", "name": "plain", "body": "", "assets": [{"name": "nested asset"}]}
+  ])";
+  const std::vector<ReleaseNote> notes = parse_github_releases(json);
+  assert(notes.size() == 2);
+
+  // A quoted brace inside a string must not end the object early, and escapes decode once.
+  assert(notes[0].version == "1.2.3");
+  assert(notes[0].title == "quote \" backslash \\ and a brace }");
+  // The embedded `"tag_name": "v9.9.9"` is text, not a field: the version above must be 1.2.3.
+  assert(notes[0].body.find("v9.9.9") != std::string::npos);
+  assert(notes[0].body.find("\xE2\x80\xA2") != std::string::npos);  // • -> UTF-8 bullet
+
+  // A nested object's "name" must not be mistaken for the release's own.
+  assert(notes[1].version == "1.0.0");
+  assert(notes[1].title == "plain");
+
+  // A top-level object (GitHub's error payload shape) is not an array of releases.
+  assert(parse_github_releases(R"({"message":"API rate limit exceeded"})").empty());
 }
 
 static void test_notes_to_plain() {
@@ -156,9 +189,10 @@ static void test_markers() {
   fs::remove_all(dir);
 }
 
-int main() {
+DECKBACK_TEST_MAIN(updateprompt) {
   test_version_compare();
   test_parse_and_summarize();
+  test_release_parsing_handles_hostile_strings();
   test_notes_to_plain();
   test_decision();
   test_markers();

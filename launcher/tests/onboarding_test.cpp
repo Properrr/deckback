@@ -14,6 +14,7 @@
 
 #include "config.hpp"
 #include "fake_cdp_server.hpp"
+#include "harness.hpp"
 
 using namespace deckback;
 
@@ -156,8 +157,7 @@ void test_menu_is_a_fixed_settings_row_not_a_keymap_action() {
 void test_shipped_app_json_produces_no_dead_rows() {
   auto cfg = Config::load(DECKBACK_APP_JSON);
   assert(cfg.has_value());
-  OverlayContext c{cfg->keymap, cfg->right_stick_scroll, cfg->touch_lock_enabled,
-                   cfg->touch_lock_chord};
+  OverlayContext c{cfg->keymap, cfg->right_stick_scroll};
   const auto rows = controls_overlay_rows(c);
   assert(!rows.empty());
   for (const ControlRow& r : rows) {
@@ -225,30 +225,6 @@ void test_launcher_owned_rows() {
   assert(!row_for(controls_overlay_rows(c), "Right stick", nullptr));
 }
 
-void test_touch_lock_row_names_the_configured_chord() {
-  OverlayContext c = shipped();
-  std::string a;
-  auto rows = controls_overlay_rows(c);
-  assert(row_for(rows, "L3 + R3", &a));
-  assert(has(a, "Lock touchscreen"));
-  assert(has(a, "hold to unlock"));  // the asymmetry is the surprising part, so it is on the card
-
-  // A card that says L3+R3 while the config binds something else is a card that lies.
-  c.touch_lock_chord = "select+start";
-  rows = controls_overlay_rows(c);
-  assert(!row_for(rows, "L3 + R3", nullptr));
-  assert(row_for(rows, "SELECT + START", nullptr));
-
-  // Disabled -> no row.
-  c.touch_lock_enabled = false;
-  assert(!row_for(controls_overlay_rows(c), "SELECT + START", nullptr));
-
-  // An unparseable chord disables the feature in input.cpp, so it must not be advertised either.
-  c.touch_lock_enabled = true;
-  c.touch_lock_chord = "gibberish";
-  for (const ControlRow& r : controls_overlay_rows(c)) assert(!has(r.action, "Lock touchscreen"));
-}
-
 // ---- overlay_js ---------------------------------------------------------------------------------
 
 void test_overlay_js_renders_rows_and_escapes() {
@@ -263,8 +239,7 @@ void test_overlay_js_renders_rows_and_escapes() {
   assert(has(js, "Press any button"));  // the footer param
   // A quote in a hot-swapped label would close the object literal; the card would then silently
   // never render, because a failed injection looks exactly like no injection. BOTH columns are
-  // hot-swappable text: `control` comes from control_label() today, but the chord row's control is
-  // built straight from `touch_lock_chord`. ScriptParams escapes each once.
+  // hot-swappable text, so ScriptParams escapes each once.
   assert(has(js, "say \\\"hi\\\""));
   assert(has(js, "quote\\\" in control"));
   assert(has(js, "back\\\\slash"));
@@ -376,6 +351,31 @@ void test_show_is_idempotent_and_hide_is_cheap() {
   assert(server.take_requests().empty());
 }
 
+// The card is drawn into Leanback's document, and Leanback reloads it out from under us with no
+// signal we can observe. Before PageOverlay, `visible()` stayed true forever after that: the input
+// layer went on swallowing every event and pinning the D-pad, and the user's next button press was
+// spent dismissing a card that had already vanished.
+void test_tick_releases_capture_when_the_page_ate_the_card() {
+  testing::FakeServer server;
+  OnboardingController c("127.0.0.1", server.port(), shipped(), fresh_marker());
+  assert(c.show(false));
+  assert(c.visible());
+
+  server.set_overlay_present(false);  // a reload wiped documentElement
+  c.tick();
+  assert(!c.visible());  // capture released without the user having to press anything
+}
+
+void test_tick_keeps_the_card_while_it_is_still_painted() {
+  // The other half: a health check that clears the flag on a live, present card would dismiss the
+  // card on its own a beat after it appeared.
+  testing::FakeServer server;
+  OnboardingController c("127.0.0.1", server.port(), shipped(), fresh_marker());
+  assert(c.show(false));
+  c.tick();
+  assert(c.visible());
+}
+
 void test_dead_engine_leaves_it_hidden() {
   // If the card cannot be drawn, `visible()` must stay false — otherwise the input layer would go
   // modal and swallow every button press with nothing on screen to explain why.
@@ -386,7 +386,7 @@ void test_dead_engine_leaves_it_hidden() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(onboarding) {
   test_control_labels_are_what_is_printed_on_the_hardware();
   test_action_labels_pass_unknown_keys_through();
 
@@ -399,7 +399,6 @@ int main() {
   test_dpad_entry_never_becomes_a_button_row();
   test_rows_preserve_keymap_order();
   test_launcher_owned_rows();
-  test_touch_lock_row_names_the_configured_chord();
 
   test_overlay_js_renders_rows_and_escapes();
   test_overlay_hide_js_removes_it();
@@ -411,6 +410,8 @@ int main() {
   test_marker_is_written_on_show_not_on_dismiss();
   test_reopen_does_not_touch_the_marker();
   test_show_is_idempotent_and_hide_is_cheap();
+  test_tick_releases_capture_when_the_page_ate_the_card();
+  test_tick_keeps_the_card_while_it_is_still_painted();
   test_dead_engine_leaves_it_hidden();
 
   std::puts("onboarding_test: all assertions passed");

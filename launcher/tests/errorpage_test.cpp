@@ -15,6 +15,7 @@
 #include <string>
 
 #include "fake_cdp_server.hpp"
+#include "harness.hpp"
 
 using namespace deckback;
 
@@ -230,7 +231,7 @@ void test_take_retry_request_on_dead_engine_is_false() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(errorpage) {
   test_navigate_reports_success();
   test_navigate_surfaces_error_text();
   test_navigate_unreachable_engine_is_not_a_page_error();

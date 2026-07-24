@@ -8,7 +8,7 @@ blocking decisions for weeks and all of which are one evdev read away:
   * `ABS_Z`/`ABS_RZ` — analog triggers, or did `config/steam_input.vdf`'s `"click" -> xinput_button
     TRIGGER_*` binding turn them into digital buttons? `input.cpp` reads the axes. If they are
     buttons, L2/R2 are dead for a second, independent reason (input-ux §12).
-  * `EV_FF`/`FF_RUMBLE` — can we rumble the pad for the touch-lock haptic (input-ux §14)?
+  * `EV_FF`/`FF_RUMBLE` — can we rumble the pad for the Exit-hold haptic (input-ux §14)?
 
 These are `probe` tests: a failure is a **finding to register**, not a regression. But it is still a
 failure, reported and visible. Marking them `xfail` would hide the answer, which is the only thing
@@ -81,32 +81,15 @@ def test_trigger_axes_are_analog(devices):
 
 @pytest.mark.probe
 def test_pad_supports_force_feedback(devices):
-    """input-ux §14: the touch-lock haptic uploads an FF_RUMBLE effect via EVIOCSFF."""
+    """input-ux §14: the Exit-hold haptic uploads an FF_RUMBLE effect via EVIOCSFF."""
     pads = _pad(devices)
     assert pads, "no pad to probe"
     have = [d for d in pads if u.EV_FF in d["ev"] and u.FF_RUMBLE in d["ff"]]
     assert have, (
-        "no pad advertises EV_FF/FF_RUMBLE — the touch-lock rumble is a silent no-op and the "
-        "toast is the only feedback. This is a finding, not necessarily a bug. "
+        "no pad advertises EV_FF/FF_RUMBLE — the Exit-hold rumble is a silent no-op and the "
+        "on-screen fill is the only feedback. This is a finding, not necessarily a bug. "
         f"Pads: {[(d['name'], d['ev'], d['ff']) for d in pads]}"
     )
-
-
-@pytest.mark.probe
-def test_touchscreen_is_the_fts3528(devices):
-    """`touch.cpp` resolves the panel by USB id 2808:1015, falling back to MT capability."""
-    by_id = [d for d in devices if d["vendor"] == "2808" and d["product"] == "1015"]
-    by_caps = u.find_device(devices, needs_abs=[u.ABS_MT_POSITION_X, u.ABS_MT_SLOT])
-    assert by_id or by_caps, (
-        "no touchscreen found by USB id (2808:1015) or by multitouch capability. "
-        "TouchGuard would find nothing to grab. "
-        f"Devices: {[(d['name'], d['vendor'] + ':' + d['product']) for d in devices]}"
-    )
-    if not by_id and by_caps:
-        pytest.fail(
-            "touchscreen found by capability but NOT by USB id — the id in touch.cpp has drifted. "
-            f"Candidates: {[(d['name'], d['vendor'] + ':' + d['product']) for d in by_caps]}"
-        )
 
 
 @pytest.mark.probe

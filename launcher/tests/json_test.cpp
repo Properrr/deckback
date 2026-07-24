@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <string>
 
+#include "harness.hpp"
+
 using namespace deckback;
 using namespace deckback::json;
 
@@ -218,7 +220,7 @@ void test_control_characters_rejected_in_strings() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(json) {
   test_scalars();
   test_regression_bool_is_not_prefix_matched();
   test_regression_exponent_numbers();

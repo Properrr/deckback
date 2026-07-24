@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "config.hpp"
+#include "harness.hpp"
 #include "scripts.hpp"
 
 using namespace deckback;
@@ -263,24 +264,6 @@ void test_skip_script_renders_with_the_signed_delta() {
   assert(back.find("Math.max(0,") != std::string::npos);
 }
 
-// ---- parse_chord --------------------------------------------------------------------------------
-
-void test_parse_chord_valid() {
-  // Default touch-lock chord: both stick clicks.
-  auto c = parse_chord("l3+r3");
-  assert(c.first == BTN_THUMBL && c.second == BTN_THUMBR);
-  // Case/whitespace tolerant, and any two distinct controls work.
-  auto d = parse_chord(" Select + Start ");
-  assert(d.first == BTN_SELECT && d.second == BTN_START);
-}
-
-void test_parse_chord_rejects_bad_input() {
-  assert((parse_chord("l3") == std::pair<int, int>{-1, -1}));       // no '+'
-  assert((parse_chord("l3+l3") == std::pair<int, int>{-1, -1}));    // same control twice
-  assert((parse_chord("l3+nope") == std::pair<int, int>{-1, -1}));  // unknown control
-  assert((parse_chord("") == std::pair<int, int>{-1, -1}));
-}
-
 // ---- config keymap parsing ----------------------------------------------------------------------
 
 void test_config_parses_keymap_object() {
@@ -325,12 +308,16 @@ void test_config_missing_keymap_is_empty_not_fatal() {
   std::remove(path.c_str());
 }
 
-void test_config_parses_touch_settings() {
+// The retired EVIOCGRAB lock's keys must still LOAD. app.json is hot-swappable, so a config written
+// for an older launcher is a normal thing to be handed; the keys are listed as known-and-ignored
+// (config.cpp kKnownExtraPaths) precisely so it does not warn on every one of them. What must not
+// survive is any *effect* — `disable_touch` is the only touch knob left.
+void test_config_accepts_the_retired_touch_lock_keys() {
   const char* json = R"({
     "url": "https://x",
     "disable_touch": false,
     "block_touchscreen": true,
-    "touch_lock_enabled": false,
+    "touch_lock_enabled": true,
     "touch_lock_chord": "select+start",
     "touch_lock_unlock_hold_ms": 1200,
     "touch_lock_toast": false,
@@ -343,18 +330,11 @@ void test_config_parses_touch_settings() {
   std::fclose(f);
   auto cfg = Config::load(path);
   assert(cfg.has_value());
-  assert(cfg->disable_touch == false);  // overridable off
-  assert(cfg->block_touchscreen == true);
-  assert(cfg->touch_lock_enabled == false);
-  assert(cfg->touch_lock_chord == "select+start");
-  assert(cfg->touch_lock_unlock_hold_ms == 1200);
-  assert(cfg->touch_lock_toast == false);
-  assert(cfg->touch_lock_haptic == false);
+  assert(cfg->disable_touch == false);  // overridable off — the live knob
   std::remove(path.c_str());
 }
 
-// Defaults when the keys are absent: touch disabled (A+B), and the dead EVIOCGRAB lock ships OFF so
-// the onboarding card never advertises it (findings durable/touch-lock.md).
+// Defaults when the keys are absent: touch is inert via disable_touch (Options A+B).
 void test_config_touch_defaults() {
   const char* json = R"({"url":"https://x"})";
   const std::string path = "/tmp/deckback_input_test_cfg4.json";
@@ -365,12 +345,6 @@ void test_config_touch_defaults() {
   auto cfg = Config::load(path);
   assert(cfg.has_value());
   assert(cfg->disable_touch == true);  // touch is inert by default
-  assert(cfg->block_touchscreen == false);
-  assert(cfg->touch_lock_enabled == false);  // dead lock retired
-  assert(cfg->touch_lock_chord == "l3+r3");
-  assert(cfg->touch_lock_unlock_hold_ms == 800);
-  assert(cfg->touch_lock_toast == true);
-  assert(cfg->touch_lock_haptic == true);
   assert(cfg->captions_toast == true);
   assert(cfg->caption_language.empty());
   // Right stick on by default: the axis is otherwise dead, and arrows are the only Leanback keys we
@@ -551,114 +525,6 @@ void test_fast_scroll_degenerate_deadzone() {
   assert(t.key != nullptr);
   assert(t.interval_ms == fast_scroll(0, 1, zero).interval_ms);
   assert(t.interval_ms == 200);  // slow_ms: a 1-unit deflection is the slowest step, not the middle
-}
-
-// ---- TouchLockChord ----------------------------------------------------------------------------
-
-// The asymmetry is the point: locking is cheap and instant, unlocking must be deliberate.
-void test_chord_locks_immediately() {
-  TouchLockChord c(800);
-  assert(!c.locked());
-  assert(c.on_chord(true, 1000) == TouchLockChord::Action::Lock);
-  assert(c.locked());
-  assert(!c.pending());
-  // Continuing to hold must NOT then unlock: one action per engagement.
-  assert(c.on_chord(true, 1900) == TouchLockChord::Action::None);
-  assert(c.on_tick(2000) == TouchLockChord::Action::None);
-  assert(c.locked());
-}
-
-void test_chord_unlock_requires_a_deliberate_hold() {
-  TouchLockChord c(800);
-  c.set_locked(true);
-
-  // The press alone must not unlock. If this ever returns Unlock, a thumb resting on both sticks
-  // hands the touchscreen back to the palm already on the panel — the failure the lock prevents.
-  assert(c.on_chord(true, 1000) == TouchLockChord::Action::None);
-  assert(c.locked());
-  assert(c.pending());
-  assert(c.deadline_ms() == 1800);
-
-  assert(c.on_tick(1799) == TouchLockChord::Action::None);
-  assert(c.locked());
-  assert(c.on_tick(1800) == TouchLockChord::Action::Unlock);
-  assert(!c.locked());
-  assert(!c.pending());
-
-  // Consumed: still holding the chord must not immediately re-lock.
-  assert(c.on_tick(1900) == TouchLockChord::Action::None);
-  assert(c.on_chord(true, 2000) == TouchLockChord::Action::None);
-  assert(!c.locked());
-}
-
-void test_chord_released_early_leaves_the_lock_engaged() {
-  TouchLockChord c(800);
-  c.set_locked(true);
-  c.on_chord(true, 1000);
-  assert(c.pending());
-  assert(c.on_chord(false, 1400) == TouchLockChord::Action::None);  // let go at 400 ms
-  assert(c.locked());
-  assert(!c.pending());
-  // And a later tick must not resurrect the abandoned hold.
-  assert(c.on_tick(2000) == TouchLockChord::Action::None);
-  assert(c.locked());
-}
-
-void test_chord_repeat_reports_do_not_restart_the_unlock_hold() {
-  // evdev sends value==2 for autorepeat while held, and Steam merges pads so one press can arrive
-  // from two nodes. Re-arming on each would push the deadline out forever and the unlock would
-  // never mature.
-  TouchLockChord c(800);
-  c.set_locked(true);
-  c.on_chord(true, 1000);
-  assert(c.on_chord(true, 1500) == TouchLockChord::Action::None);
-  assert(c.deadline_ms() == 1800);  // NOT 2300
-  assert(c.on_chord(true, 1800) == TouchLockChord::Action::Unlock);
-}
-
-void test_chord_relock_after_unlock_needs_a_fresh_press() {
-  TouchLockChord c(800);
-  assert(c.on_chord(true, 0) == TouchLockChord::Action::Lock);
-  c.on_chord(false, 100);  // release
-  assert(c.on_chord(true, 200) == TouchLockChord::Action::None);
-  assert(c.on_tick(1000) == TouchLockChord::Action::Unlock);
-  c.on_chord(false, 1100);
-  assert(c.on_chord(true, 1200) == TouchLockChord::Action::Lock);  // full cycle
-  assert(c.locked());
-}
-
-void test_chord_zero_hold_unlocks_on_the_press() {
-  // Configurable back to the old toggle behaviour, for a user who wants it.
-  TouchLockChord c(0);
-  c.set_locked(true);
-  assert(c.on_chord(true, 500) == TouchLockChord::Action::Unlock);
-  assert(!c.locked());
-}
-
-void test_chord_negative_hold_is_clamped_not_undefined() {
-  TouchLockChord c(-1);
-  c.set_locked(true);
-  assert(c.on_chord(true, 500) == TouchLockChord::Action::Unlock);
-}
-
-void test_chord_set_locked_reconciles_a_failed_grab() {
-  // EVIOCGRAB can fail (gamescope may hold the panel). The machine must never claim a lock the
-  // kernel refused, or the next chord press would try to *unlock* a screen that was never locked.
-  TouchLockChord c(800);
-  assert(c.on_chord(true, 1000) == TouchLockChord::Action::Lock);
-  c.set_locked(false);  // the grab failed; caller reconciles
-  assert(!c.locked());
-  c.on_chord(false, 1100);
-  assert(c.on_chord(true, 1200) ==
-         TouchLockChord::Action::Lock);  // tries to lock again, not unlock
-}
-
-void test_chord_never_acts_while_not_fully_held() {
-  TouchLockChord c(800);
-  assert(c.on_chord(false, 1000) == TouchLockChord::Action::None);
-  assert(c.on_tick(2000) == TouchLockChord::Action::None);
-  assert(!c.locked());
-  assert(!c.pending());
 }
 
 // ---- layers
@@ -861,7 +727,7 @@ void test_shipped_app_json_keymap_is_current() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(input) {
   test_binding_accepts_dom_keys_verbatim();
   test_binding_translates_semantic_actions();
   test_captions_is_a_launcher_action_not_a_key();
@@ -887,12 +753,9 @@ int main() {
   test_chapter_action_sign();
   test_chapter_seek_script_renders_with_dir_and_skip();
 
-  test_parse_chord_valid();
-  test_parse_chord_rejects_bad_input();
-
   test_config_parses_keymap_object();
   test_config_missing_keymap_is_empty_not_fatal();
-  test_config_parses_touch_settings();
+  test_config_accepts_the_retired_touch_lock_keys();
   test_config_touch_defaults();
   test_config_parses_right_stick();
   test_config_skip_seconds();
@@ -905,16 +768,6 @@ int main() {
   test_fast_scroll_clamps_the_axis_minimum();
   test_fast_scroll_never_returns_a_busy_looping_interval();
   test_fast_scroll_degenerate_deadzone();
-
-  test_chord_locks_immediately();
-  test_chord_unlock_requires_a_deliberate_hold();
-  test_chord_released_early_leaves_the_lock_engaged();
-  test_chord_repeat_reports_do_not_restart_the_unlock_hold();
-  test_chord_relock_after_unlock_needs_a_fresh_press();
-  test_chord_zero_hold_unlocks_on_the_press();
-  test_chord_negative_hold_is_clamped_not_undefined();
-  test_chord_set_locked_reconciles_a_failed_grab();
-  test_chord_never_acts_while_not_fully_held();
 
   test_find_control_for_action();
   test_without_action();

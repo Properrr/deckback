@@ -228,12 +228,10 @@ def gamepad_spec(name="deckback-test-pad"):
 
 
 def touchscreen_spec(name="deckback-test-touch", width=1280, height=800):
-    """A multitouch panel shaped like the FTS3528, for the touch-lock grab test.
+    """A multitouch panel shaped like the FTS3528, for driving synthetic taps at the compositor.
 
-    `is_touchscreen()` in `launcher/src/touch.cpp` accepts either the real USB id or *any* device
-    with ABS_MT_POSITION_X + ABS_MT_SLOT. This spec deliberately matches the capability fallback and
-    NOT the USB id, so the launcher must not grab it — a test panel the launcher steals would make
-    the real grab test meaningless.
+    Matches the panel by capability (ABS_MT_POSITION_X + ABS_MT_SLOT) rather than by the real USB
+    id, so nothing can mistake it for the physical panel.
     """
     return DeviceSpec(
         name,

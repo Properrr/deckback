@@ -5,15 +5,9 @@
 #include <fstream>
 #include <sstream>
 
+#include "http.hpp"
 #include "log.hpp"
 #include "sha256.hpp"
-
-#if __has_include(<curl/curl.h>)
-#define DECKBACK_HAVE_CURL 1
-#include <curl/curl.h>
-#else
-#define DECKBACK_HAVE_CURL 0
-#endif
 
 namespace deckback {
 namespace {
@@ -32,34 +26,9 @@ void make_parent_dirs(const std::string& path) {
   }
 }
 
-#if DECKBACK_HAVE_CURL
-size_t sink(char* ptr, size_t size, size_t nmemb, void* user) {
-  auto* out = static_cast<std::string*>(user);
-  out->append(ptr, size * nmemb);
-  return size * nmemb;
-}
+constexpr long kDownloadTimeoutSec = 120;  // a CDM is megabytes, on whatever Wi-Fi the user has
 
-// GET `url` into `out`. Returns false on any transport/HTTP error.
-bool http_download(const std::string& url, std::string& out) {
-  CURL* c = curl_easy_init();
-  if (!c) return false;
-  curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, sink);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, &out);
-  curl_easy_setopt(c, CURLOPT_FAILONERROR, 1L);
-  curl_easy_setopt(c, CURLOPT_TIMEOUT, 120L);
-  curl_easy_setopt(c, CURLOPT_USERAGENT, "deckback-cdm-fetcher/1");
-  const CURLcode rc = curl_easy_perform(c);
-  curl_easy_cleanup(c);
-  return rc == CURLE_OK && !out.empty();
-}
-#endif
-
-// Only referenced from the DECKBACK_HAVE_CURL download path below; a build without libcurl (the
-// optional-dep configuration CMake explicitly supports) compiles the sole caller out, so mark it
-// maybe_unused to keep that build -Werror-clean.
-[[maybe_unused]] bool write_file(const std::string& path, const std::string& bytes) {
+bool write_file(const std::string& path, const std::string& bytes) {
   make_parent_dirs(path);
   std::ofstream f(path, std::ios::binary | std::ios::trunc);
   if (!f) return false;
@@ -69,7 +38,7 @@ bool http_download(const std::string& url, std::string& out) {
 
 }  // namespace
 
-bool CdmFetcher::backend_available() { return DECKBACK_HAVE_CURL != 0; }
+bool CdmFetcher::backend_available() { return http_available(); }
 
 std::string CdmFetcher::installed_path(const std::string& profile_dir) {
   return profile_dir + "/WidevineCdm/_platform_specific/linux_x64/libwidevinecdm.so";
@@ -109,13 +78,17 @@ bool CdmFetcher::ensure_installed(const std::string& profile_dir, const CdmConfi
     return false;
   }
 
-#if DECKBACK_HAVE_CURL
+  if (!http_available()) {
+    warn("cdm: cdm_url set but this build has no libcurl — cannot fetch");
+    return false;
+  }
   info("cdm: fetching Widevine CDM from " + cfg.url);
-  std::string bytes;
-  if (!http_download(cfg.url, bytes)) {
+  const auto downloaded = http_get(cfg.url, kDownloadTimeoutSec, "deckback-cdm-fetcher/1");
+  if (!downloaded) {
     warn("cdm: download failed — DRM unavailable; free YouTube is unaffected");
     return false;
   }
+  const std::string& bytes = *downloaded;
   if (!cfg.sha256.empty()) {
     const std::string got = sha256_hex(bytes);
     if (got != cfg.sha256) {
@@ -133,10 +106,6 @@ bool CdmFetcher::ensure_installed(const std::string& profile_dir, const CdmConfi
   }
   info("cdm: installed " + dest);
   return true;
-#else
-  warn("cdm: cdm_url set but this build has no libcurl — cannot fetch");
-  return false;
-#endif
 }
 
 }  // namespace deckback

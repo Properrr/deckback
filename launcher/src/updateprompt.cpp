@@ -1,27 +1,18 @@
 #include "updateprompt.hpp"
 
-#include <sys/stat.h>
-
 #include <algorithm>
 #include <cctype>
-#include <cstdio>
-#include <filesystem>
 #include <format>
-#include <fstream>
 #include <optional>
 
+#include "fileio.hpp"
+#include "http.hpp"
+#include "json.hpp"
 #include "log.hpp"
 #include "osdmenu.hpp"
 #include "overlay.hpp"
 #include "scripts.hpp"
 #include "updater.hpp"
-
-#if __has_include(<curl/curl.h>)
-#define DECKBACK_HAVE_CURL 1
-#include <curl/curl.h>
-#else
-#define DECKBACK_HAVE_CURL 0
-#endif
 
 namespace deckback {
 namespace {
@@ -70,88 +61,18 @@ std::vector<long> parse_version_fields(std::string_view v, bool& valid) {
   return out;
 }
 
-void append_utf8(std::string& out, unsigned cp) {
-  if (cp >= 0xD800 && cp <= 0xDFFF) {  // lone surrogate: emit a replacement, don't try to pair
-    out += '?';
-    return;
-  }
-  if (cp < 0x80) {
-    out += static_cast<char>(cp);
-  } else if (cp < 0x800) {
-    out += static_cast<char>(0xC0 | (cp >> 6));
-    out += static_cast<char>(0x80 | (cp & 0x3F));
-  } else {
-    out += static_cast<char>(0xE0 | (cp >> 12));
-    out += static_cast<char>(0x80 | ((cp >> 6) & 0x3F));
-    out += static_cast<char>(0x80 | (cp & 0x3F));
-  }
-}
-
-// Decode the JSON string value of `key` from `s` (first match). Handles the common escapes and BMP
-// \uXXXX. Not a full parser — sufficient for GitHub's release objects, like config.cpp's extractor.
-std::optional<std::string> json_string_field(const std::string& s, std::string_view key) {
-  const std::string needle = "\"" + std::string(key) + "\"";
-  const size_t k = s.find(needle);
-  if (k == std::string::npos) return std::nullopt;
-  const size_t colon = s.find(':', k + needle.size());
-  if (colon == std::string::npos) return std::nullopt;
-  size_t p = colon + 1;
-  while (p < s.size() && std::isspace(static_cast<unsigned char>(s[p]))) ++p;
-  if (p >= s.size() || s[p] != '"') return std::nullopt;
+// The string member `key` of a release object, or "" when absent or not a string. `\r` is dropped
+// so notes are \n-terminated (GitHub serves CRLF bodies).
+std::string release_string(const json::Value& obj, std::string_view key) {
+  const json::Value* v = obj.find(key);
+  if (!v) return {};
+  const std::string* s = v->as_string();
+  if (!s) return {};
   std::string out;
-  for (size_t i = p + 1; i < s.size(); ++i) {
-    const char c = s[i];
-    if (c == '\\' && i + 1 < s.size()) {
-      const char n = s[++i];
-      switch (n) {
-        case 'n':
-          out += '\n';
-          break;
-        case 't':
-          out += '\t';
-          break;
-        case 'r':
-          break;  // drop \r so notes are \n-terminated
-        case 'u': {
-          if (i + 4 < s.size()) {
-            unsigned cp = 0;
-            bool ok = true;
-            for (int h = 0; h < 4; ++h) {
-              const char d = s[i + 1 + h];
-              int val;
-              if (d >= '0' && d <= '9')
-                val = d - '0';
-              else if (d >= 'a' && d <= 'f')
-                val = d - 'a' + 10;
-              else if (d >= 'A' && d <= 'F')
-                val = d - 'A' + 10;
-              else {
-                ok = false;
-                break;
-              }
-              cp = cp * 16 + static_cast<unsigned>(val);
-            }
-            if (ok) {
-              i += 4;
-              append_utf8(out, cp);
-            } else {
-              out += 'u';
-            }
-          } else {
-            out += 'u';
-          }
-          break;
-        }
-        default:
-          out += n;  // \" \\ \/ and any other escaped char: keep it verbatim
-      }
-    } else if (c == '"') {
-      return out;
-    } else {
-      out += c;
-    }
-  }
-  return std::nullopt;
+  out.reserve(s->size());
+  for (char c : *s)
+    if (c != '\r') out += c;
+  return out;
 }
 
 std::string trim(std::string s) {
@@ -167,32 +88,13 @@ void erase_all(std::string& s, std::string_view token) {
     s.erase(p, token.size());
 }
 
-#if DECKBACK_HAVE_CURL
-size_t curl_sink(char* ptr, size_t size, size_t nmemb, void* user) {
-  static_cast<std::string*>(user)->append(ptr, size * nmemb);
-  return size * nmemb;
+// GET a GitHub API URL. Short timeout so a slow/absent network never stalls the menu.
+std::optional<std::string> github_get(const std::string& url) {
+  return http_get(HttpRequest{.url = url,
+                              .timeout_seconds = kReleasesTimeoutSec,
+                              .user_agent = "deckback-updater/1",  // GitHub requires a UA
+                              .headers = {"Accept: application/vnd.github+json"}});
 }
-
-// GET a GitHub API URL into `out`. Short timeout so a slow/absent network never stalls the menu.
-bool github_get(const std::string& url, std::string& out) {
-  CURL* c = curl_easy_init();
-  if (!c) return false;
-  curl_slist* hdrs = nullptr;
-  hdrs = curl_slist_append(hdrs, "Accept: application/vnd.github+json");
-  curl_easy_setopt(c, CURLOPT_URL, url.c_str());
-  curl_easy_setopt(c, CURLOPT_HTTPHEADER, hdrs);
-  curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
-  curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, curl_sink);
-  curl_easy_setopt(c, CURLOPT_WRITEDATA, &out);
-  curl_easy_setopt(c, CURLOPT_FAILONERROR, 1L);
-  curl_easy_setopt(c, CURLOPT_TIMEOUT, kReleasesTimeoutSec);
-  curl_easy_setopt(c, CURLOPT_USERAGENT, "deckback-updater/1");  // GitHub requires a UA
-  const CURLcode rc = curl_easy_perform(c);
-  curl_slist_free_all(hdrs);
-  curl_easy_cleanup(c);
-  return rc == CURLE_OK && !out.empty();
-}
-#endif
 
 }  // namespace
 
@@ -214,43 +116,26 @@ int compare_versions(std::string_view a, std::string_view b) {
   return 0;
 }
 
-std::vector<ReleaseNote> parse_github_releases(const std::string& json) {
+std::vector<ReleaseNote> parse_github_releases(const std::string& text) {
   std::vector<ReleaseNote> out;
-  // Slice each depth-1 object out of the array so a "name"/"body" cannot bleed across releases.
-  int depth = 0;
-  size_t obj_start = std::string::npos;
-  bool in_string = false;
-  for (size_t i = 0; i < json.size(); ++i) {
-    const char c = json[i];
-    if (in_string) {
-      if (c == '\\')
-        ++i;  // skip the escaped char
-      else if (c == '"')
-        in_string = false;
-      continue;
-    }
-    if (c == '"') {
-      in_string = true;
-    } else if (c == '{') {
-      if (depth == 0) obj_start = i;
-      ++depth;
-    } else if (c == '}') {
-      if (depth > 0) --depth;
-      if (depth == 0 && obj_start != std::string::npos) {
-        const std::string obj = json.substr(obj_start, i - obj_start + 1);
-        obj_start = std::string::npos;
-        auto tag = json_string_field(obj, "tag_name");
-        if (!tag || tag->empty()) continue;  // a release with no tag is unusable
-        std::string version = *tag;
-        if (!version.empty() && (version.front() == 'v' || version.front() == 'V'))
-          version.erase(0, 1);
-        ReleaseNote n;
-        n.version = version;
-        n.title = json_string_field(obj, "name").value_or("");
-        n.body = trim(json_string_field(obj, "body").value_or(""));
-        out.push_back(std::move(n));
-      }
-    }
+  const json::ParseResult parsed = json::parse(text);
+  if (!parsed.ok()) {
+    warn(std::format("update: GitHub releases JSON did not parse (line {}: {}) — no changelog",
+                     parsed.error.line, parsed.error.message));
+    return out;
+  }
+  const std::vector<json::Value>* arr = parsed.value->as_array();
+  if (!arr) return out;  // the API returns an array; an object here is an error payload
+  for (const json::Value& item : *arr) {
+    if (!item.is_object()) continue;
+    std::string version = release_string(item, "tag_name");
+    if (version.empty()) continue;  // a release with no tag is unusable
+    if (version.front() == 'v' || version.front() == 'V') version.erase(0, 1);
+    ReleaseNote n;
+    n.version = std::move(version);
+    n.title = release_string(item, "name");
+    n.body = trim(release_string(item, "body"));
+    out.push_back(std::move(n));
   }
   return out;
 }
@@ -343,28 +228,12 @@ std::string update_dot_marker_path(std::string_view state_dir) {
   return std::string(state_dir) + "/update_dot_dismissed_v1";
 }
 
-std::string read_update_marker(const std::string& path) {
-  std::ifstream f(path);
-  if (!f) return {};
-  std::string line;
-  std::getline(f, line);
-  return trim(std::move(line));
-}
+std::string read_update_marker(const std::string& path) { return read_marker(path); }
 
 bool write_update_marker(const std::string& path, const std::string& value) {
-  std::error_code ec;
-  const std::filesystem::path p(path);
-  if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
-  std::FILE* f = std::fopen(path.c_str(), "w");
-  if (!f) {
-    // A read-only state dir must not crash and must not nag every launch; warn and move on (the
-    // mild failure: the card may auto-show / the dot may reappear again next boot).
-    warn(std::format("update: cannot write {} — the update prompt state was not saved", path));
-    return false;
-  }
-  std::fputs((value + "\n").c_str(), f);
-  std::fclose(f);
-  return true;
+  // A read-only state dir must not crash and must not nag every launch (the mild failure: the card
+  // may auto-show / the dot may reappear again next boot).
+  return write_marker(path, value, "the update prompt state was not saved");
 }
 
 // ---- controller ---------------------------------------------------------------------------------
@@ -419,20 +288,19 @@ void UpdatePromptController::feed(bool has_update, const std::string& status,
 void UpdatePromptController::kick_changelog() {
   int expected = 0;
   if (!fetch_state_.compare_exchange_strong(expected, 1)) return;  // already fetching or done
-#if DECKBACK_HAVE_CURL
+  if (!http_available()) {
+    fetch_state_.store(2, std::memory_order_release);  // no libcurl: done, empty -> fallback link
+    return;
+  }
   fetch_thread_ = std::thread([this] {
     ChangelogView v;
-    std::string json;
-    if (github_get(cfg_.releases_url, json))
-      v = summarize_releases(parse_github_releases(json), cfg_.local_version, kMaxNotesLen);
+    if (const auto json = github_get(cfg_.releases_url))
+      v = summarize_releases(parse_github_releases(*json), cfg_.local_version, kMaxNotesLen);
     else
       warn("update: could not fetch release notes from GitHub — showing a link instead");
     cached_ = std::move(v);
     fetch_state_.store(2, std::memory_order_release);
   });
-#else
-  fetch_state_.store(2, std::memory_order_release);  // no libcurl: done, empty -> fallback link
-#endif
 }
 
 ChangelogView UpdatePromptController::current_changelog() const {

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "fake_cdp_server.hpp"
+#include "harness.hpp"
 #include "netprobe.hpp"
 #include "platform.hpp"
 
@@ -298,7 +299,7 @@ void test_keep_awake_not_probed_while_idle() {
 
 }  // namespace
 
-int main() {
+DECKBACK_TEST_MAIN(player) {
   test_poll_tracks_playstate();
   test_decode_play_state();
   test_poll_publishes_input_layer();

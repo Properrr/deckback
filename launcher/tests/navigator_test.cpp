@@ -8,6 +8,8 @@
 #include <cstdio>
 #include <string>
 
+#include "harness.hpp"
+
 using namespace deckback;
 
 static void test_app_needle() {
@@ -38,7 +40,7 @@ static void test_needle_matches_loaded_locations() {
   assert(std::string("https://www.youtube.com/?app=desktop").find(needle) == std::string::npos);
 }
 
-int main() {
+DECKBACK_TEST_MAIN(navigator) {
   test_app_needle();
   test_needle_matches_loaded_locations();
   std::puts("navigator_test: OK");

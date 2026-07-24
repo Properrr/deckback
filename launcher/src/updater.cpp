@@ -17,11 +17,10 @@
 #include <climits>
 #include <cstdint>
 #include <cstring>
-#include <fstream>
-#include <sstream>
 #include <thread>
 
 #include "devtools.hpp"
+#include "fileio.hpp"
 #include "overlay.hpp"
 #include "util.hpp"
 #else
@@ -178,11 +177,8 @@ constexpr long kDeploySelftestMs = 90'000;
 constexpr int kDeployPollMs = 500;
 
 std::string read_flatpak_app_id() {
-  std::ifstream f(kFlatpakInfoPath);
-  if (!f) return {};
-  std::ostringstream ss;
-  ss << f.rdbuf();
-  return parse_flatpak_app_id(ss.str());
+  const auto text = read_file(kFlatpakInfoPath);
+  return text ? parse_flatpak_app_id(*text) : std::string();
 }
 
 // Wire format of the portal dicts this scans:

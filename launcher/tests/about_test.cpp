@@ -7,6 +7,8 @@
 #include <cstdio>
 #include <string>
 
+#include "harness.hpp"
+
 using namespace deckback;
 
 namespace {
@@ -70,7 +72,7 @@ void test_missing_fields_degrade_to_empty() {
   assert(none.name.empty() && none.features.empty());
 }
 
-int main() {
+DECKBACK_TEST_MAIN(about) {
   test_parses_the_real_shape();
   test_missing_fields_degrade_to_empty();
   std::puts("about_test: all passed");

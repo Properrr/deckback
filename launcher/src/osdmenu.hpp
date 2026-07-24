@@ -1,6 +1,5 @@
 #pragma once
 #include <atomic>
-#include <chrono>
 #include <functional>
 #include <mutex>
 #include <string>
@@ -10,8 +9,9 @@
 
 #include "about.hpp"  // AboutInfo
 #include "devtools.hpp"
-#include "onboarding.hpp"  // OverlayContext + controls_overlay_rows
-#include "scripts.hpp"     // ScriptParams
+#include "onboarding.hpp"   // OverlayContext + controls_overlay_rows
+#include "pageoverlay.hpp"  // PageOverlay, Throttle
+#include "scripts.hpp"      // ScriptParams
 
 namespace deckback {
 
@@ -20,6 +20,10 @@ class CaptionSettings;
 // In-app OSD Settings menu (findings osd-menu-plan.md). Focus/tab/scroll state lives in
 // config/scripts/osd.js; this owns open/close, the top-right Settings button, playback gating, and
 // the C++<->JS command bridge. Invariant: capture <=> paint — exec() returning "gone" clears open_.
+
+// The DOM id config/scripts/osd_button.js assigns. Shared with PageOverlay's presence probe, so the
+// drawn node and the node we look for cannot drift apart.
+inline constexpr const char* kOsdButtonElementId = "__deckback_settings_btn";
 
 // ---- pure helpers (unit-tested in osdmenu_test.cpp) ----
 
@@ -97,8 +101,7 @@ class OsdMenuController {
  private:
   std::string eval_op(DevToolsClient& client, const ScriptParams& params);
   bool inject_open(DevToolsClient& client);
-  void reconcile_open();    // capture <=> paint: release capture if the page reloaded the menu away
-  void reconcile_button();  // redraw after a same-URL reload that Navigator cannot observe
+  void reconcile_open();  // capture <=> paint: release capture if the page reloaded the menu away
   void draw_button();
   void hide_button();
 
@@ -108,11 +111,15 @@ class OsdMenuController {
   std::atomic<bool> open_{false};
   std::atomic<bool> reloaded_{false};
 
-  bool button_shown_ = false;
+  // The top-right Settings button. PageOverlay owns the "is it still painted?" probe: the Navigator
+  // only announces a non-app -> app transition, so a same-URL reload (the common wake path) wipes
+  // documentElement without any signal, and a local flag alone would pin the button gone forever.
+  PageOverlay button_;
   bool badge_dirty_ = true;
 
-  std::chrono::steady_clock::time_point last_reconcile_{};
-  std::chrono::steady_clock::time_point last_button_reconcile_{};
+  // The menu's own liveness question is richer than element presence (the keep-alive re-appends a
+  // detached node), so it asks the script for its state — but on the same schedule.
+  Throttle menu_probe_{kOverlayReconcileMs};
 
   mutable std::mutex model_mu_;
   bool has_update_ = false;

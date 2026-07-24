@@ -1,9 +1,9 @@
 #include "about.hpp"
 
 #include <cstdlib>
-#include <fstream>
-#include <sstream>
 #include <utility>
+
+#include "fileio.hpp"
 
 namespace deckback {
 namespace {
@@ -94,13 +94,8 @@ std::optional<std::string> load_metainfo() {
   if (const char* env = std::getenv("DECKBACK_METAINFO"); env && *env) candidates.emplace_back(env);
   candidates.emplace_back("/app/share/metainfo/io.github.properrr.deckback.metainfo.xml");
   candidates.emplace_back("flatpak/assets/io.github.properrr.deckback.metainfo.xml");
-  for (const std::string& path : candidates) {
-    std::ifstream f(path, std::ios::binary);
-    if (!f) continue;
-    std::ostringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-  }
+  for (const std::string& path : candidates)
+    if (auto text = read_file(path)) return text;
   return std::nullopt;
 }
 

@@ -18,9 +18,8 @@ info "Installing $bundle ..."
 flatpak install --user -y "$bundle"
 
 # evdev access is baked into finish-args as of 2026-07-10 (--device=input, never --device=all). It is
-# REQUIRED by Phase 3 input: the gamepad reader and the runtime touchscreen lock (EVIOCGRAB on the
-# FTS3528) both need it, and BOTH FAIL SILENTLY WITHOUT IT — the app starts, shows the UI, and simply
-# ignores the controller.
+# REQUIRED by Phase 3 input: the gamepad reader and the FF_RUMBLE haptic both need it, and BOTH
+# FAIL SILENTLY WITHOUT IT — the app starts, shows the UI, and simply ignores the controller.
 #
 # This used to be a post-install `flatpak override --device=input ... 2>/dev/null && info || info
 # "note: not applied"`. Both branches returned 0. The failure path swallowed flatpak's own error

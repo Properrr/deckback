@@ -92,8 +92,8 @@ class FinishArgs(unittest.TestCase):
         self.assertIn("--share=network", self.args)
 
     def test_evdev_is_granted_and_it_is_not_device_all(self):
-        """The gamepad, FF_RUMBLE haptics, and the touchscreen EVIOCGRAB all need /dev/input, and all
-        three fail silently without it — no error, no log, just a controller that does nothing."""
+        """The gamepad and the FF_RUMBLE haptics both need /dev/input, and both fail
+        silently without it — no error, no log, just a controller that does nothing."""
         self.assertIn("--device=input", self.args)
         self.assertNotIn("--device=all", self.args)
 
