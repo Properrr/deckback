@@ -8,6 +8,38 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Added
+- **Closed captions on the View (⧉) button.** Press View during a video to turn subtitles on or off.
+  The new **Settings ▸ Captions** section lets you list the languages you prefer, in order, and
+  choose whether to favour human-written or auto-generated tracks — Deckback then picks the best
+  match for each video, and translates when your language isn't offered.
+- **Exit without leaving the app.** Open the menu and **hold Y** to quit, from any tab and wherever
+  the highlight happens to be. Deckback pauses and saves your place first, so the next launch picks
+  up where you stopped. (Holding STEAM + B still force-quits, but that skips the save.)
+- **The Settings menu now opens while a video is playing.** The Menu (☰) button previously did
+  nothing on the watch screen.
+- **One-line install.** Deckback can now be installed with a single command in Desktop Mode — see
+  the README.
+- **One-step uninstall.** A single script removes Deckback along with everything it put on the
+  system: both helper services and the Steam library shortcut. Your YouTube sign-in is kept unless
+  you ask for a full wipe.
+
+### Fixed
+- **The screen no longer dims, and the Deck no longer suspends, in the middle of a video.** The
+  helper that keeps the screen awake could quietly disable itself while Deckback was being updated,
+  and then stay off — with nothing on screen to say so. It now waits much longer before deciding
+  Deckback is really gone, and its own cleanup can no longer be interrupted half-finished. If the
+  helper is not running, Deckback now tells you the first time you play something instead of
+  leaving you to guess.
+- **Long on-screen messages are no longer cut off.** Notices wider than the screen were clipped at
+  both edges, with no "…" to show anything was missing. They now wrap.
+- **Updates keep working after the Deck sleeps.** The update check could go silently inert after a
+  suspend/resume and never recover until the app was restarted.
+
+### Changed
+- **The audio and keep-awake helpers now remove themselves** when you uninstall Deckback, instead of
+  staying enabled on the system afterwards.
+
 ## [0.0.6] - 2026-07-15
 
 ### Fixed
