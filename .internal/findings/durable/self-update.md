@@ -47,11 +47,35 @@ old)` alongside `playback detected: True`, and logind's inhibitor list carried
 path that replaced `--talk-name=org.freedesktop.systemd1` works on hardware: the host helper writes
 the file, the sandbox reads it, and no permission is involved.
 
-**Still unverified:** the heartbeat NEGATIVE case (stale file → Inactive → the warning toast). It
-needs the helper stopped, the file backdated past 150 s, and a **fresh app launch** — `player.cpp`
-checks once per process on the first playing poll (`warned_keep_awake_`), so a running instance that
-has already decided cannot be re-tested without a restart. Also unverified: the `Failed` /
-`PermissionBlocked` UI paths, which need a deliberately broken remote or a permission-adding build.
+**NEGATIVE case verified too (2026-07-24, OLED) — a true A/B on one device, minutes apart.** Same
+build, same launch, same playback; the only variable was heartbeat freshness:
+
+```
+14:47:13  deckback-launcher 0.0.8 → 14:47:18  idle inhibitor held (playing)      heartbeat 14s: SILENT
+14:48:32  deckback-launcher 0.0.8 → 14:48:37  WARN: player: deckback-idle-nudge.service is not
+                                              running — the screen may dim …    heartbeat 600s: WARNED
+```
+
+The toast was confirmed on screen by the user, not just in the journal. Method: `systemctl --user
+stop deckback-idle-nudge.service`, `touch -d '10 minutes ago'` on the heartbeat, relaunch, play.
+Restored afterwards (helper started, heartbeat back to 1 s). So the probe is proven in **both**
+directions — it stays quiet when the helper is alive and speaks when it is not — which is what makes
+it a check rather than a thing that merely never fires.
+
+**Two mechanics to know before repeating it:** the check is once per process, on the first poll that
+observes playback (`player.cpp`, `warned_keep_awake_`), so a running instance that has already
+decided cannot be re-tested — a **fresh launch** is mandatory; and it fires on playback start, not at
+launch, so a null result on the home screen means nothing.
+
+**Known wording nit (not worth a release on its own):** the warning ends "install the keep-awake
+helper in Desktop Mode", which reads oddly in the installed-but-stopped case that this test
+exercised. The lead clause ("is not running") is accurate either way, and the dominant real cause is
+a helper that was never installed or self-uninstalled, so it is left as is.
+
+**Still unverified:** the `Failed` / `PermissionBlocked` UI paths, which need a deliberately broken
+remote or a permission-adding build to reach. `scripts/check-permissions.sh` now makes the latter
+hard to produce by accident, which is the point — but it also means that copy has never been read by
+a user, only by a unit test.
 
 **Gotcha for anyone repeating this over SSH:** `~/.local/bin` is not on a non-interactive SSH PATH,
 so `deckback-idle-nudge --check` is `command not found` there — call it by full path. That is a
