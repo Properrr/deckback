@@ -8,6 +8,8 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.7] - 2026-07-23
+
 ### Added
 - **Closed captions on the View (⧉) button.** Press View during a video to turn subtitles on or off.
   The new **Settings ▸ Captions** section lets you list the languages you prefer, in order, and
@@ -148,7 +150,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.6...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.7...HEAD
+[0.0.7]: https://github.com/properrr/deckback/releases/tag/v0.0.7
 [0.0.6]: https://github.com/properrr/deckback/releases/tag/v0.0.6
 [0.0.5]: https://github.com/properrr/deckback/releases/tag/v0.0.5
 [0.0.4]: https://github.com/properrr/deckback/releases/tag/v0.0.4
