@@ -38,9 +38,24 @@ instance still has the old commit bound. The UI correctly ignores it — `update
 deploy verdict precedence over availability (`announce = notify_ && phase == Idle`), so the tab stays
 on "Update installed. Restart Deckback…" instead of re-offering an update that is already staged.
 
-**Still unverified after this run:** the heartbeat keep-awake detection (the Deck still has the
-pre-heartbeat helper, so nothing writes the file), and the `Failed` / `PermissionBlocked` UI paths —
-those need a deliberately broken remote or a permission-adding build to reach.
+**Heartbeat keep-awake detection: POSITIVE case verified same day (2026-07-24, OLED).** After
+running `scripts/install-idle-nudge.sh` on the Deck, `deckback-idle-nudge --check` reported
+`heartbeat: /home/deck/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive (23s
+old)` alongside `playback detected: True`, and logind's inhibitor list carried
+`["idle","Deckback","Deckback: playback active","block",…]`. 23 s against the 150 s window means
+`decide_keep_awake()` returns Active and stays silent — correct, the helper was running. So the
+path that replaced `--talk-name=org.freedesktop.systemd1` works on hardware: the host helper writes
+the file, the sandbox reads it, and no permission is involved.
+
+**Still unverified:** the heartbeat NEGATIVE case (stale file → Inactive → the warning toast). It
+needs the helper stopped, the file backdated past 150 s, and a **fresh app launch** — `player.cpp`
+checks once per process on the first playing poll (`warned_keep_awake_`), so a running instance that
+has already decided cannot be re-tested without a restart. Also unverified: the `Failed` /
+`PermissionBlocked` UI paths, which need a deliberately broken remote or a permission-adding build.
+
+**Gotcha for anyone repeating this over SSH:** `~/.local/bin` is not on a non-interactive SSH PATH,
+so `deckback-idle-nudge --check` is `command not found` there — call it by full path. That is a
+shell detail, not the helper being missing.
 
 ## ★★ PERMISSION ADDS BREAK SELF-UPDATE — v0.0.7 SHIPPED ONE (2026-07-24, OLED, user-reported)
 
