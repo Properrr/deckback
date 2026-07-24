@@ -1,5 +1,47 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★★ FIX VERIFIED ON-DECK, REAL REMOTE, 0.0.7 → 0.0.8 (2026-07-24, OLED, Game Mode)
+
+The permission fix below is **proven on hardware**, on the production GitHub-Pages remote, through an
+ordinary Steam-shortcut launch. Journal, unedited:
+
+```
+21:27:38  deckback-launcher 0.0.7
+21:27:38  updater: watching for updates to this app via the Flatpak portal
+21:28:38  updater: an update is available (remote 472feab2e72a)
+21:28:38  updater: notify mode — awaiting user confirmation in Settings ▸ Updates
+21:30:31  updater: update requested; deploying in the background
+21:30:31  update: user confirmed — deploy requested
+21:30:35  updater: update deployed — it will apply the next time Deckback is launched
+21:30:42  deckback-launcher 0.0.8
+21:31:02  update: user asked to check — deploy requested
+21:31:02  updater: nothing to deploy — the installed commit is already the newest on the remote
+```
+
+Confirmed by this run: the **permission removal works** (0.0.7 → 0.0.8 deployed in 4 s, where 0.0.6 →
+0.0.7 had been refused outright); the **Done verdict** reaches the UI from a real portal for the
+first time; 0.0.8 **bound on the next launch**; and **Check for updates** answers `Empty` correctly
+against a live remote. `flatpak info` after: Version 0.0.8, Origin `deckback`, Commit `472feab2e7` —
+matching the published summary.
+
+**Detection fired 60 s after launch on the DEFAULT poll — no `--poll-timeout` drop-in was
+installed.** That contradicts ★ T1 RESULT below ("nothing fired for ~30 min; a fresh monitor does NOT
+force an immediate check"), which is left in place because it is a real prior observation. Two data
+points, opposite results, so treat the detection latency as **unpredictable between ~1 min and
+~30 min** rather than either number. Do not promise a user a first-check time. The likely difference
+is when flatpak-portal itself last started (the Deck had slept and woken between the two runs), which
+is not something the app controls or can observe.
+
+**Also confirmed, by inspection of this same journal:** after a successful deploy the portal
+**re-announces the same commit** (`21:30:39`, remote `472feab2e72a` again) because the running
+instance still has the old commit bound. The UI correctly ignores it — `updates_view()` gives a
+deploy verdict precedence over availability (`announce = notify_ && phase == Idle`), so the tab stays
+on "Update installed. Restart Deckback…" instead of re-offering an update that is already staged.
+
+**Still unverified after this run:** the heartbeat keep-awake detection (the Deck still has the
+pre-heartbeat helper, so nothing writes the file), and the `Failed` / `PermissionBlocked` UI paths —
+those need a deliberately broken remote or a permission-adding build to reach.
+
 ## ★★ PERMISSION ADDS BREAK SELF-UPDATE — v0.0.7 SHIPPED ONE (2026-07-24, OLED, user-reported)
 
 **Read this before touching `finish-args`.** A user on 0.0.6 was offered 0.0.7, pressed *Update
