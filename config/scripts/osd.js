@@ -114,8 +114,23 @@
     "#__deckback_osd .pitem{padding:9px 22px;border-radius:10px;color:#eee;font-size:23px;}" +
     "#__deckback_osd .dbf{outline:3px solid #f5b301;outline-offset:2px;background:rgba(245,179,1,0.14);}" +
     "#__deckback_osd .hint{color:#9a9a9a;font-size:19px;border-top:2px solid rgba(255,255,255,0.12);" +
-    "padding-top:10px;}" +
-    "#__deckback_osd .hint .kb{font-weight:700;}";
+    "padding-top:10px;display:flex;align-items:center;justify-content:space-between;gap:18px;}" +
+    // The legends keep their own inline spacing by staying inside one flex item.
+    "#__deckback_osd .hint .legend{min-width:0;overflow:hidden;text-overflow:ellipsis;" +
+    "white-space:nowrap;}" +
+    "#__deckback_osd .hint .kb{font-weight:700;}" +
+    // Exit rides in the hint bar, the OSD's existing bottom chrome, at hint type size: a full-width
+    // row of its own read as a second heavy bar stacked on this one.
+    "#__deckback_osd .exitchip{position:relative;overflow:hidden;display:inline-flex;" +
+    "align-items:center;gap:8px;padding:3px 11px;border-radius:9px;color:#e8e8e8;white-space:nowrap;}" +
+    // "Hold A" only while focused — unfocused it is one word, and the hint is noise until reachable.
+    "#__deckback_osd .exitchip .hold{display:none;}" +
+    "#__deckback_osd .exitchip.dbf .hold{display:inline;color:#9a9a9a;}" +
+    "#__deckback_osd .exitchip.off{opacity:0.45;}" +
+    // The hold fill: width is driven by a CSS transition whose duration C++ supplies, so the bar and
+    // the launcher's timer cannot drift apart, and no per-frame CDP traffic is needed.
+    "#__deckback_osd .exitchip .fill{position:absolute;left:0;top:0;bottom:0;width:0;" +
+    "background:rgba(245,179,1,0.30);pointer-events:none;}";
 
   function ensureSheet() {
     try {
@@ -304,14 +319,29 @@
     }
 
     var hint = el('div', 'hint');
-    hint.appendChild(el('span', 'kb', 'A'));
-    hint.appendChild(el('span', null, ' Select   '));
-    hint.appendChild(el('span', 'kb', 'B'));
-    hint.appendChild(el('span', null, ' Back   '));
-    hint.appendChild(el('span', 'kb', 'X'));
-    hint.appendChild(el('span', null, ' Remove   '));
-    hint.appendChild(el('span', 'kb', 'L1/R1'));
-    hint.appendChild(el('span', null, ' Tab   ←/→ Change · Reorder   ↑↓ Move'));
+    var legend = el('span', 'legend');
+    legend.appendChild(el('span', 'kb', 'A'));
+    legend.appendChild(el('span', null, ' Select   '));
+    legend.appendChild(el('span', 'kb', 'B'));
+    legend.appendChild(el('span', null, ' Back   '));
+    legend.appendChild(el('span', 'kb', 'X'));
+    legend.appendChild(el('span', null, ' Remove   '));
+    legend.appendChild(el('span', 'kb', 'L1/R1'));
+    legend.appendChild(el('span', null, ' Tab   ←/→ Change · Reorder   ↑↓ Move'));
+    hint.appendChild(legend);
+
+    // Exit is a GLOBAL gesture, not a focusable widget: in the Keys sub-tab moveOrScroll routes ↑/↓
+    // to the key list while `subsel` is focused, so focus can never leave it and a focusable chip is
+    // unreachable there. Holding a fixed button works from any tab, any focus, and needs no
+    // traversal. The chip is a permanent legend in the hint bar — visible, never focused.
+    var exitBar = el('span', 'exitchip');
+    exitBar.setAttribute('data-role', 'exit');
+    var exitFill = el('span', 'fill');
+    exitBar.appendChild(exitFill);
+    exitBar.appendChild(el('span', 'kb', 'Y'));
+    exitBar.appendChild(el('span', null, p.exit_hint || 'Hold to exit'));
+    if (p.exit_enabled === false) exitBar.classList.add('off');
+    hint.appendChild(exitBar);
 
     root.appendChild(tabs);
     root.appendChild(content);
@@ -333,7 +363,10 @@
       subLabel: subLabel,
       subContent: subContent,
       keysScroll: keysScroll,
-      picker: null
+      picker: null,
+      exitBar: exitBar,
+      exitFill: exitFill,
+      exitEnabled: p.exit_enabled !== false
     };
 
     function comboText(row) {
@@ -572,6 +605,25 @@
       return 'consumed';
     }
 
+    // Exit is hold-to-confirm, so A on it does not act: it starts the fill and answers 'hold'. The
+    // launcher owns the deadline and either fires the exit or sends hold_cancel on an early release.
+    S.holdStart = function (ms) {
+      if (!S.exitEnabled || !S.exitFill) return 'consumed';
+      var f = S.exitFill;
+      f.style.setProperty('transition', 'none');
+      f.style.setProperty('width', '0');
+      void f.offsetWidth;  // flush, or the transition starts from the old width
+      f.style.setProperty('transition', 'width ' + (ms > 0 ? ms : 0) + 'ms linear');
+      f.style.setProperty('width', '100%');
+      return 'hold';
+    };
+    S.holdCancel = function () {
+      if (!S.exitFill) return 'consumed';
+      S.exitFill.style.setProperty('transition', 'width 140ms ease-out');
+      S.exitFill.style.setProperty('width', '0');
+      return 'consumed';
+    };
+
     S.activate = function () {
       var n = S.focusables[S.focusIdx];
       if (!n) return 'consumed';
@@ -627,6 +679,8 @@
         case 'left': return edit(-1);
         case 'right': return edit(1);
         case 'select': return S.activate();
+        case 'hold_start': return S.holdStart(p.hold_ms);
+        case 'hold_cancel': return S.holdCancel();
         case 'delete': {
           var d = S.focusables[S.focusIdx];
           if (d && d.getAttribute('data-role') === 'langremove') return removeLang(d);

@@ -30,8 +30,9 @@ std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_upd
 
 struct OsdVerdict {
   // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
-  // a one-shot that closes (the Updates buttons).
-  enum class Kind { Consumed, Close, Action, Apply, Gone } kind = Kind::Consumed;
+  // a one-shot that closes (the Updates buttons); Hold = A landed on a hold-to-confirm control (the
+  // Exit row), which acts only once the caller's hold deadline elapses.
+  enum class Kind { Consumed, Close, Action, Apply, Hold, Gone } kind = Kind::Consumed;
   std::string action;
 };
 OsdVerdict parse_verdict(std::string_view verdict);
@@ -50,6 +51,12 @@ struct OsdMenuConfig {
   CaptionSettings* captions = nullptr;
   std::function<void()> on_update_confirm;
   std::function<void()> on_update_ignore;
+  // Fired when the Exit row's hold completes. Null leaves the row inert.
+  std::function<void()> on_exit;
+  // How long A must be held on the Exit row. Also drives the fill animation, so the bar and the
+  // launcher's deadline cannot drift apart.
+  int exit_hold_ms = 600;
+  bool exit_enabled = true;
 };
 
 class OsdMenuController {
@@ -62,12 +69,18 @@ class OsdMenuController {
   // Modal-capture flag, read by the input thread every event.
   bool open() const { return open_.load(std::memory_order_acquire); }
 
-  // Deliberate open (Menu button, off playback). False if the engine is unreachable.
+  // Deliberate open (Menu button), on the watch screen too. False if the engine is unreachable.
   bool open_menu();
   void close_menu();
 
   // Forward one command; act on the verdict; return the raw verdict.
   std::string exec(std::string_view cmd);
+
+  // How long A must be held on the Exit row, for the caller that owns the deadline.
+  int exit_hold_ms() const { return cfg_.exit_hold_ms; }
+
+  // The hold completed: run the exit. Safe to call with no handler configured.
+  void fire_exit();
 
   // Per input-tick with the raw watch signal (LayerState::video_up).
   void tick(bool on_watch);

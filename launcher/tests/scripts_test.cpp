@@ -104,6 +104,19 @@ void test_overlays_use_a_csp_safe_style_path() {
   }
 }
 
+void test_osd_exit_is_a_global_hold_not_a_focusable_control() {
+  // Exit must NOT be focusable. In the Keys sub-tab moveOrScroll routes ↑/↓ to the key list while
+  // `subsel` is focused, so focus can never leave it — a focusable Exit chip is simply unreachable
+  // there (found on-Deck). It is a global hold instead: works from any tab at any focus.
+  const std::string b(ScriptLibrary::instance().body("osd"));
+  assert(has(b, "'exit'"));
+  assert(has(b, "hold_start"));
+  assert(has(b, "hold_cancel"));
+  assert(has(b, "return 'hold'"));
+  // The regression guard: putting the chip back into the focus ring reintroduces the Keys trap.
+  assert(!has(b, "focusables.push(S.exitBar)"));
+}
+
 void test_toast_wraps_instead_of_clipping() {
   // `white-space: pre` never wraps, so a toast wider than the panel was clipped at BOTH edges (it
   // is centred with translateX(-50%)) — silently, with no ellipsis. Observed on-Deck with the
@@ -166,6 +179,7 @@ int main() {
   test_embedded_defaults_present();
   test_overlays_use_a_csp_safe_style_path();
   test_toast_wraps_instead_of_clipping();
+  test_osd_exit_is_a_global_hold_not_a_focusable_control();
   test_overlays_self_heal_across_body_swaps();
   // Keep this LAST: it mutates the process-wide singleton (a fresh process per test binary, so this
   // is safe, but ordering it last keeps the earlier assertions against pristine embedded defaults).
