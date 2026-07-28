@@ -133,6 +133,14 @@ power seconds="300":
 soak n="25":
     ./scripts/soak.sh "{{n}}"
 
+# Does gamescope's touch mode 4 (passthrough) deliver REAL touch events to Blink, or only the pointer
+# emulation we already discard? Needs a human tapping the Deck's panel, and the app running with
+# disable_touch:false -- no_pointer.js would otherwise swallow the events before the probe sees them
+# and it would read zero for the wrong reason. Answers whether a mobile-style gesture layer is
+# buildable on wl_touch or must fall back to pointerdown.
+touch-probe *args:
+    python3 scripts/touch-probe.py {{args}}
+
 # L3 conformance. Serves the pinned js_mse_eme on 127.0.0.1 (secure context for EME + no phone-home),
 # fails only on a REGRESSION against tests/cert/expectations/. NOT YouTube certification (docs/legal.md).
 # Self-hosted js_mse_eme, headless in the container. No Deck needed -- MSE/codec is engine behaviour.
