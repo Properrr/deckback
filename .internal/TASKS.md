@@ -926,6 +926,106 @@ is attached.
 
 ---
 
+## Phase 12 — Feature backlog, probe-first   (findings `durable/feature-landscape.md`)
+
+A ranked survey of what is worth adding *for this device*, derived from the mechanisms already proven
+(page scripts, the `.html5-video-player` API, InnerTube `/next`, evdev, gamescope X atoms, host-side
+helpers, the OSD shell) rather than from a wish list. **Nothing here is started before its probe
+classifies the mechanism** — the discipline that killed `c`-for-captions and chapter-via-`/player`.
+Items that match a row in the finding's §6 dead-end table are not re-investigated.
+
+**Cross-cutting cost, applies to every item:** a new `finish-args` permission strands existing users
+(flatpak-portal refuses a self-update asking for a permission the installed build lacks —
+`self-update.md`). Price it before designing, not after.
+
+*P12.0 — the three probes that decide most of the rest (one Deck session, no code):*
+
+- [ ] **P12.0a — TV-code pairing.** Is Leanback's own "Link with TV code" pairing screen reachable
+      **under our Cobalt UA**? Decides P12.3 outright; if absent, register a page-layer dead end
+      (voice-search shape, input-ux §13.2) and stop.
+- [ ] **P12.0b — player method dump.** `Runtime.evaluate` the method list of
+      `document.querySelector('.html5-video-player')` (the selector, never `#movie_player` — input-ux
+      §18) for playback-rate and quality APIs. Decides P12.5 and the quality-drop half of P12.1.
+- [ ] **P12.0c — dock observation.** Attach an external display and read back what gamescope does to
+      our fixed `1280x800` surface: mode, scaling, still direct-scanned-out? Decides P12.2's shape.
+
+*Tier 1 — Deck-shaped, highest value:*
+
+- [ ] **P12.1 — Audio-only / screen-off listening.** Stop the host-side idle nudge so the panel
+      blanks, hold the logind **sleep**-block inhibitor so Steam does not auto-suspend, and drop
+      video quality if P12.0b says we can. **Known trade-off to design around, not discover:** the
+      sleep-block also blocks a deliberate power-button sleep (why it shipped and was retired in one
+      session, `keep-awake.md`) — scope it to the mode and release on exit. **Probe first:** does
+      Chromium keep decoding/feeding audio with the panel blanked under gamescope (assert
+      `currentTime` advances via `deckctl.py`, and that audio is audible)? **Then measure** the watt
+      delta with `just power` — it is closed-loop now, so this is a number, not a hope.
+- [ ] **P12.2 — Docked output ("a real TV box").** Today the surface is pinned by
+      `--content-shell-host-window-size=1280x800`, so a docked 1080p/4K TV upscales an 800p buffer.
+      After P12.0c: either resize at runtime (`Browser.setWindowBounds` may not exist in
+      content_shell) or relaunch at the new mode through the existing watchdog. Plan §10.2 stretch;
+      the only item here that changes what the product *is*.
+- [ ] **P12.3 — Phone as remote/keyboard (likely zero code).** If P12.0a passes, search, sign-in and
+      queueing move to the phone and the deliverable is a `docs/SUPPORT.md` section — the cheapest
+      available answer to R9 (no auto-OSK under Xwayland, `STEAM+X` soft-lock, QWERTY-forced BT
+      keyboards; input-ux §8.3).
+- [~] **P12.4 — Touch gesture layer.** In flight on `feat/touch-gestures` (`just touch-probe`). The
+      input-ux §11 price argument is **obsolete**: it rested on `EVIOCGRAB`, which `touch-lock.md`
+      disproved on hardware. Live question is gamescope touch **mode 4** passthrough (real `wl_touch`
+      via `wlr_seat_touch_notify_down`) and whether its Xwayland advertises a Direct-mode XI2 device
+      Chromium's `TouchFactory` adopts.
+
+*Tier 2 — cheap, on proven mechanisms (each still gated on its own probe where noted):*
+
+- [ ] **P12.5 — Playback speed.** `<video>.playbackRate` is certain; a TVHTML5 rate API (and whether
+      it resets per video) comes from P12.0b. Needs a free control — see P12.7.
+- [ ] **P12.6 — Sleep timer / "stop after this video."** OSD tab + player pause + inhibitor release,
+      optionally `login1.Suspend`. Handheld-only failure mode; every part already wired.
+- [ ] **P12.7 — Free the rear grips.** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face
+      buttons, so four physical controls are invisible to `input.cpp` by construction (grips are not
+      on the virtual pad, input-ux §1). Repoint two to distinct xinput buttons; unblocks P12.5/P12.1.
+- [ ] **P12.8 — Trackpad → arrow bursts.** Same router as P12.4: Leanback has no pointer scroll, so
+      relative motion must become arrows.
+- [ ] **P12.9 — Battery-aware quality cap.** `quality.max_height` and `render.*` sit in `config.cpp`'s
+      `kIgnoredPrefixes` — declared in `app.json`, consumed by nothing. Wire a real cap and lower it
+      under a battery threshold. First confirm `/sys/class/power_supply` is readable from inside the
+      sandbox.
+- [ ] **P12.10 — Panel refresh matching (OLED).** `platform.md` says the QAM knobs are user-facing
+      settings, not flags we pass — but `touchmode.cpp` proves we can *write gamescope atoms*.
+      Whether a refresh/FPS-cap atom exists and honours a non-Steam client is a **probe, not a known
+      no**. 90 → 60 Hz during 60 fps content is free watts if it lands.
+- [ ] **P12.11 — Stats tab in the OSD.** Decoder name + `kIsPlatformVideoDecoder`, resolution,
+      dropped frames, watts — `scripts/cdp.py:MediaState` already accumulates it. "Am I actually on
+      hardware decode" is a *user* question here: its silent false-pass is what shipped green-band
+      corruption on m114.
+- [ ] **P12.12 — Haptics on seek/chapter confirm.** `haptic.cpp` exists; plan §P3 already sanctions
+      it, off by default.
+
+*Tier 3 — value uncertain, probe the consumer first:*
+
+- [ ] **P12.13 — MPRIS** (plan §10.4). Costs a new `--own-name` (see the cross-cutting note), and
+      Game Mode has no media widget — the only real consumer is BT headset transport buttons via
+      `mpris-proxy`, not running by default on SteamOS. **Probe for a consumer before building the
+      producer.**
+- [ ] **P12.14 — Loudness compression** for the Deck's quiet speakers (Web Audio graph on the media
+      element). Re-assert decoder identity afterwards: a feature that silently drops us to software
+      decode is a regression wearing a feature's clothes.
+
+*Policy-blocked, not tech-blocked:*
+
+- **SponsorBlock / DeArrow** — small now (hot-swappable scripts + verified `seekTo` + InnerTube
+  precedent), out by locked decision **A3** (Flathub acceptance / takedown risk), not by difficulty.
+  Opt-in and default-off barely changes that. Re-taking it is a *risk* decision (plan §10.6); the
+  finding is not an argument for taking it.
+
+**Gate:** P12.0a–c captured on a clean boot with definitive classifications recorded in
+`durable/feature-landscape.md`, and every started Tier-1/2 item traceable to a probe that passed.
+
+**Sequencing:** P12.0 is independent of everything and needs only an attached OLED Deck plus the L2
+CDP harness — run it opportunistically alongside P11.1. No item below Tier 1 starts before the probe
+that names its mechanism.
+
+---
+
 ## Dependency graph (doc §7)
 
 ```
