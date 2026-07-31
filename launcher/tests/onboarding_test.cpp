@@ -384,6 +384,40 @@ void test_dead_engine_leaves_it_hidden() {
   assert(!c.visible());
 }
 
+// The touch gestures are UNDISCOVERABLE without this list: the panel has no affordance drawn on it
+// and no button reveals them. So they must appear in Settings > Keys exactly when the router is
+// actually running -- and must NOT appear when it is not, because teaching a swipe that does
+// nothing is worse than never mentioning touch.
+void test_touch_rows_track_the_router() {
+  OverlayContext off{{{"a", "select"}}, false, false};
+  for (const ControlRow& r : controls_overlay_rows(off)) {
+    assert(r.control.find("Swipe") == std::string::npos);
+    assert(r.control.find("Tap") == std::string::npos);
+  }
+
+  OverlayContext on{{{"a", "select"}}, false, true};
+  const auto rows = controls_overlay_rows(on);
+  bool swipe = false, tap = false, dtap = false, hold = false, edge = false;
+  for (const ControlRow& r : rows) {
+    if (r.control == "Swipe") swipe = true;
+    if (r.control == "Tap") tap = true;
+    if (r.control.rfind("Double-tap", 0) == 0) dtap = true;
+    if (r.control.rfind("Hold", 0) == 0) hold = true;
+    if (r.control.find("left edge") != std::string::npos) edge = true;
+  }
+  assert(swipe && tap && dtap && hold && edge);
+}
+
+// The gesture toggle is a launcher action with no DOM key. Without being named as one it would be
+// dropped from the list as a dead binding -- the row for the only control that turns touch off.
+void test_the_gesture_toggle_is_listed() {
+  OverlayContext ctx{{{"y", "toggle_gestures"}}, false, true};
+  bool found = false;
+  for (const ControlRow& r : controls_overlay_rows(ctx))
+    if (r.action.find("Touch gestures") != std::string::npos) found = true;
+  assert(found);
+}
+
 }  // namespace
 
 DECKBACK_TEST_MAIN(onboarding) {
@@ -414,6 +448,8 @@ DECKBACK_TEST_MAIN(onboarding) {
   test_tick_keeps_the_card_while_it_is_still_painted();
   test_dead_engine_leaves_it_hidden();
 
+  test_touch_rows_track_the_router();
+  test_the_gesture_toggle_is_listed();
   std::puts("onboarding_test: all assertions passed");
   return 0;
 }

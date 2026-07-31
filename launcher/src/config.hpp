@@ -55,6 +55,41 @@ struct Config {
   // not warn.
   bool disable_touch = true;
 
+  // Touch GESTURE router (findings durable/touch-gestures.md, P12.4) — the opposite of the lock,
+  // and mutually exclusive with it. When on, the Navigator injects `touch_gestures.js` instead of
+  // `no_pointer.js`, TouchModeGuard holds gamescope's mode at 4 (passthrough) instead of 0 (hover),
+  // and the launcher polls the page for recognised gestures and dispatches them as trusted keys.
+  //
+  // Default OFF. Real wl_touch delivery was verified on ONE OLED unit on gamescope 3.16.23.4
+  // (2026-07-31) and on no other hardware; `navigator.maxTouchPoints` reads 0 even where it works,
+  // so nothing can feature-detect this. Turning it on where touch is not delivered costs nothing
+  // (no events arrive, the page swallow still makes taps inert) — but it is not a default until a
+  // second unit says so.
+  bool touch_gestures = false;
+
+  // How often the launcher drains the page's gesture queue. This is the whole input latency budget
+  // for touch: a gesture is recognised in the page immediately and then waits up to this long to
+  // become a keypress.
+  int touch_poll_ms = 50;
+
+  // Recogniser thresholds, passed through to the page script. Named for what they do rather than
+  // for the JS keys so app.json reads like settings, not like internals.
+  int touch_step_px = 70;  // travel at which a drag's single move fires
+  // Moves per gesture. 1 = one swipe is one move however far it travels, which is what a
+  // discrete-focus UI wants: Leanback moves SELECTION per key and cannot interpolate, so a
+  // proportional drag silently double-steps on a long swipe. >1 restores proportional scrolling.
+  int touch_max_steps = 1;
+  int touch_edge_px = 40;         // a touch starting this close to the left edge may be Back
+  int touch_long_press_ms = 550;  // hold this long, without moving, for the held-rate gesture
+  int touch_double_tap_ms = 280;  // pairing window for a double-tap seek
+
+  // Press-and-hold playback rate, by zone: the right third (and the centre) speeds up, the left
+  // third slows down. Both are real rates on the ladder the player advertises ([0.25 .. 2],
+  // measured by P12.0b) — a rewind would have needed stepped seeks instead, because Chromium has no
+  // negative playbackRate. Whatever is asked for is snapped to the nearest advertised value.
+  double touch_hold_rate = 2.0;
+  double touch_hold_slow_rate = 0.5;
+
   // First-run controls overlay (findings input-ux §17). `View (⧉)` = captions is unguessable, and
   // SUPPORT.md is invisible from Game Mode. Shown once; the same rows remain available in
   // Settings ▸ Keys via the fixed Menu button.

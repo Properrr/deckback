@@ -36,12 +36,25 @@ handheld.
   1080p playback (well under the ≤9 W target); H.264/AAC fallback built in, AV1 steered away from.
 - **Clean sleep/resume** — suspends and wakes with the app alive, playback and audio intact — no
   black screen, no relaunch.
+- **Chapter-aware seeking** — the L2/R2 triggers jump to the previous/next chapter, falling back to
+  a fixed ±10 s skip on videos that have none.
+- **Fast list traversal** — the right stick scrolls long shelves with an analog speed ramp, so a
+  gentle push crawls and a full deflection flies.
+- **Closed captions on the View button** — with a preferred-language list, an authored-vs-automatic
+  preference, and an on-screen confirmation of what just changed.
+- **Touch gestures, opt-in** — the touchscreen is inert by default; turn it on and the panel behaves
+  like a phone: **swipe** to move the selection, **tap** to select, **double-tap** the left or right
+  third to seek (repeat to jump further), **hold** left for slow motion or right for 2×, and
+  **swipe in from the left edge** to go back. **Y (or the R4 grip)** turns gestures on and off at any
+  time, with a toast and a rumble so the state is never a mystery.
 - **In-app Settings (OSD)** — a controller-driven overlay (Menu button) for key hints, an About
   panel, and self-update status — drawn by the launcher, so a YouTube UI change can't break it.
 - **Self-update, opt-in and painless** — detects a new release from our Flatpak repo and offers to
   install it from inside the app (notify mode; verified end-to-end on both OLED and LCD APUs).
 - **Handheld-appropriate touch** — the touchscreen is made inert by default so a stray palm tap
-  never yanks you out of what you're watching.
+  never yanks you out of what you're watching; gestures are one setting away when you want them.
+- **Stays awake while you watch** — and only while you watch: the screen is allowed to sleep again
+  the moment playback stops, instead of pinning it on for the whole session.
 - **Persistent sign-in**, deep-link/launch integration, single-instance locking, and a TV user-agent
   so YouTube serves the real 10-foot interface.
 - **Sandboxed & self-hosted** — ships as a Flatpak (zypak sandbox, not `--no-sandbox`); no DRM is

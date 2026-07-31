@@ -8,6 +8,31 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.9] - 2026-07-31
+
+### Added
+- **Touch gestures.** The touchscreen can now drive Deckback like a phone. It stays **off** unless
+  you turn it on — set `"disable_touch": false` and `"touch_gestures": true` in `app.json`.
+  - **Swipe** to move the selection — one move per swipe, however far you swipe.
+  - **Tap** to select: activate the highlighted video, or play/pause.
+  - **Double-tap** the left or right third to seek 10 seconds. Keep double-tapping the same side and
+    the jump grows — 20, 30, 40 seconds — instead of nudging you 10 at a time.
+  - **Hold** the left third for slow motion (0.5x) or the right third for fast (2x). Let go and you
+    return to the speed you were watching at, not to normal.
+  - **Swipe in from the left edge** to go back.
+  - Every seek and hold shows an indicator on the side you touched, so a tap is never a guess.
+  - **Y — or the R4 grip — turns gestures on and off at any time**, with a toast and a rumble. The
+    moment you want touch off is usually the moment a palm is already on the screen.
+- **Settings ▸ Keys now lists the touch gestures** when they are on, and the Y button that toggles
+  them. They are otherwise undiscoverable: nothing is drawn on the panel to hint at them.
+- **A fuller feature list** in the About panel and the README.
+
+### Fixed
+- **Deckback would not install over itself if a previous install had been interrupted.** The
+  installer checked the internal name Flatpak gives a sideloaded build, and Flatpak renames it when
+  a leftover from an interrupted install is still present. The install had actually succeeded; only
+  the check failed — and it hid the real reason behind "run it by hand to see why".
+
 ## [0.0.8] - 2026-07-24
 
 ### Fixed
@@ -176,7 +201,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.8...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.9...HEAD
+[0.0.9]: https://github.com/properrr/deckback/releases/tag/v0.0.9
 [0.0.8]: https://github.com/properrr/deckback/releases/tag/v0.0.8
 [0.0.7]: https://github.com/properrr/deckback/releases/tag/v0.0.7
 [0.0.6]: https://github.com/properrr/deckback/releases/tag/v0.0.6

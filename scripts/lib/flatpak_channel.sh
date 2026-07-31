@@ -9,15 +9,31 @@
 DECKBACK_DEV_REMOTE="deckback-origin"
 DECKBACK_OFFICIAL_REMOTE="deckback"
 
+# is_dev_origin <origin> — does this origin name denote a sideloaded bundle?
+#
+# flatpak derives a bundle's origin from its filename, and DISAMBIGUATES with a digit when a remote
+# of that name already exists: a leftover `deckback-origin` (an interrupted uninstall leaves one,
+# and it is `noenumerate`, so `flatpak remotes` does not even show it) makes the next install land
+# on `deckback2-origin`, then `deckback3-origin`. An exact-string check therefore fails on a
+# perfectly good install, and reports it as "the install did not go where we intended" — which is
+# how a healthy deploy came back as an error while the real message (there wasn't one) stayed
+# hidden. Match the family, not one member.
+is_dev_origin() {
+  case "$1" in
+  "$DECKBACK_DEV_REMOTE") return 0 ;;
+  deckback[0-9]*-origin) return 0 ;;
+  *) return 1 ;;
+  esac
+}
+
 # channel_of_origin <origin> — classify an installed app's `Origin:` into the channel the user cares
 # about. "dev" = a local bundle we sideloaded; "official" = the published repo; "unknown" = anything
 # else (e.g. flathub, or a hand-added remote), which the caller reports rather than guessing about.
 channel_of_origin() {
   case "$1" in
-  "$DECKBACK_DEV_REMOTE") echo dev ;;
   "$DECKBACK_OFFICIAL_REMOTE") echo official ;;
   "") echo none ;;
-  *) echo unknown ;;
+  *) if is_dev_origin "$1"; then echo dev; else echo unknown; fi ;;
   esac
 }
 

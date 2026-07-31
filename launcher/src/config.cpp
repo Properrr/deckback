@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <format>
 
 #include "fileio.hpp"
 #include "json.hpp"
@@ -53,6 +54,7 @@ constexpr Field<std::string> kStringFields[] = {
 constexpr Field<bool> kBoolFields[] = {
     {"watchdog.restart_on_crash", &Config::watchdog_restart_on_crash},
     {"disable_touch", &Config::disable_touch},
+    {"touch_gestures", &Config::touch_gestures},
     {"first_run_overlay", &Config::first_run_overlay},
     {"captions_toast", &Config::captions_toast},
     {"caption_remember", &Config::caption_remember},
@@ -80,6 +82,17 @@ constexpr IntField kIntFields[] = {
     {"right_stick_slow_ms", &Config::right_stick_slow_ms, {10, 5'000}},
     {"right_stick_fast_ms", &Config::right_stick_fast_ms, {10, 5'000}},
     {"skip_seconds", &Config::skip_seconds, {1, 600}},
+    // Touch gestures. The poll IS the input latency budget, so the floor is low; 0 would busy-loop
+    // the poll thread against the engine, and anything above ~250 ms feels broken to a finger.
+    {"touch_poll_ms", &Config::touch_poll_ms, {10, 1'000}},
+    // Below ~20 px a drag would fire arrows faster than Leanback can move focus; above the panel
+    // width it could never fire one. touch_max_steps caps moves per GESTURE (1 = one swipe, one
+    // move); 50 is far past useful and exists only to bound a typo.
+    {"touch_step_px", &Config::touch_step_px, {20, 1'280}},
+    {"touch_max_steps", &Config::touch_max_steps, {1, 50}},
+    {"touch_edge_px", &Config::touch_edge_px, {4, 400}},
+    {"touch_long_press_ms", &Config::touch_long_press_ms, {150, 5'000}},
+    {"touch_double_tap_ms", &Config::touch_double_tap_ms, {80, 2'000}},
     {"error_retry_min_ms", &Config::error_retry_min_ms, {100, 600'000}},
     {"error_retry_max_ms", &Config::error_retry_max_ms, {100, 600'000}},
     {"log.log_max_files", &Config::log_max_files, {0, 100}},
@@ -98,6 +111,19 @@ struct LongField {
 
 constexpr LongField kLongFields[] = {
     {"log.log_max_bytes", &Config::log_max_bytes, {0, 1'000'000'000}},
+};
+
+struct RealField {
+  std::string_view path;
+  double Config::*member;
+  double min, max;
+};
+
+// The player advertises [0.25 .. 2] (P12.0b) and hold_scrub.js snaps to the nearest advertised
+// value, so the bounds here only have to keep a typo from producing a stalled or inaudible video.
+constexpr RealField kRealFields[] = {
+    {"touch_hold_rate", &Config::touch_hold_rate, 0.1, 4.0},
+    {"touch_hold_slow_rate", &Config::touch_hold_slow_rate, 0.1, 4.0},
 };
 
 constexpr std::string_view kKeymapFields[] = {"keymap", "keymap_player", "keymap_osk", "keymap_lt",
@@ -202,6 +228,31 @@ std::optional<long> bind_number(const json::Value& root, std::string_view path, 
   return static_cast<long>(*n);
 }
 
+// A fractional setting. Separate from bind_number because that one REJECTS a non-integer, which is
+// the right behaviour for a pixel count and the wrong one for a playback rate: 0.5 is the point.
+std::optional<double> bind_real(const json::Value& root, std::string_view path, double min,
+                                double max) {
+  const json::Value* v = root.find(path);
+  if (!v) return std::nullopt;
+  auto n = v->as_number();
+  if (!n) {
+    warn(std::string("config: '") + std::string(path) + "' must be a number — keeping the default");
+    return std::nullopt;
+  }
+  if (!std::isfinite(*n)) {
+    warn(std::string("config: '") + std::string(path) + "' must be finite — keeping the default");
+    return std::nullopt;
+  }
+  if (*n < min || *n > max) {
+    const double clamped = *n < min ? min : max;
+    warn("config: '" + std::string(path) + "' = " + std::format("{:g}", *n) + " is outside " +
+         std::format("{:g}", min) + ".." + std::format("{:g}", max) + " — clamped to " +
+         std::format("{:g}", clamped));
+    return clamped;
+  }
+  return *n;
+}
+
 std::vector<std::string> bind_string_array(const json::Value& root, std::string_view path) {
   std::vector<std::string> out;
   const json::Value* v = root.find(path);
@@ -251,6 +302,8 @@ bool path_is_known(std::string_view path) {
   for (const auto& f : kIntFields)
     if (f.path == path) return true;
   for (const auto& f : kLongFields)
+    if (f.path == path) return true;
+  for (const auto& f : kRealFields)
     if (f.path == path) return true;
   for (std::string_view p : kKnownExtraPaths)
     if (p == path) return true;
@@ -340,6 +393,8 @@ std::optional<Config> Config::load(const std::string& path) {
     if (auto v = bind_number(root, f.path, f.range)) c.*(f.member) = static_cast<int>(*v);
   for (const auto& f : kLongFields)
     if (auto v = bind_number(root, f.path, f.range)) c.*(f.member) = *v;
+  for (const auto& f : kRealFields)
+    if (auto v = bind_real(root, f.path, f.min, f.max)) c.*(f.member) = *v;
 
   c.cobalt_flags = bind_string_array(root, "cobalt_flags");
   c.caption_languages = bind_string_array(root, "caption_languages");

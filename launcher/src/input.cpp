@@ -14,6 +14,7 @@
 #include <optional>
 
 #include "caption_settings.hpp"
+#include "gestures.hpp"
 #include "log.hpp"
 #include "osdmenu.hpp"
 #include "overlay.hpp"
@@ -58,6 +59,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     : client_(std::move(host), port),
       layers_(opts.layers),
       captions_(opts.captions),
+      gestures_(opts.gestures),
       onboarding_(opts.onboarding),
       update_prompt_(opts.update_prompt),
       osd_(opts.osd),
@@ -112,6 +114,18 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       unmapped.push_back(std::format("keymap.{}={} (no DOM key)", name, value));
     else
       (name == "lt" ? lt_key_ : rt_key_) = std::move(key);
+  }
+
+  gestures_code_ = find_control_for_action(keymap.base, "toggle_gestures");
+  if (gestures_code_ < 0) gestures_code_ = find_control_for_action(keymap.base, "toggle_touch");
+  if (gestures_code_ >= 0 && !gestures_) {
+    // Bound but with no router: touch_gestures is off (the shipped default), or disable_touch won
+    // the exclusion in main() — which warns loudly on its own. The binding ships bound so enabling
+    // the feature is one config key rather than two, so this is the normal state, not a fault.
+    info("input: touch-gesture toggle bound but gestures are off (config touch_gestures) — inert");
+    gestures_code_ = -1;
+  } else if (gestures_code_ >= 0) {
+    info(std::format("input: bind touch gestures (code {}) -> router on/off", gestures_code_));
   }
 
   captions_code_ = find_control_for_action(keymap.base, "toggle_captions");
@@ -283,6 +297,17 @@ void GamepadInput::ensure_haptic() {
   if (!haptic_.attached()) info("input: no force-feedback device — haptics unavailable");
 }
 
+void GamepadInput::toggle_gestures() {
+  if (!gestures_) return;
+  const bool on = gestures_->toggle();
+  info(std::format("input: touch gestures -> {}", on ? "on" : "off"));
+  // input-ux §4: never a silent change. Two channels, because either alone can be missed -- a toast
+  // is invisible to someone looking at their hand, and a rumble is ambiguous on its own.
+  show_toast(client_, on ? "Touch gestures on" : "Touch gestures off", 1400);
+  ensure_haptic();
+  haptic_.rumble(kExitRumbleStrong, kExitRumbleWeak, kExitRumbleMs);
+}
+
 void GamepadInput::toggle_captions() {
   if (!captions_) return;
   const std::string r = client_.eval_string(captions_->toggle_js()).value_or("na");
@@ -444,6 +469,10 @@ void GamepadInput::handle_event(int type, int code, int value) {
     if (value != 1) return;  // press edge only (ignore release=0 and kernel autorepeat=2)
     if (code == captions_code_ && captions_code_ >= 0) {
       toggle_captions();
+      return;
+    }
+    if (code == gestures_code_ && gestures_code_ >= 0) {
+      toggle_gestures();
       return;
     }
     const std::string key = resolve_button(maps_, code, layer(), lt_down_, rt_down_);

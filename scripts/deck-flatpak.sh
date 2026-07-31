@@ -37,8 +37,9 @@ app_data_bytes() {
 }
 
 # Verify the install landed where we intended and left the data intact. Shared by dev + repo.
+# verify_install <channel: dev|official> <data-bytes-before>
 verify_install() {
-  local want_origin="$1" data_before="$2"
+  local want_channel="$1" data_before="$2"
   is_installed || die_assert "after install, $app is not present — the install did not take"
 
   local perms
@@ -47,10 +48,12 @@ verify_install() {
     die_assert "installed $app has no 'input' device permission — the gamepad and touch lock would
     silently do nothing. Rebuild the bundle from a manifest with --device=input."
 
-  local origin
+  local origin channel
   origin="$(installed_origin)"
-  [ "$origin" = "$want_origin" ] ||
-    die_assert "expected origin '$want_origin' but the install reports '$origin'"
+  channel="$(channel_of_origin "$origin")"
+  [ "$channel" = "$want_channel" ] ||
+    die_assert "expected the $want_channel channel but the install reports origin '$origin'
+    (channel: $channel)"
 
   local data_after
   data_after="$(app_data_bytes)"
@@ -87,11 +90,23 @@ do_dev() {
     deck_ssh "$DECK_HOST" "flatpak uninstall --user -y $app" >/dev/null 2>&1 ||
       die_assert "could not remove the existing install"
   fi
-  info "installing the dev bundle ..."
-  deck_ssh "$DECK_HOST" "flatpak install --user -y ~/$base" >/dev/null 2>&1 ||
-    die_assert "flatpak install of the dev bundle failed (run it by hand on the Deck to see why)"
+  # Drop any leftover bundle-origin remotes first, so flatpak reuses the canonical name instead of
+  # disambiguating to deckback2-origin, deckback3-origin, ... They are `noenumerate`, so they are
+  # invisible to a plain `flatpak remotes` and accumulate silently.
+  deck_ssh "$DECK_HOST" \
+    "for r in \$(flatpak remotes --user --all --columns=name 2>/dev/null | grep -E '^deckback[0-9]*-origin\$'); do flatpak remote-delete --user --force \"\$r\" 2>/dev/null || true; done" \
+    >/dev/null 2>&1 || true
 
-  verify_install "$DECKBACK_DEV_REMOTE" "$data_before"
+  info "installing the dev bundle ..."
+  # Keep the real message: this used to be discarded, so a failure said only "run it by hand to see
+  # why" — sending the reader to reproduce something the script had already been told.
+  local install_err
+  install_err="$(deck_ssh "$DECK_HOST" "flatpak install --user -y ~/$base 2>&1" || true)"
+  is_installed ||
+    die_assert "flatpak install of the dev bundle failed:
+$(printf '%s' "$install_err" | tail -5)"
+
+  verify_install dev "$data_before"
   info "on DEV channel now: commit $(installed_commit), version $(installed_version)"
   info "the Steam shortcut is unchanged (same app id) — launch it, or 'just remote-run'."
 }
@@ -130,7 +145,7 @@ do_repo() {
   deck_ssh "$DECK_HOST" "flatpak install --user -y $DECKBACK_OFFICIAL_REMOTE $app" >/dev/null 2>&1 ||
     die_assert "install from the repo failed (is the app published to it yet?)"
 
-  verify_install "$DECKBACK_OFFICIAL_REMOTE" "$data_before"
+  verify_install official "$data_before"
   info "on OFFICIAL channel now: commit $(installed_commit), version $(installed_version)"
   info "future releases arrive with 'flatpak update --user $app' on the Deck."
 }

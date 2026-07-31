@@ -115,6 +115,54 @@ void test_remove_resets_to_default() {
   fs::remove(path);
 }
 
+// `disable_touch` is overlayable so `just touch-probe` can be run against an INSTALLED build: the
+// flag lives in the read-only /app/share/deckback/app.json, and the probe refuses to run with it
+// on.
+// Without this key, re-asking the P12.4 question costs a full bundle build every time.
+void test_disable_touch_is_overlayable_for_the_touch_probe() {
+  const std::string path = tmp_path("deckback_user_test_5.json");
+  fs::remove(path);
+  {
+    ConfigStore s(path);
+    s.load();
+    assert(s.set_bool("disable_touch", false));
+  }
+  ConfigStore s2(path);
+  s2.load();
+  Config c;
+  assert(c.disable_touch == true);  // the shipped default: touch inert
+  s2.apply(c);
+  assert(c.disable_touch == false);
+
+  // And it must survive the trip through a hand-written file, which is how the probe sets it.
+  write_file(path, R"({"disable_touch": false})");
+  ConfigStore s3(path);
+  s3.load();
+  Config c3;
+  s3.apply(c3);
+  assert(c3.disable_touch == false);
+
+  // The gesture router rides the same overlay, and for the same reason: turning it on to test it
+  // must not require building and side-loading a bundle. The two are mutually exclusive, which
+  // main() resolves -- the store's job is only to carry what the user asked for.
+  write_file(path, R"({"disable_touch": false, "touch_gestures": true})");
+  ConfigStore s5(path);
+  s5.load();
+  Config c5;
+  assert(c5.touch_gestures == false);  // shipped default: off
+  s5.apply(c5);
+  assert(c5.touch_gestures == true && c5.disable_touch == false);
+
+  // A non-bool must not silently read as false and leave touch live: the default stands.
+  write_file(path, R"({"disable_touch": "false"})");
+  ConfigStore s4(path);
+  s4.load();
+  Config c4;
+  s4.apply(c4);
+  assert(c4.disable_touch == true);
+  fs::remove(path);
+}
+
 void test_corrupt_overlay_is_ignored_not_fatal() {
   const std::string path = tmp_path("deckback_user_test_4.json");
   write_file(path, "{ this is not json ");
@@ -134,6 +182,7 @@ DECKBACK_TEST_MAIN(config_store) {
   test_set_persist_reload_apply();
   test_non_overlayable_keys_are_refused();
   test_remove_resets_to_default();
+  test_disable_touch_is_overlayable_for_the_touch_probe();
   test_corrupt_overlay_is_ignored_not_fatal();
   std::puts("config_store_test: all assertions passed");
   return 0;

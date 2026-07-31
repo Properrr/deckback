@@ -707,6 +707,15 @@ void test_shipped_app_json_keymap_is_current() {
                 &layer_unmapped);
   assert(layer_unmapped.size() == 1);  // keymap.start=show_controls, absorbed by the OSD
 
+  // The touch-gesture toggle ships bound to Y -- the one free face button (voice search vacated it)
+  // -- so enabling touch_gestures is one config key, not two. It is a LAUNCHER action, so it must
+  // resolve to no DOM key and must not appear in the unmapped list: input-ux §4 requires the touch
+  // state to be controllable from the pad, and a toggle that silently does nothing is worse than
+  // no toggle at all.
+  assert(find_control_for_action(cfg->keymap, "toggle_gestures") == BTN_Y);
+  assert(gestures_action("toggle_gestures"));
+  assert(resolve_binding("toggle_gestures").empty());
+
   for (const auto& [name, value] : cfg->keymap) {
     // Nothing we ship may use a deprecated alias — the compatibility path exists for *remote*
     // hot-swapped configs written against an older launcher, not for our own file.

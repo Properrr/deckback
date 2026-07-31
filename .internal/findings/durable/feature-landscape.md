@@ -2,8 +2,11 @@
 scope: durable
 title: Feature landscape — what is worth adding for the Steam Deck, and what it would cost
 created: 2026-07-28
-status: research (no code, no on-Deck run) — every "unknown" below names the probe that settles it
-method: read the plan, TASKS.md, the registered findings, and the launcher/config surface at ea08f9a
+updated: 2026-07-31 — P12.0b and P12.0c RUN on hardware (OLED); see §8. P12.0a still unrun.
+status: research, partly measured — §8 records what the Deck actually answered; everything else is
+        still a named probe, not a result
+method: read the plan, TASKS.md, the registered findings, and the launcher/config surface at ea08f9a;
+        §8 is `just feature-probe {player,dock}` against a docked OLED unit, 2026-07-31
 sources:
   - .internal/steamdeck-cobalt-youtube-plan.md (§6 phases, §10 stretch backlog, §8 risk register)
   - .internal/findings/durable/{pip,preview,input-ux,platform,keep-awake,page-scripts,touch-lock,self-update}.md
@@ -13,7 +16,8 @@ sources:
 # Feature landscape
 
 A ranked survey of features Deckback could add, written from the mechanisms this project has already
-proven rather than from a wish list. Nothing here was run on a Deck. Every item states the lever it
+proven rather than from a wish list. **Written before any of it was run on a Deck; §8 records what
+the hardware later said, and it contradicts parts of what follows — §8 wins.** Every item states the lever it
 would use, what is genuinely unknown, and the probe that decides it — so no item can be started on a
 guess (the no-guessing policy that killed `c`-for-captions and chapter-via-`/player`).
 
@@ -89,18 +93,21 @@ service — cloud-side, needing no LAN/DIAL server from us.
   would otherwise work (the voice-search lesson, input-ux §13.2).
 - If it is *not* reachable, register it as a page-layer dead end and stop — do not build a remote.
 
-### 2.4 Touch gesture layer (in flight on `feat/touch-gestures`)
+### 2.4 Touch gesture layer — ✅ BUILT AND SHIPPED (2026-07-31)
 
-Flick → arrow bursts, left-edge swipe → Escape, double-tap → seek. Beats the Switch YouTube app's
-most-criticised gap (no touch scrolling at all) and closes input-ux §3/§7.
+> **Done. See `durable/touch-gestures.md`.** Mode 4 delivers real `wl_touch` to Blink, so the router
+> is a page-layer capture listener needing no privileges — `input-ux §11`'s exclusive-grab price
+> never applied. Swipe / tap / double-tap-to-seek (accumulating) / hold-for-slow-or-fast /
+> left-edge-swipe Back, with an on-screen indicator and a Y-or-R4 toggle. Ships **off** by default:
+> one OLED unit, and `navigator.maxTouchPoints` reads 0 even where touch works, so nothing can
+> feature-detect it. **Multitouch is delivered too** (§8.4), which unblocks pinch once a probe says
+> how many points arrive.
 
-**The price dropped since input-ux §11 was written.** That section's "gestures force a permanent
-exclusive grab" argument rested on `EVIOCGRAB` working — and `touch-lock.md` proved on hardware that
-it does not even apply (the launcher, as the seat user, cannot open the panel node; gamescope reads
-it by a path a grab would not intercept). The live question is now gamescope's touch **mode 4**
-passthrough (`wlr_seat_touch_notify_down`, real `wl_touch`, no pointer emulation) and whether its
-Xwayland advertises a Direct-mode XI2 device that Chromium's `TouchFactory` picks up. `just
-touch-probe` answers exactly that with a human at the panel.
+The original entry, kept because its reasoning is why the work was attempted: flick → arrow bursts,
+left-edge swipe → Escape, double-tap → seek. Beats the Switch YouTube app's most-criticised gap (no
+touch scrolling at all) and closes input-ux §3/§7. The price dropped since input-ux §11 was written —
+that section's "gestures force a permanent exclusive grab" argument rested on `EVIOCGRAB` working,
+and `touch-lock.md` proved on hardware that it does not even apply.
 
 ## 3. Tier 2 — cheap, entirely on proven mechanisms
 
@@ -171,3 +178,89 @@ A feature request that matches a row here gets the row, not a re-investigation.
 Each is a `Runtime.evaluate` or an observation, none needs a build, and all three are the same
 probe-first discipline as the touch-lock grab test and the P11 preview spike: *classify the mechanism
 before writing any code that assumes one.*
+
+## 8. What the Deck actually answered (2026-07-31, OLED, `just feature-probe`)
+
+Two of §7's three probes were run on hardware. **P12.0a was not** — every attempt captured the player
+or the browse feed, and the probe refuses to answer from either (see §8.3).
+
+### 8.1 P12.0b — the player exposes BOTH rate and quality  ✅ decisive
+
+Measured during real playback (`#/watch`, 1280x720 decoded, `duration` 4649s). The same dump taken on
+the browse screen is worthless and looks identical to a negative — every quality getter answers `[]`
+or `"unknown"` because nothing is loaded — so the probe now refuses to conclude unless media is
+loaded (`video_is_loaded()`, pinned by an L0 test).
+
+| Call | Answer |
+|---|---|
+| `getAvailablePlaybackRates()` | `[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2]` |
+| `getPlaybackRate()` | `1` |
+| `setPlaybackRate` | exists (throws with no args) |
+| `getAvailableQualityLevels()` | `["hd720", "large", "medium", "small", "auto"]` |
+| `getAvailableQualityLabels()` | `["720p", "480p", "360p", "240p"]` |
+| `getPlaybackQuality()` / `getMaxPlaybackQuality()` | `"hd720"` / `"hd720"` |
+| `getUserPlaybackQualityPreference()` | `"hd720"` |
+| `setPlaybackQuality`, `setPlaybackQualityRange` | exist (throw with no args) |
+| `<video>.playbackRate = 1.25` | **HELD** through 3 s of real playback |
+
+**Unblocks P12.5** (two independent levers: the element alone, or the player API), **the quality-drop
+half of P12.1**, and **the page-side half of P12.9** — the ladder to walk down is real and tops out
+at `hd720`, which matches our 1280x800 surface.
+
+Not established: that the `set*` methods actually *work*. They were only proven to **exist** (a
+no-arg call throws, which is the signal). Call them with real arguments before designing on them.
+
+### 8.2 P12.0c — the external mode never reaches us  ✅ decisive, and it kills the assumed design
+
+Docked over USB-C to a 1920x1200 panel, with the app in the foreground:
+
+```
+DP-1                connected, enabled, advertises 1920x1200
+gamescope screen    1280x800  ->  1280x800     (unchanged)
+our page            1279x799  ->  1279x799     (unchanged)
+:1 xrandr           gamescope connected 1280x800+0+0 — no mode above 1280x800 offered
+TV physically shows the app, mirrored and upscaled  (confirmed by eye)
+```
+
+**Both options §2.2 proposed are dead.** There is no runtime resize (`Browser.setWindowBounds` has
+nothing larger to resize into) and no relaunch-at-the-new-mode (a restart finds the same 1280x800
+screen). The external mode never reaches the nested Xwayland at all, so **P12.2 is a session /
+compositor question — how gamescope is started and how SteamOS switches outputs when docked — and not
+an app-side change.** That is the same wall as `platform.md`'s QAM finding: those are user-facing
+settings, not flags we can pass.
+
+Docked output is therefore **not broken today** — the TV shows the app — it is merely 800p upscaled
+to a 1200p panel. Re-rank P12.2 accordingly: the "highest value per engineering day" claim in §2.2
+rested on us being able to change the output size, and we cannot.
+
+### 8.3 What three failed attempts at P12.0a taught the harness
+
+The pairing probe printed a confident **"NO PAIRING ENTRY — register a page-layer dead end"** twice
+against screens that could never have shown one, and each fix exposed the next:
+
+1. the **watch screen** (28 chars of innerText) — "no text" and "no pairing" are the same zero;
+2. the same screen once **aria-labels** were collected, whose 32 icon labels pushed it past any
+   length threshold — so *length* is not the test;
+3. the **browse feed** (1513 chars at `#/`) — substantive, not the player, and still not where a
+   pairing row lives.
+
+A negative now requires ≥2 settings-screen markers (`Linked devices`, `Restricted Mode`, `Privacy`,
+`Sign out`, …) on the captured screen; the positive is never gated, because seeing the phrase is
+seeing it. All three real captures are L0 fixtures in `tests/harness/test_feature_probe.py`.
+
+One real signal, not a verdict: `IS_MDX_INITIALIZED` and `client-screen-nonce-store` are present in
+the TV app's config under our Cobalt UA. MDX is the lounge subsystem TV-code pairing rides on, so the
+build knows about pairing — which says nothing about whether a *user* can reach the screen.
+
+### 8.4 P12.4 — RESOLVED the same day: touch works, and the capability query lies
+
+`navigator.maxTouchPoints == 0`, `'ontouchstart' in window == false`, `(pointer: coarse) == false` —
+Chromium found no Direct-mode XI2 touch device. **And touch is delivered anyway.** At mode 4, 9 taps
+produced 9 `touchstart` + 9 `touchend` with per-finger ids and page-space coordinates, and the
+gesture layer built on that has been driven by a finger through every gesture
+(`durable/touch-gestures.md`). Multitouch too: 5 multi-finger sequences in 48.
+
+**The lesson generalises past touch.** Every natural feature-detection here — `maxTouchPoints`,
+`'ontouchstart' in window`, `pointer: coarse` — returns the wrong answer on a device where the
+feature works. Anything gated on them would disable itself exactly where it should run, which is why
+the gesture layer is config-gated rather than detected.

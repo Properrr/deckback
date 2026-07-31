@@ -133,6 +133,24 @@ power seconds="300":
 soak n="25":
     ./scripts/soak.sh "{{n}}"
 
+# Does gamescope's touch mode 4 (passthrough) deliver REAL touch events to Blink, or only the pointer
+# emulation we already discard? Needs a human tapping the Deck's panel, and the app running with
+# disable_touch:false -- no_pointer.js would otherwise swallow the events before the probe sees them
+# and it would read zero for the wrong reason. Answers whether a mobile-style gesture layer is
+# buildable on wl_touch or must fall back to pointerdown.
+touch-probe *args:
+    python3 scripts/touch-probe.py {{args}}
+
+# P12.0 feature probes (durable/feature-landscape.md §7): classify a mechanism BEFORE building on it.
+#   player   what the TVHTML5 player exposes for playback rate/quality -> decides P12.5, P12.1, P12.9.
+#            Needs a video actually PLAYING: on the browse screen every quality getter answers []
+#            because nothing is loaded, which reads exactly like "this build has no quality API".
+#   pairing  is Leanback's "Link with TV code" reachable under our UA -> decides P12.3 outright.
+#            Needs a human to open Leanback's own Settings; a miss on the wrong screen is not a no.
+# A negative answer exits 0 -- it is a finding to register. Only "could not observe" is an error (3).
+feature-probe *args:
+    python3 scripts/feature-probe.py {{args}}
+
 # L3 conformance. Serves the pinned js_mse_eme on 127.0.0.1 (secure context for EME + no phone-home),
 # fails only on a REGRESSION against tests/cert/expectations/. NOT YouTube certification (docs/legal.md).
 # Self-hosted js_mse_eme, headless in the container. No Deck needed -- MSE/codec is engine behaviour.

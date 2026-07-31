@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <string_view>
 
 #include "worker.hpp"
@@ -22,9 +23,21 @@ bool focus_class_is_ours(std::string_view wm_class);
 // Best-effort and defensive: if built without libxcb, or X is unreachable (no DISPLAY), or the atom
 // is absent, it logs once and does nothing — the page-level pointer swallow (Option A) still makes
 // taps inert. Runs on its own thread; stop() joins.
+//
+// The held mode is a parameter because the gesture router needs the OPPOSITE of the lock. Mode 4
+// (passthrough) is the only mode that delivers real wl_touch — gamescope's wlserver.cpp calls
+// wlr_seat_touch_notify_down with a per-finger id, while modes 1-3 merely synthesize a mouse button
+// and mode 0 emits nothing but motion. Verified on-Deck 2026-07-31: at mode 4 a finger produces
+// touchstart/touchmove/touchend in Blink; at mode 0 it produces only mousemove. So `disable_touch`
+// holds 0 and `touch_gestures` holds 4, through one guard.
+enum class TouchMode : uint32_t {
+  kHover = 0,        // cursor moves, no click — the disable_touch lock
+  kPassthrough = 4,  // real wl_touch, NO pointer emulation — what the gesture router reads
+};
+
 class TouchModeGuard {
  public:
-  explicit TouchModeGuard(int poll_ms = 750);
+  explicit TouchModeGuard(int poll_ms = 750, TouchMode mode = TouchMode::kHover);
   ~TouchModeGuard();
 
   void start();
@@ -33,8 +46,10 @@ class TouchModeGuard {
  private:
   void loop();
 
-  // [[maybe_unused]]: the no-xcb build of loop() never reads it (clang's -Wunused-private-field).
+  // [[maybe_unused]]: the no-xcb build of loop() never reads these (clang's
+  // -Wunused-private-field).
   [[maybe_unused]] int poll_ms_;
+  [[maybe_unused]] TouchMode mode_;
   WorkerThread worker_;
 };
 

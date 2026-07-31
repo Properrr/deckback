@@ -30,8 +30,8 @@ namespace {
 constexpr xcb_window_t kNoWindow = XCB_NONE;
 constexpr xcb_atom_t kNoAtom = XCB_ATOM_NONE;
 
-constexpr uint32_t kHoverMode =
-    0;  // gamescope --default-touch-mode: 0=hover (cursor moves, no click)
+// gamescope --default-touch-mode: 0=hover, 1/2/3=synthesized click, 4=passthrough (real wl_touch).
+// Which one we hold is TouchModeGuard's `mode_` — see the enum's comment in touchmode.hpp.
 
 // Read a 32-bit CARDINAL property, or -1 if absent/short.
 long read_cardinal(xcb_connection_t* c, xcb_window_t w, xcb_atom_t prop) {
@@ -108,13 +108,17 @@ void TouchModeGuard::loop() {
 
   bool announced = false;
   for (;;) {
-    if (our_window_is_focused(c, root) && read_cardinal(c, root, mode_atom) != kHoverMode) {
-      uint32_t v = kHoverMode;
+    const uint32_t want = static_cast<uint32_t>(mode_);
+    if (our_window_is_focused(c, root) && read_cardinal(c, root, mode_atom) != want) {
+      uint32_t v = want;
       xcb_change_property(c, XCB_PROP_MODE_REPLACE, root, mode_atom, XCB_ATOM_CARDINAL, 32, 1, &v);
       xcb_flush(c);
       if (!announced) {
-        info(
-            "touch: gamescope touch mode held at hover while focused (taps move cursor, no click)");
+        info(mode_ == TouchMode::kPassthrough
+                 ? "touch: gamescope touch mode held at passthrough while focused (real touch "
+                   "events reach the page for the gesture router)"
+                 : "touch: gamescope touch mode held at hover while focused (taps move cursor, no "
+                   "click)");
         announced = true;
       }
     }
@@ -139,7 +143,8 @@ void TouchModeGuard::loop() {
 
 namespace deckback {
 
-TouchModeGuard::TouchModeGuard(int poll_ms) : poll_ms_(poll_ms > 0 ? poll_ms : 750) {}
+TouchModeGuard::TouchModeGuard(int poll_ms, TouchMode mode)
+    : poll_ms_(poll_ms > 0 ? poll_ms : 750), mode_(mode) {}
 
 TouchModeGuard::~TouchModeGuard() { stop(); }
 

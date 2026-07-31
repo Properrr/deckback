@@ -69,6 +69,16 @@ void Navigator::loop() {
     if (ScriptLibrary::instance().install_sticky(client_, "no_pointer"))
       info("navigator: touch disabled — page pointer/mouse/touch events swallowed");
   }
+  if (policy_.touch_gestures) {
+    // P12.4: the gesture router reads REAL touch events (gamescope mode 4 delivers wl_touch into
+    // Blink — verified on-Deck 2026-07-31) and swallows them, so Leanback cannot double-act. The
+    // launcher polls its queue and dispatches trusted keys (gestures.cpp). Sticky, because a
+    // reload must not leave the panel live-but-unrouted.
+    if (ScriptLibrary::instance().install_sticky(client_, "touch_gestures"))
+      info(
+          "navigator: touch gesture router installed (drag/flick, edge-swipe Back, double-tap "
+          "seek)");
+  }
   if (policy_.mic_autogrant) {
     const std::string origin = origin_of(url_);
     if (!origin.empty() && client_.grant_permissions(origin, "audioCapture"))

@@ -32,6 +32,7 @@ constexpr Label kActionLabels[] = {
     {"back", "Back"},
     {"playpause", "Play / pause"},
     {"toggle_captions", "Captions"},
+    {"toggle_gestures", "Touch gestures on / off"},
     {"scrub_back", "Scrub back"},
     {"scrub_fwd", "Scrub forward"},
     {"seek_back_10", "Scrub back"},  // deprecated aliases still resolve, so they still print
@@ -48,7 +49,8 @@ constexpr Label kActionLabels[] = {
 // a retired compatibility action; Menu is fixed to Settings and is appended below, independent of
 // the keymap.
 bool is_launcher_action(std::string_view value) {
-  return skip_action_sign(value) != 0 || chapter_action_sign(value) != 0 || captions_action(value);
+  return skip_action_sign(value) != 0 || chapter_action_sign(value) != 0 ||
+         captions_action(value) || gestures_action(value);
 }
 
 }  // namespace
@@ -89,6 +91,17 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx) {
   rows.push_back({"Menu (☰)", "Settings"});
   rows.push_back({"D-pad / Left stick", "Move focus"});
   if (ctx.right_stick_scroll) rows.push_back({"Right stick", "Fast scroll"});
+
+  // Touch, only when the router is actually running. The panel is inert by default, so these rows
+  // are the only place a user could learn the gestures exist — there is no affordance on screen and
+  // no button to discover them with.
+  if (ctx.touch_gestures) {
+    rows.push_back({"Swipe", "Move focus"});
+    rows.push_back({"Tap", "Select"});
+    rows.push_back({"Double-tap left / right", "Seek back / forward (repeat to go further)"});
+    rows.push_back({"Hold left / right", "Slow motion / fast"});
+    rows.push_back({"Swipe in from the left edge", "Back"});
+  }
   return rows;
 }
 

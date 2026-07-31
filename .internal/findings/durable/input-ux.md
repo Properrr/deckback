@@ -83,6 +83,12 @@ on-device). Consequences:
   point) — so a tap already "clicks" a Leanback tile = activate, for free. True multitouch/gestures
   need per-game "Touch API Pass-through" and gamescope's multitouch story is limited; **don't rely on
   multitouch.** [Steamworks Deck FAQ](https://partner.steamgames.com/doc/steamdeck/faq)
+  > **★ RETIRED 2026-07-31 → [durable/touch-gestures.md](touch-gestures.md) §4.** Both halves of this
+  > bullet are measured false on hardware. At gamescope touch mode **4 (passthrough)** the panel
+  > delivers real `wl_touch` to Blink — not pointer emulation — and the gesture router's
+  > `multiFinger` counter reached **5 in 48 sequences** of ordinary use, i.e. Blink reported more
+  > than one simultaneous point. The claim above came from Valve's FAQ, not from a measurement.
+  > Still unknown, and required before designing a pinch: **how many** points arrive.
   > **⚠ "For free" has an expiry date (§11).** It is free only for as long as we never *read* the
   > touchscreen. The moment we add a gesture layer we must grab the node, gamescope stops seeing
   > touch, and tap-to-activate becomes our code to write.

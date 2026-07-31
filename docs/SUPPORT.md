@@ -126,8 +126,38 @@ Two mechanisms enforce this, and the cursor is hidden while Deckback is focused:
   clicks (Steam's own overlay touch is unaffected).
 
 Verified on an OLED Deck (2026-07-10): a tap produced cursor movement and **no** click, and did not
-navigate. The **controller is never affected**. To get tap-to-activate back, set
-`"disable_touch": false` in `app.json` and relaunch.
+navigate. The **controller is never affected**.
+
+### Touch gestures (opt-in)
+
+If you would rather use the panel than switch it off, Deckback has a phone-style gesture layer. Set
+**`"disable_touch": false`** and **`"touch_gestures": true`** and relaunch — they are opposites, so
+if you leave both on the lock wins and Deckback says so in its log.
+
+| Gesture | What it does |
+|---|---|
+| Swipe | Moves the selection one step, however far you swipe |
+| Tap | Selects — activates the highlighted video, or plays/pauses |
+| Double-tap the left / right third | Seeks back / forward 10 s. Keep double-tapping the same side and it grows: 20 s, 30 s, 40 s |
+| Hold the left third | Slow motion (0.5×) until you let go |
+| Hold the right third | Fast (2×) until you let go |
+| Swipe in from the left edge | Back |
+| **Y**, or the **R4** grip | Turns gestures on and off, with a toast and a rumble |
+
+Every seek and hold shows an indicator on the side you touched (`+30 s`, `0.5x`), because touch has
+no button to feel and no key to look at. Letting go of a hold returns to the speed you were watching
+at, not to 1× — so your own speed setting survives.
+
+Tunable in `app.json` if the feel is not right for you: `touch_step_px` (how far a drag travels
+before it moves), `touch_max_steps` (moves per swipe; raise it above 1 for proportional scrolling),
+`touch_hold_rate` / `touch_hold_slow_rate` (the two hold speeds — the player offers 0.25× to 2×),
+`touch_long_press_ms`, and `touch_double_tap_ms`.
+
+**Known limits.** Gestures ship **off** because touch delivery has only been confirmed on one OLED
+Deck — `navigator.maxTouchPoints` reports 0 even where touch demonstrably works, so Deckback cannot
+detect support and simply do the right thing. Turning it on where touch is not delivered is harmless:
+no events arrive and the panel stays inert. Multi-finger gestures (pinch) are not implemented — any
+touch with a second finger is ignored on purpose.
 
 > An earlier version tried to *lock* the panel with an exclusive `EVIOCGRAB` grab, toggled by an
 > L3+R3 chord. That approach is **dead**: on SteamOS the compositor — not the app — reads the

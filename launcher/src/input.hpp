@@ -14,6 +14,7 @@ namespace deckback {
 class UpdatePromptController;
 class OsdMenuController;
 class CaptionSettings;
+class GestureRouter;
 
 // Everything GamepadInput is wired to. Bundled so the call site in main() labels what it passes.
 //
@@ -34,6 +35,8 @@ struct GamepadOptions {
   OnboardingController* onboarding = nullptr;
   UpdatePromptController* update_prompt = nullptr;  // feeds the OSD Updates tab; null = feature off
   OsdMenuController* osd = nullptr;                 // in-app Settings menu; null = feature off
+  // Touch gesture router (P12.4); null = touch gestures are off, and the toggle binding is inert.
+  GestureRouter* gestures = nullptr;
 };
 
 // Phase 3 input (S0.6 mechanism = key injection). Reads the gamepad directly from evdev
@@ -80,6 +83,11 @@ class GamepadInput {
   void osd_event(int type, int code, int value);
   // When the menu is closed, open it on the Menu press edge (off playback). True = consumed.
   bool osd_open_edge(int type, int code, int value);
+  // Toggle the touch gesture router and toast the new state. input-ux §4: the touch state must
+  // never change silently -- a user who cannot tell whether touch is live will not trust either
+  // state. Haptic + toast, both directions.
+  void toggle_gestures();
+
   // Toggle Leanback captions over CDP (config/scripts/toggle_captions.js) and toast the new state.
   // youtube.com/tv ignores the desktop `c` hotkey, so captions are a launcher action driven through
   // the player's caption module, not a dispatched key (findings input-ux.md §8.1).
@@ -116,6 +124,8 @@ class GamepadInput {
   // rather than dispatching a DOM key. Not owned; may be null.
   int captions_code_ = -1;
   CaptionSettings* captions_ = nullptr;
+  GestureRouter* gestures_ = nullptr;
+  int gestures_code_ = -1;  // evdev code bound to the gesture toggle, or -1
   // Auto-apply captions on a video start (Local-override mode). A video's caption module, tracklist
   // and — crucially — its translation list load in stages a beat after the video, and YouTube may
   // auto-enable its own default caption late. So on the watch-view transition we open a short

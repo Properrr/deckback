@@ -16,9 +16,15 @@ namespace deckback {
 namespace {
 namespace fs = std::filesystem;
 
+// `disable_touch` is here for a testability reason, not a settings one: the flag is baked into the
+// read-only /app/share/deckback/app.json, so on an installed Flatpak there was no way to turn it
+// off short of building and side-loading a whole bundle -- and `just touch-probe` REFUSES to run
+// with it on, because no_pointer.js would make it read zero for the wrong reason. P12.4 was gated
+// behind a full release build on every machine that ever wants to re-ask the question, including
+// after a Cobalt bump. One overlay key retires that.
 constexpr std::string_view kOverlayable[] = {
-    "captions_toast",    "caption_remember", "caption_type", "caption_language",
-    "caption_languages", "caption_control",  "caption_on",
+    "captions_toast",  "caption_remember", "caption_type",  "caption_language", "caption_languages",
+    "caption_control", "caption_on",       "disable_touch", "touch_gestures",
 };
 
 const json::Value* find_member(const std::vector<json::Member>& members, std::string_view key) {
@@ -74,6 +80,10 @@ void ConfigStore::apply(Config& c) const {
     if (auto b = v->as_bool()) c.caption_on = *b;
   if (const json::Value* v = find_member(overlay_, "caption_language"))
     if (auto s = v->as_string()) c.caption_language = *s;
+  if (const json::Value* v = find_member(overlay_, "disable_touch"))
+    if (auto b = v->as_bool()) c.disable_touch = *b;
+  if (const json::Value* v = find_member(overlay_, "touch_gestures"))
+    if (auto b = v->as_bool()) c.touch_gestures = *b;
   if (const json::Value* v = find_member(overlay_, "caption_languages"))
     if (const std::vector<json::Value>* a = v->as_array()) {
       std::vector<std::string> langs;

@@ -20,6 +20,11 @@ namespace deckback {
 // rather than by a DOM key.
 std::string resolve_binding(std::string_view value);
 
+// Whether `value` is the touch-gesture toggle action. input-ux §4 requires the touch state to be
+// user-controllable from the controller and never silent, which is why this is a binding and not a
+// settings-menu-only switch: the reason to turn touch off is usually a palm on the panel RIGHT NOW.
+bool gestures_action(std::string_view value);
+
 // Whether `value` is the caption-toggle launcher action ("toggle_captions"/"captions"). Like the
 // chapter/skip seeks it has no DOM key: youtube.com/tv ignores the desktop `c` hotkey, so the input
 // layer drives captions through the player's caption module over CDP (config/scripts/

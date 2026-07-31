@@ -44,7 +44,8 @@ struct ActionAlias {
 // caption hotkey, which youtube.com/tv (Leanback) receives and ignores — Google publishes no key
 // contract for the TV app (findings input-ux.md §8.1). It is now a launcher action
 // (captions_action), driven through the player's caption module over CDP like the chapter/skip
-// seeks, so it has no DOM key.
+// seeks, so it has no DOM key. `toggle_gestures` (gestures_action) is absent for the same reason:
+// it switches the touch gesture router on and off inside the launcher.
 constexpr ActionAlias kActionAliases[] = {
     {"select", "Enter", ""},
     {"back", "Escape", ""},
@@ -161,7 +162,10 @@ std::vector<ButtonBinding> build_button_map(
   std::vector<ButtonBinding> out;
   for (const auto& [name, value] : keymap) {
     if (name == "dpad" || name == "lt" || name == "rt") continue;  // not EV_KEY buttons
-    if (captions_action(value)) continue;
+    // Launcher actions have no DOM key by design and must not be reported as unmapped: they are
+    // handled by input.cpp, not dispatched. Reporting them would train the reader to ignore the
+    // unmapped list, which is the one place a genuinely dead binding shows up.
+    if (captions_action(value) || gestures_action(value)) continue;
     const ControlCode* cc = nullptr;
     for (const ControlCode& c : kControlCodes)
       if (c.name == name) cc = &c;
@@ -198,6 +202,10 @@ int chapter_action_sign(std::string_view value) {
 
 bool captions_action(std::string_view value) {
   return value == "toggle_captions" || value == "captions";
+}
+
+bool gestures_action(std::string_view value) {
+  return value == "toggle_gestures" || value == "touch_gestures" || value == "toggle_touch";
 }
 
 std::string caption_language_subtag(std::string_view locale) {

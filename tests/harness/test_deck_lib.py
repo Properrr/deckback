@@ -18,9 +18,12 @@ The two that have already bitten:
 """
 
 import os
+import shutil
 import socket
 import struct
+import subprocess
 import sys
+import tempfile
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -372,6 +375,111 @@ class TestSshHostname(unittest.TestCase):
         self.assertIsNone(sshlib.ssh_hostname(None))
         self.assertIsNone(sshlib.ssh_hostname(""))
         self.assertIsNone(sshlib.ssh_hostname("deck@"))
+
+
+class TestDeckAddressDerivation(unittest.TestCase):
+    """`deck_host()`/`deck_port()` must find the Deck that `scripts/lib.sh` finds.
+
+    `.steamdeck_auth` (STEAMDECK_USER + STEAMDECK_IP) is the documented place for the Deck's address.
+    Python read only `$DECK_HOST` and a `DECK_HOST=` line in `.env`, so it saw no Deck at all unless
+    a shell recipe had already sourced lib.sh and exported one. That is invisible while every entry
+    point is a `scripts/*.sh`, and `just touch-probe` -- the first recipe to run a Python entry point
+    directly -- printed "no Deck reachable at <unset DECK_HOST>:22" against a Deck answering SSH on
+    the previous line. Third instance of one bug (harness.md F14, the lib.sh export), so the tests
+    pin the *agreement* between the two implementations, not just this one's behaviour.
+    """
+
+    def setUp(self):
+        self._tmp = tempfile.mkdtemp()
+        self._cwd = os.getcwd()
+        os.chdir(self._tmp)
+        # Point the derivation at the scratch repo: otherwise the developer's own .steamdeck_auth
+        # answers every one of these, and the suite passes on this machine and nowhere else.
+        self._root = sshlib._REPO_ROOT
+        sshlib._REPO_ROOT = self._tmp
+        self._env = {k: os.environ.pop(k) for k in ("DECK_HOST", "DECK_PORT") if k in os.environ}
+
+    def tearDown(self):
+        sshlib._REPO_ROOT = self._root
+        os.chdir(self._cwd)
+        shutil.rmtree(self._tmp, ignore_errors=True)
+        os.environ.update(self._env)
+
+    def _write(self, name, text):
+        with open(os.path.join(self._tmp, name), "w") as f:
+            f.write(text)
+
+    def test_composes_the_host_from_steamdeck_auth(self):
+        # The regression: this returned None, and every caller reported an unreachable Deck.
+        self._write(".steamdeck_auth", "STEAMDECK_USER=deck\nSTEAMDECK_IP=192.168.128.229\n")
+        self.assertEqual(sshlib.deck_host(), "deck@192.168.128.229")
+
+    def test_exported_env_wins_so_a_child_agrees_with_its_recipe(self):
+        self._write(".steamdeck_auth", "STEAMDECK_USER=deck\nSTEAMDECK_IP=10.0.0.1\n")
+        os.environ["DECK_HOST"] = "deck@override"
+        self.assertEqual(sshlib.deck_host(), "deck@override")
+
+    def test_steamdeck_auth_outranks_env_file(self):
+        # lib.sh sources .env first and .steamdeck_auth second, then composes: the auth file wins.
+        self._write(".env", "DECK_HOST=deck@from-env-file\n")
+        self._write(".steamdeck_auth", "STEAMDECK_USER=deck\nSTEAMDECK_IP=10.0.0.1\n")
+        self.assertEqual(sshlib.deck_host(), "deck@10.0.0.1")
+
+    def test_env_file_is_still_honoured_alone(self):
+        self._write(".env", "DECK_HOST=deck@from-env-file\n")
+        self.assertEqual(sshlib.deck_host(), "deck@from-env-file")
+
+    def test_half_a_pair_composes_nothing(self):
+        # "deck@" is a destination ssh accepts and cannot connect to. None says "not configured".
+        self._write(".steamdeck_auth", "STEAMDECK_USER=deck\n")
+        self.assertIsNone(sshlib.deck_host())
+        self._write(".steamdeck_auth", "STEAMDECK_IP=10.0.0.1\n")
+        self.assertIsNone(sshlib.deck_host())
+
+    def test_nothing_configured_is_none_not_a_guess(self):
+        self.assertIsNone(sshlib.deck_host())
+
+    def test_comments_quotes_and_export_are_parsed(self):
+        self._write(
+            ".steamdeck_auth",
+            '# the Deck\nexport STEAMDECK_USER="deck"\nSTEAMDECK_IP=\'10.0.0.7\'\n\n',
+        )
+        self.assertEqual(sshlib.deck_host(), "deck@10.0.0.7")
+
+    def test_port_comes_from_the_auth_file(self):
+        # A wrong port is worse than "no Deck": it is a refusal from some other machine.
+        self._write(".steamdeck_auth", "STEAMDECK_USER=deck\nSTEAMDECK_IP=10.0.0.1\nSTEAMDECK_PORT=2222\n")
+        self.assertEqual(sshlib.deck_port(), 2222)
+
+    def test_port_defaults_and_never_raises(self):
+        self.assertEqual(sshlib.deck_port(), 22)
+        self._write(".steamdeck_auth", "STEAMDECK_PORT=not-a-number\n")
+        self.assertEqual(sshlib.deck_port(), 22)
+        os.environ["DECK_PORT"] = "2200"
+        self.assertEqual(sshlib.deck_port(), 2200)
+
+    def test_agrees_with_lib_sh_on_the_same_fixture(self):
+        """The parity check. Either implementation may change; they may not disagree.
+
+        Same scratch-repo trick as tests/harness/test_deck_env.sh: lib.sh derives its repo root from
+        its own path, so the copy has to sit at <tmp>/scripts/lib.sh for <tmp> to be that root.
+        """
+        if not shutil.which("bash"):
+            self.skipTest("no bash")
+        real_lib = os.path.join(_HERE, "..", "..", "scripts", "lib.sh")
+        os.mkdir(os.path.join(self._tmp, "scripts"))
+        shutil.copy(real_lib, os.path.join(self._tmp, "scripts", "lib.sh"))
+        self._write(".steamdeck_auth", "STEAMDECK_USER=deck\nSTEAMDECK_IP=192.168.128.229\n")
+        p = subprocess.run(
+            ["bash", "-c", '. scripts/lib.sh >/dev/null 2>&1; printf "%s\\n%s" "$DECK_HOST" "$DECK_PORT"'],
+            cwd=self._tmp,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(p.returncode, 0, p.stderr)
+        shell_host, shell_port = p.stdout.split("\n")
+        self.assertEqual(sshlib.deck_host(), shell_host)
+        self.assertEqual(sshlib.deck_port(), int(shell_port))
 
 
 class TestSshHelpers(unittest.TestCase):

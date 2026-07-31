@@ -37,25 +37,86 @@ class NoDevTools(RuntimeError):
     """The Deck is reachable but the app is not exposing DevTools. ENVIRONMENT (3), not a defect."""
 
 
+# The repo root, as lib.sh computes it from its own path before `cd`-ing there. A module-level name
+# so the L0 tests can point the derivation at a scratch repo instead of the developer's real one.
+_REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
+
+
+def _shell_assignments(path):
+    """`KEY=value` pairs from a sourceable shell fragment. Not a shell: no expansion, no execution.
+
+    Enough for `.env` and `.steamdeck_auth`, which lib.sh only ever `.`-sources for plain literals.
+    A line it cannot parse is skipped rather than guessed at.
+    """
+    out = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                key = key.removeprefix("export ").strip()
+                if key.isidentifier():
+                    out[key] = value.strip().strip("'\"")
+    except OSError:
+        pass
+    return out
+
+
+def _deck_files():
+    """Merged `.env` then `.steamdeck_auth`, matching lib.sh's source order (the latter wins).
+
+    Read from the repo root *last*, because that is the only directory lib.sh ever reads: it `cd`s
+    there first. The cwd is consulted only as a fallback for a caller running from somewhere else.
+    """
+    merged = {}
+    for directory in dict.fromkeys((os.getcwd(), _REPO_ROOT)):
+        for name in (".env", ".steamdeck_auth"):
+            merged.update(_shell_assignments(os.path.join(directory, name)))
+    return merged
+
+
 def deck_host():
-    """DECK_HOST from the environment, else from .env — the same source `scripts/lib.sh` reads."""
+    """The Deck's ssh destination, derived exactly as `scripts/lib.sh` derives it.
+
+    `.steamdeck_auth` (gitignored, `STEAMDECK_USER` + `STEAMDECK_IP`) is the documented place to put
+    the Deck's address, and lib.sh composes `DECK_HOST` from it and **exports** it, so every Python
+    tool launched through a `scripts/*.sh` recipe inherits a correct value.
+
+    This function used to read only `$DECK_HOST` and a `DECK_HOST=` line in `.env` — neither of which
+    a Deck configured the documented way ever sets. That is invisible for as long as every entry
+    point is a shell script, and `just touch-probe` is the first recipe to call a Python entry point
+    **directly**: it answered "no Deck reachable at <unset DECK_HOST>:22" against a Deck answering
+    SSH on the previous line. Same shape as harness.md F14, which hid the fact that the L2 suite had
+    never once run, and as the export bug lib.sh's own comment records — "a fix that has to be
+    repeated per caller is a fix that will be forgotten by the next caller". So the derivation lives
+    here, next to the reader, rather than in the next caller's shim.
+
+    Precedence: `$DECK_HOST` (what lib.sh exports, so a child of a recipe agrees with its parent by
+    construction) > `.steamdeck_auth` > `.env`.
+    """
     v = os.environ.get("DECK_HOST")
     if v:
         return v
-    for path in (".env", os.path.join(os.path.dirname(__file__), "../../../.env")):
-        try:
-            with open(path) as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith("DECK_HOST="):
-                        return line.split("=", 1)[1].strip().strip("'\"")
-        except OSError:
-            pass
-    return None
+    files = _deck_files()
+    user, ip = files.get("STEAMDECK_USER"), files.get("STEAMDECK_IP")
+    if user and ip:
+        return f"{user}@{ip}"
+    return files.get("DECK_HOST") or None
 
 
 def deck_port():
-    return int(os.environ.get("DECK_PORT", "22"))
+    """The Deck's ssh port: `$DECK_PORT`, else `STEAMDECK_PORT` from `.steamdeck_auth`, else 22.
+
+    Same failure as `deck_host()` and worse to diagnose: a wrong port is not "no Deck configured",
+    it is a connection refused by something that may well be a different machine.
+    """
+    v = os.environ.get("DECK_PORT") or _deck_files().get("STEAMDECK_PORT")
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 22
 
 
 def ssh_hostname(dest):

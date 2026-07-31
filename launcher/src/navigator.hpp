@@ -41,6 +41,13 @@ struct NavPolicy {
   std::string error_hint;
 
   bool disable_pointer = false;  // inject no_pointer.js to swallow touch-as-mouse events (Option A)
+
+  // Inject touch_gestures.js: the gesture router (P12.4). MUTUALLY EXCLUSIVE with disable_pointer,
+  // and not by convention -- no_pointer.js registers a document-start capture listener that calls
+  // stopImmediatePropagation(), so with both installed the router would receive nothing and the
+  // touchscreen would look broken rather than misconfigured. main() enforces the exclusion; this
+  // comment is here because the two fields sit next to each other and look independent.
+  bool touch_gestures = false;
 };
 
 class Navigator {

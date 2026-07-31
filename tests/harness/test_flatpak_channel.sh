@@ -29,6 +29,16 @@ eq  "channel: not installed"          none     "$(channel_of_origin '')"
 eq  "channel: flathub is unknown"     unknown  "$(channel_of_origin flathub)"
 eq  "channel: stray remote unknown"   unknown  "$(channel_of_origin some-other-remote)"
 
+# flatpak DISAMBIGUATES a bundle's origin with a digit when the canonical name is already taken, and
+# a leftover origin remote is `noenumerate` so it is invisible to `flatpak remotes`. Treating the
+# numbered form as "not our dev channel" reported a healthy deploy as a failed one (2026-07-31), and
+# the exact-name assertion fired instead of the install error that would have explained anything.
+eq  "channel: numbered dev origin"    dev      "$(channel_of_origin deckback2-origin)"
+eq  "channel: twice-numbered origin"  dev      "$(channel_of_origin deckback17-origin)"
+# The family must not swallow a lookalike, or a hand-added remote would read as our own sideload.
+eq  "channel: lookalike is unknown"   unknown  "$(channel_of_origin deckback-origin-backup)"
+eq  "channel: prefix is unknown"      unknown  "$(channel_of_origin deckbackfoo)"
+
 # ---- flatpakrepo_url_from_repo ------------------------------------------------------------------
 eq  "url: strips /repo/ and appends descriptor" \
     "https://properrr.github.io/deckback/deckback.flatpakrepo" \

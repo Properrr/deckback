@@ -147,6 +147,7 @@ add_library(deckback_core STATIC
   src/json.cpp
   src/config.cpp
   src/config_store.cpp
+  src/gestures.cpp
   src/fileio.cpp
   src/pageoverlay.cpp
   src/http.cpp
@@ -233,7 +234,8 @@ if(BUILD_TESTING)
   endfunction()
 
   deckback_test_group(pure
-    json util sha256 config config_store caption_settings caption_fuzz about scripts log profile)
+    json util sha256 config config_store caption_settings caption_fuzz about scripts log profile
+    gestures)
 
   deckback_test_group(cdp devtools navigator player errorpage)
 
@@ -258,7 +260,14 @@ if(BUILD_TESTING)
     add_test(NAME js_osd_updates_nav
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/osd_updates_nav.test.js)
+    # The gesture recogniser, driven by synthetic touch streams. A threshold that reads a tap as a
+    # drag, or an edge swipe as a scroll, does not fail on hardware -- it just feels wrong, which is
+    # the hardest kind of bug to notice and the easiest to cover here.
+    add_test(NAME js_touch_gestures
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/touch_gestures.test.js)
   else()
-    message(STATUS "node not found — skipping the JS tests (js_toggle_captions, js_osd_updates_nav)")
+    message(STATUS "node not found — skipping the JS tests (js_toggle_captions, js_osd_updates_nav,"
+                   " js_touch_gestures)")
   endif()
 endif()

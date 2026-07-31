@@ -15,8 +15,14 @@
     <ul>
       <li>Controller-native — every button is mapped at the launcher, no touchscreen required</li>
       <li>Chapter seeking — jump between chapters with the L2 and R2 triggers</li>
+      <li>Fast list traversal on the right stick, with an analog speed ramp</li>
+      <li>Closed captions on the View button, with your preferred languages remembered</li>
+      <li>Touch gestures, off by default — swipe to move, tap to select, double-tap to seek,
+          hold left or right for slow motion or 2x, swipe in from the left edge to go back</li>
+      <li>An in-app Settings menu on the Menu button: controls, captions, updates and exit</li>
       <li>Hardware VP9 decode for cool, battery-friendly 720p60 playback</li>
       <li>Suspend and resume with the power button; audio and video restored on wake</li>
+      <li>Stays awake while you watch, and lets the screen sleep when you do not</li>
       <li>Launches straight into Game Mode with a persistent sign-in</li>
       <li>Built-in updates — Deckback notices new versions and can update itself</li>
       <li>Actively developed — more couch-friendly features are on the way</li>
@@ -67,6 +73,10 @@
   </screenshots>
   <content_rating type="oars-1.1"/>
   <releases>
+    <release version="0.0.9" date="2026-07-31">
+      <url>https://github.com/properrr/deckback/releases/tag/v0.0.9</url>
+      <description><p>See the changelog for details.</p></description>
+    </release>
     <release version="0.0.8" date="2026-07-24">
       <url>https://github.com/properrr/deckback/releases/tag/v0.0.8</url>
       <description><p>See the changelog for details.</p></description>

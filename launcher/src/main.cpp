@@ -18,6 +18,7 @@
 #include "cdm_fetcher.hpp"
 #include "config.hpp"
 #include "config_store.hpp"
+#include "gestures.hpp"
 #include "input.hpp"
 #include "keymap.hpp"
 #include "log.hpp"
@@ -402,12 +403,25 @@ int main(int argc, char** argv) {
   std::optional<OsdMenuController> osd;
   std::optional<Navigator> navigator;
   std::optional<GamepadInput> gamepad;
-  if (cdp_nav && cfg->first_run_overlay) {
-    onboarding.emplace("127.0.0.1", cfg->remote_debugging_port,
-                       OverlayContext{cfg->keymap, cfg->right_stick_scroll},
-                       first_run_marker_path(resolve_state_dir(runtime_dir)));
+  // The touch lock and the gesture router are opposites and cannot both hold. Resolved HERE, once,
+  // rather than in each of the three places that consume the answer: no_pointer.js swallows touch
+  // before the router can see it, and the two want opposite gamescope touch modes (0 hover vs 4
+  // passthrough). A config asking for both is a user error with a silent symptom — a dead
+  // touchscreen — so it is reported and the safer of the two (the lock) wins.
+  bool gestures_on = cfg->touch_gestures;
+  if (gestures_on && cfg->disable_touch) {
+    warn(
+        "startup: touch_gestures and disable_touch are mutually exclusive (no_pointer.js would "
+        "swallow the events the router reads). Keeping disable_touch; set it false to use "
+        "gestures.");
+    gestures_on = false;
   }
 
+  if (cdp_nav && cfg->first_run_overlay) {
+    onboarding.emplace("127.0.0.1", cfg->remote_debugging_port,
+                       OverlayContext{cfg->keymap, cfg->right_stick_scroll, gestures_on},
+                       first_run_marker_path(resolve_state_dir(runtime_dir)));
+  }
   // In-app OSD Settings menu (osd-menu-plan.md): the single settings surface, always available off
   // playback. Constructed whenever CDP is up, independent of self-update. The update callbacks
   // route to update_prompt, which is emplaced below and feeds the OSD Updates tab.
@@ -416,7 +430,7 @@ int main(int argc, char** argv) {
         OsdMenuConfig{.cdp_host = "127.0.0.1",
                       .cdp_port = cfg->remote_debugging_port,
                       .local_version = kDeckbackVersion,
-                      .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll},
+                      .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll, gestures_on},
                       .about = parse_metainfo(load_metainfo().value_or("")),
                       .captions = &captions,
                       .on_update_confirm =
@@ -486,11 +500,31 @@ int main(int argc, char** argv) {
         "startup: self_update off — update via 'flatpak update'/Discover (durable/self-update.md)");
   }
 
+  // P12.4. Declared before the Navigator so the input layer can be handed a stable pointer, and
+  // started after it so the router does not poll a page that has no script in it yet.
+  std::optional<GestureRouter> gestures;
+  if (cdp_nav && gestures_on) {
+    GestureRouterConfig gc;
+    gc.cdp_port = cfg->remote_debugging_port;
+    gc.poll_ms = cfg->touch_poll_ms;
+    gc.step_px = cfg->touch_step_px;
+    gc.max_steps = cfg->touch_max_steps;
+    gc.edge_px = cfg->touch_edge_px;
+    gc.long_press_ms = cfg->touch_long_press_ms;
+    gc.double_tap_ms = cfg->touch_double_tap_ms;
+    gc.skip_seconds = cfg->skip_seconds;
+    gc.hold_rate = cfg->touch_hold_rate;
+    gc.hold_slow_rate = cfg->touch_hold_slow_rate;
+    gestures.emplace(std::move(gc));
+  }
+
   if (cdp_nav) {
-    navigator.emplace(
-        "127.0.0.1", cfg->remote_debugging_port, cfg->user_agent, url, cfg->devtools_poll_ms,
-        NavPolicy{cfg->steer_av1, cfg->mic_autogrant, cfg->error_page, cfg->error_retry_min_ms,
-                  cfg->error_retry_max_ms, cfg->error_title, cfg->error_hint, cfg->disable_touch});
+    NavPolicy nav_policy{cfg->steer_av1,          cfg->mic_autogrant,      cfg->error_page,
+                         cfg->error_retry_min_ms, cfg->error_retry_max_ms, cfg->error_title,
+                         cfg->error_hint,         cfg->disable_touch};
+    nav_policy.touch_gestures = gestures_on;
+    navigator.emplace("127.0.0.1", cfg->remote_debugging_port, cfg->user_agent, url,
+                      cfg->devtools_poll_ms, nav_policy);
     if (onboarding || osd)
       navigator->set_on_app_loaded([&onboarding, &osd] {
         if (onboarding) onboarding->show(/*first_run_only=*/true);
@@ -514,8 +548,16 @@ int main(int argc, char** argv) {
     gp.onboarding = onboarding ? &*onboarding : nullptr;
     gp.update_prompt = update_prompt ? &*update_prompt : nullptr;
     gp.osd = osd ? &*osd : nullptr;
+    gp.gestures = gestures ? &*gestures : nullptr;
     gamepad.emplace("127.0.0.1", cfg->remote_debugging_port, std::move(gp));
     gamepad->start();
+    if (gestures) {
+      gestures->start();
+      info(std::format(
+          "startup: touch gestures on — drag/flick scrolls, left-edge swipe = Back, double-tap "
+          "seeks +/-{}s, hold = 2x (poll {} ms)",
+          cfg->skip_seconds, cfg->touch_poll_ms));
+    }
   } else {
     warn(
         "startup: remote_debugging_port unset — cannot inject the TV UA over CDP; content_shell "
@@ -528,6 +570,12 @@ int main(int argc, char** argv) {
   std::optional<TouchModeGuard> touch_mode;
   if (cfg->disable_touch) {
     touch_mode.emplace();
+    touch_mode->start();
+  } else if (gestures_on) {
+    // The same guard, holding the opposite mode: 4 (passthrough) is the only one that delivers real
+    // wl_touch to Blink, which is what the router reads. Modes 1-3 synthesize a mouse button and 0
+    // emits only motion (touchmode.hpp).
+    touch_mode.emplace(750, TouchMode::kPassthrough);
     touch_mode->start();
   }
 

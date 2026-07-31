@@ -16,6 +16,7 @@ DECKBACK_TEST_DECL(about);
 DECKBACK_TEST_DECL(scripts);
 DECKBACK_TEST_DECL(log);
 DECKBACK_TEST_DECL(profile);
+DECKBACK_TEST_DECL(gestures);
 
 int main(int argc, char** argv) {
   static const DeckbackTestCase kCases[] = {
@@ -30,6 +31,7 @@ int main(int argc, char** argv) {
       {"scripts", scripts_test_main},
       {"log", log_test_main},
       {"profile", profile_test_main},
+      {"gestures", gestures_test_main},
   };
   return DECKBACK_RUN_GROUP(kCases);
 }

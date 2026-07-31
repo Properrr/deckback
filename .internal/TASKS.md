@@ -940,14 +940,33 @@ Items that match a row in the finding's §6 dead-end table are not re-investigat
 
 *P12.0 — the three probes that decide most of the rest (one Deck session, no code):*
 
-- [ ] **P12.0a — TV-code pairing.** Is Leanback's own "Link with TV code" pairing screen reachable
-      **under our Cobalt UA**? Decides P12.3 outright; if absent, register a page-layer dead end
-      (voice-search shape, input-ux §13.2) and stop.
-- [ ] **P12.0b — player method dump.** `Runtime.evaluate` the method list of
-      `document.querySelector('.html5-video-player')` (the selector, never `#movie_player` — input-ux
-      §18) for playback-rate and quality APIs. Decides P12.5 and the quality-drop half of P12.1.
-- [ ] **P12.0c — dock observation.** Attach an external display and read back what gamescope does to
-      our fixed `1280x800` surface: mode, scaling, still direct-scanned-out? Decides P12.2's shape.
+All three are `just feature-probe <player|pairing|dock>` (`scripts/feature-probe.py`). A negative
+answer exits 0 — it is a finding; only "could not observe" is an error (3). Results: §8 of
+`durable/feature-landscape.md`.
+
+- [ ] **P12.0a — TV-code pairing. DEFERRED by decision 2026-07-31 — not answered, not a dead end.**
+      Is Leanback's own "Link with TV code" pairing screen reachable **under our Cobalt UA**? Would
+      decide P12.3 outright. Attempted the same day and abandoned mid-probe: the captures landed on
+      the player and then the browse feed, and the probe refuses to conclude from either — it printed
+      a confident dead-end verdict off both before that was fixed (feature-landscape §8.3). **The
+      absence of an answer here is a scheduling choice, not evidence about pairing**; do not cite it
+      as one. The probe is built and ready (`just feature-probe pairing`), so re-asking costs one
+      human minute on Leanback's Settings screen. `IS_MDX_INITIALIZED` is present in the TV app
+      config under our UA — suggestive, decides nothing.
+- [x] **P12.0b — player method dump.** ✅ **PASSED on-Deck 2026-07-31 (OLED), during real playback.**
+      Rate: `getAvailablePlaybackRates() -> [0.25 … 2]`, `getPlaybackRate`, `setPlaybackRate`, and
+      `<video>.playbackRate` **held** at 1.25 through 3 s of playback. Quality:
+      `getAvailableQualityLevels() -> ["hd720","large","medium","small","auto"]`, labels
+      `720p…240p`, `getPlaybackQuality()/getMaxPlaybackQuality() -> "hd720"`, `setPlaybackQuality`,
+      `setPlaybackQualityRange`. **Unblocks P12.5, the quality half of P12.1, and the page side of
+      P12.9.** The `set*` methods were proven only to EXIST (no-arg call throws) — call them with
+      real arguments before designing on them. Must be run with media loaded: on the browse screen
+      every quality getter answers `[]`, which is indistinguishable from "no API".
+- [x] **P12.0c — dock observation.** ✅ **RUN on-Deck 2026-07-31 (OLED), USB-C to a 1920x1200 panel.**
+      `DP-1` connected/enabled advertising 1920x1200, and **gamescope's screen stayed 1280x800**;
+      our page stayed 1279x799; `:1` offers no mode above 1280x800. The TV shows the app **mirrored
+      and upscaled** (confirmed by eye). **This kills both designs P12.2 was choosing between** —
+      see the rewritten P12.2 below.
 
 *Tier 1 — Deck-shaped, highest value:*
 
@@ -959,25 +978,53 @@ Items that match a row in the finding's §6 dead-end table are not re-investigat
       Chromium keep decoding/feeding audio with the panel blanked under gamescope (assert
       `currentTime` advances via `deckctl.py`, and that audio is audible)? **Then measure** the watt
       delta with `just power` — it is closed-loop now, so this is a number, not a hope.
-- [ ] **P12.2 — Docked output ("a real TV box").** Today the surface is pinned by
-      `--content-shell-host-window-size=1280x800`, so a docked 1080p/4K TV upscales an 800p buffer.
-      After P12.0c: either resize at runtime (`Browser.setWindowBounds` may not exist in
-      content_shell) or relaunch at the new mode through the existing watchdog. Plan §10.2 stretch;
-      the only item here that changes what the product *is*.
+- [!] **P12.2 — Docked output ("a real TV box"). NOT AN APP-SIDE ITEM — reclassified by P12.0c.**
+      Both candidate designs are dead: there is nothing to resize into at runtime, and a relaunch
+      finds the same screen. Docked, gamescope's own screen stays at the internal 1280x800 while the
+      attached panel advertises 1920x1200, so **the external mode never reaches the nested
+      Xwayland** and no window-management change of ours can find more pixels
+      (feature-landscape §8.2). Docked output is *not broken* — the TV shows the app, mirrored and
+      upscaled — it is 800p on a 1200p panel. What remains is a session/compositor question (how
+      gamescope is started, how SteamOS switches outputs when docked), the same wall as
+      `platform.md`'s QAM finding: user-facing settings, not flags we can pass. **Before any further
+      work here, probe whether Game Mode's own display settings change gamescope's screen size at
+      all** — if they do not, this is upstream and should be registered as such, not built around.
+      The §2.2 "highest value per engineering day" ranking rested on us controlling output size and
+      no longer holds.
 - [ ] **P12.3 — Phone as remote/keyboard (likely zero code).** If P12.0a passes, search, sign-in and
       queueing move to the phone and the deliverable is a `docs/SUPPORT.md` section — the cheapest
       available answer to R9 (no auto-OSK under Xwayland, `STEAM+X` soft-lock, QWERTY-forced BT
       keyboards; input-ux §8.3).
-- [~] **P12.4 — Touch gesture layer.** In flight on `feat/touch-gestures` (`just touch-probe`). The
-      input-ux §11 price argument is **obsolete**: it rested on `EVIOCGRAB`, which `touch-lock.md`
-      disproved on hardware. Live question is gamescope touch **mode 4** passthrough (real `wl_touch`
-      via `wlr_seat_touch_notify_down`) and whether its Xwayland advertises a Direct-mode XI2 device
-      Chromium's `TouchFactory` adopts.
+- [x] **P12.4 — Touch gesture layer. BUILT AND TUNED ON HARDWARE 2026-07-31 (OLED)** — branch
+      `feat/touch-gesture-router`, findings `durable/touch-gestures.md`. Page-layer router on real
+      `wl_touch` (gamescope mode 4), launcher polls its queue and dispatches trusted keys. Every
+      gesture exercised by a real finger: swipe, tap (activate/pause), double-tap (seek), hold (2x),
+      and the Y/R4 toggle with its toast. **Two designs a finger rejected** — proportional scrolling
+      is categorically wrong on a discrete-focus UI, and no `stepPx` can fix it (the value that stops
+      a long swipe double-stepping is the value that makes a short one do nothing); `maxSteps=1` is
+      the rule instead (touch-gestures.md §5.1). Ships **off by default** (one unit). Left-edge-swipe
+      Back is the one gesture still unexercised.
+- [x] **P12.4a — MULTITOUCH IS DELIVERED (2026-07-31).** The router's `multiFinger` counter — built
+      as a self-probe — climbed to 5 in 48 sequences during ordinary use, i.e. Blink reported >1
+      simultaneous point, on a device whose `navigator.maxTouchPoints` reads **0**. This **retires
+      input-ux §3's "don't rely on multitouch"**, which came from Valve's Deck FAQ and not from
+      measurement. Unknown and needed before any pinch design: HOW MANY points arrive (the router
+      abandons on the second finger, so it has never counted past 2) and whether coordinates stay
+      sane with two down. Short probe: raise the abandon threshold, read `maxTouches`.
+- [ ] **P12.4b — Pinch / two-finger gestures.** UNBLOCKED by P12.4a. Do the `maxTouches` probe first.
+      `input-ux` §7 lists pinch-to-fill for the 16:10 panel as post-1.0.
+      **`navigator.maxTouchPoints` reads 0 on a panel where touch demonstrably works**, so nothing
+      can feature-detect this: any gate on `maxTouchPoints` or `'ontouchstart' in window` would
+      disable touch exactly where it works. That is why the feature is config-gated, and it is the
+      check a future gesture layer would naturally have written.
 
 *Tier 2 — cheap, on proven mechanisms (each still gated on its own probe where noted):*
 
-- [ ] **P12.5 — Playback speed.** `<video>.playbackRate` is certain; a TVHTML5 rate API (and whether
-      it resets per video) comes from P12.0b. Needs a free control — see P12.7.
+- [ ] **P12.5 — Playback speed. UNBLOCKED by P12.0b** (on-Deck 2026-07-31). Two independent levers,
+      both measured: `<video>.playbackRate` **held** at 1.25 through real playback, and the player
+      exposes `setPlaybackRate` + `getAvailablePlaybackRates() -> [0.25 … 2]` — use that list rather
+      than inventing steps. Still open: whether the rate survives a video CHANGE (only one video was
+      sampled), and `setPlaybackRate` was proven to exist, not to work. Needs a free control — P12.7.
 - [ ] **P12.6 — Sleep timer / "stop after this video."** OSD tab + player pause + inhibitor release,
       optionally `login1.Suspend`. Handheld-only failure mode; every part already wired.
 - [ ] **P12.7 — Free the rear grips.** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face
@@ -987,8 +1034,11 @@ Items that match a row in the finding's §6 dead-end table are not re-investigat
       relative motion must become arrows.
 - [ ] **P12.9 — Battery-aware quality cap.** `quality.max_height` and `render.*` sit in `config.cpp`'s
       `kIgnoredPrefixes` — declared in `app.json`, consumed by nothing. Wire a real cap and lower it
-      under a battery threshold. First confirm `/sys/class/power_supply` is readable from inside the
-      sandbox.
+      under a battery threshold. **Page side unblocked by P12.0b:** the ladder is real —
+      `["hd720","large","medium","small","auto"]` with `setPlaybackQuality`/`setPlaybackQualityRange`,
+      and `getMaxPlaybackQuality() -> "hd720"` already matches our 1280x800 surface, so the cap is a
+      *lowering* mechanism only. Still confirm `/sys/class/power_supply` is readable from inside the
+      sandbox before designing the trigger.
 - [ ] **P12.10 — Panel refresh matching (OLED).** `platform.md` says the QAM knobs are user-facing
       settings, not flags we pass — but `touchmode.cpp` proves we can *write gamescope atoms*.
       Whether a refresh/FPS-cap atom exists and honours a non-Steam client is a **probe, not a known
@@ -1019,10 +1069,16 @@ Items that match a row in the finding's §6 dead-end table are not re-investigat
 
 **Gate:** P12.0a–c captured on a clean boot with definitive classifications recorded in
 `durable/feature-landscape.md`, and every started Tier-1/2 item traceable to a probe that passed.
+**2026-07-31: 0b and 0c are in (§8), 0a is not** — the gate is not met until a human captures
+Leanback's own Settings screen.
 
 **Sequencing:** P12.0 is independent of everything and needs only an attached OLED Deck plus the L2
 CDP harness — run it opportunistically alongside P11.1. No item below Tier 1 starts before the probe
 that names its mechanism.
+
+**Everything here is OLED-only, one unit, one session.** Nothing in §8 has been seen on an LCD Deck,
+and P12.0c in particular was one dock and one 1920x1200 panel — a different dock or a TV that
+negotiates differently is not covered by that reading.
 
 ---
 

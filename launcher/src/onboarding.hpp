@@ -37,6 +37,11 @@ struct ControlRow {
 struct OverlayContext {
   std::vector<std::pair<std::string, std::string>> keymap;  // app.json `keymap`, in written order
   bool right_stick_scroll = true;
+  // Whether the touch gesture router is actually running. The gesture rows are listed only then:
+  // teaching a user to swipe when touch is inert is worse than not mentioning touch at all, and
+  // this is the resolved state (main() may have kept the lock over a config asking for both), not
+  // the raw config flag.
+  bool touch_gestures = false;
 };
 
 // The rows to print. Order follows `keymap` as written, then the controls the launcher owns rather
