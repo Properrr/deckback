@@ -995,6 +995,14 @@ answer exits 0 — it is a finding; only "could not observe" is an error (3). Re
       queueing move to the phone and the deliverable is a `docs/SUPPORT.md` section — the cheapest
       available answer to R9 (no auto-OSK under Xwayland, `STEAM+X` soft-lock, QWERTY-forced BT
       keyboards; input-ux §8.3).
+- [!] **P12.4a-OPEN — after a cold boot, touch delivers NOTHING to the page.** Zero events of any
+      family, with the router healthy, listeners attached and `STEAM_TOUCH_CLICK_MODE` = 4 held and
+      stable. The startup-ordering hypothesis is CONTRADICTED by our own log (the guard set 4 after
+      launch at 22:42 the same day and gestures worked). Needs one on-Deck experiment: relaunch into
+      mode 4, tap, read `__dbFam`/`stats()`; if still zero, run `just touch-probe` with the router
+      uninstalled across modes 4/1/0. **v0.0.9 is built and drafted but MUST NOT be published until
+      this closes** — the notes advertise the feature. Default-off limits the blast radius to
+      opt-in users. Full detail: `durable/touch-gestures.md` §7.0.
 - [x] **P12.4 — Touch gesture layer. BUILT AND TUNED ON HARDWARE 2026-07-31 (OLED)** — branch
       `feat/touch-gesture-router`, findings `durable/touch-gestures.md`. Page-layer router on real
       `wl_touch` (gamescope mode 4), launcher polls its queue and dispatches trusted keys. Every

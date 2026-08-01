@@ -103,6 +103,11 @@ All on the **OLED (Sephiroth)** unit. Dates are the finding dates.
 | Deep link `app://<id>` → `#/watch?v=<id>`, `readyState=4` | 2026-07-08 |
 | Audio out + host-side mute recovery (live muted stream recovered) | 2026-07-09 |
 | Game Mode Flatpak launch + `steamos-add-to-steam` | 2026-07-08 |
+| **Real `wl_touch` reaches Blink at gamescope touch mode 4** — 9 taps → 9 `touchstart`+`touchend`, per-finger ids, page-space coords, left/right thirds separable | `just touch-probe`, 2026-07-31, `durable/touch-gestures.md` |
+| **Multitouch is delivered** — the router's `multiFinger` counter reached 5 in 48 sequences of real use, on a device reporting `maxTouchPoints: 0` | 2026-07-31; retires `input-ux` §3 |
+| **Touch gestures end to end** — swipe (one move per gesture), tap→select/pause, double-tap→seek, hold→2×, Y/R4 toggle with toast+rumble, tuned across two rounds of hardware feedback | 2026-07-31, OLED |
+| **The TVHTML5 player exposes rate + quality ladders during playback** — `[0.25 .. 2]`, `["hd720","large","medium","small","auto"]`; `<video>.playbackRate` holds through real playback | P12.0b, `just feature-probe player` |
+| **Docked: the external mode never reaches the nested Xwayland** — 1920x1200 panel attached, gamescope screen stays 1280x800, TV shows the app mirrored+upscaled | P12.0c, `just feature-probe dock` |
 
 ### B. Implemented, host-tested only — never touched hardware
 The unit tests are good tests of the wrong layer. Each of these is **unproven where it counts**.

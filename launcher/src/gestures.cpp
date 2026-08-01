@@ -155,19 +155,18 @@ void GestureRouter::act(DevToolsClient& client, const Gesture& g) {
     return;
   }
   if (int sign = gesture_seek_sign(g.kind, g.seek_dir); sign != 0) {
-    // Mobile's accumulating seek: the run's length multiplies the interval, so a second double-tap
-    // takes you 20s rather than 10s again. Capped, because a long run should not cross a whole
-    // video by accident.
-    const int steps = g.n < 1 ? 1 : (g.n > cfg_.max_seek_steps ? cfg_.max_seek_steps : g.n);
-    const int seconds = sign * cfg_.skip_seconds * steps;
-    // The same player call the trigger bindings use, so touch and the controller cannot drift into
-    // two different seek behaviours (input-ux §12 is about exactly that kind of split). The jump is
-    // absolute from the run's start, so re-seeking the accumulated total would double-count: each
-    // step seeks only the INCREMENT, and the indicator shows the total.
+    // Mobile's accumulating seek. Each double-tap jumps a CONSTANT skip_seconds; what accumulates
+    // is the indicator, which shows the running total for the whole burst (10, 20, 30, 40) so the
+    // user reads where they have got to rather than a "+10 s" that says nothing about the four
+    // taps before it. Seeking the total instead would jump 10+20+30+40 = 100s for four taps.
+    const int steps = g.n < 1 ? 1 : g.n;
     ScriptParams p;
+    // The same player call the trigger bindings use, so touch and the controller cannot drift into
+    // two different seek behaviours (input-ux §12 is about exactly that kind of split).
     p.set("delta", static_cast<long>(sign * cfg_.skip_seconds));
     ScriptLibrary::instance().invoke(client, "skip", p);
-    show_hud(client, seek_hud_text(seconds), sign > 0 ? "right" : "left", 900);
+    show_hud(client, seek_hud_text(sign * cfg_.skip_seconds * steps), sign > 0 ? "right" : "left",
+             900);
     return;
   }
   if (int phase = gesture_hold_phase(g.kind, g.on); phase != 0) {
@@ -203,8 +202,21 @@ void GestureRouter::loop() {
   DevToolsClient client(cfg_.cdp_host, cfg_.cdp_port);
   bool announced = false;
   for (;;) {
-    if (push_enabled_.exchange(false, std::memory_order_acq_rel))
-      client.eval_void(set_enabled_expr(enabled_.load(std::memory_order_acquire)));
+    if (push_enabled_.exchange(false, std::memory_order_acq_rel)) {
+      const bool on = enabled_.load(std::memory_order_acquire);
+      client.eval_void(set_enabled_expr(on));
+      if (!on) {
+        // Turning the router off DISCARDS its queue, so a hold in progress would never deliver its
+        // release and the video would stay at 2x (or 0.5x) for good -- pressing Y to stop touch
+        // doing things would leave the most visible thing touch had done. Stop unconditionally: the
+        // script is a no-op when nothing is held, and this path must not depend on the queue it
+        // just threw away.
+        ScriptParams stop;
+        stop.set("stop", true);
+        ScriptLibrary::instance().invoke(client, "hold_scrub", stop);
+        show_hud(client, "", "center", 0);
+      }
+    }
 
     std::optional<std::string> raw = client.eval_string(kDrainExpr);
     if (raw && !raw->empty()) {

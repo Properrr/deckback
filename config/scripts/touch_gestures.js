@@ -310,6 +310,31 @@
   var targets = [W, W.document];
   var bound = [];
 
+  // Hide the X cursor, exactly as no_pointer.js does. This is NOT inherited: the two touch policies
+  // are mutually exclusive, so with the router installed no_pointer.js is not, and the cursor it
+  // used to hide comes back. gamescope composites our X cursor, so `cursor: none` makes it draw
+  // nothing. A <style> tag is blocked by youtube.com/tv's CSP (style-src has no 'unsafe-inline'),
+  // hence a constructable stylesheet, with insertRule as the fallback and an inline baseline on
+  // documentElement that inherits down. The `*` rule beats per-element cursors like a button's
+  // `cursor: pointer`.
+  var RULE = '*,*::before,*::after{cursor:none !important}';
+  // W.document throughout, like the rest of this file: a bare `document` is not reachable when the
+  // script is evaluated with an injected window, so the whole body would vanish into its own
+  // try/catch and hide nothing -- silently, which is how it would have shipped.
+  var hideCursor = function () {
+    var d = W.document;
+    if (!d) return;
+    try { d.documentElement.style.setProperty('cursor', 'none', 'important'); } catch (_) {}
+    try {
+      if (W.CSSStyleSheet && 'adoptedStyleSheets' in d && !W.__dbCursorSheet) {
+        var sheet = new W.CSSStyleSheet();
+        sheet.replaceSync(RULE);
+        d.adoptedStyleSheets = [].concat(d.adoptedStyleSheets || [], sheet);
+        W.__dbCursorSheet = sheet;
+      }
+    } catch (_) {}
+  };
+
   var install = function () {
     for (var i = 0; i < targets.length; i++) {
       var t = targets[i];
@@ -371,4 +396,7 @@
   };
 
   install();
+  hideCursor();
+  // The page can replace documentElement on navigation, taking the inline baseline with it.
+  try { W.document.addEventListener('DOMContentLoaded', hideCursor); } catch (_) {}
 })();

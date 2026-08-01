@@ -88,8 +88,6 @@ struct GestureRouterConfig {
   double hold_rate = 2.0;
   // ...and what the LEFT third asks for. 0.5 is half speed; 0.25 is the slowest the player offers.
   double hold_slow_rate = 0.5;
-  // Cap on the accumulating seek, so a run of double-taps cannot jump a whole video.
-  int max_seek_steps = 6;
 };
 
 class GestureRouter {

@@ -33,8 +33,20 @@ L2 harness cannot even fake a panel gamescope will route. **Superseded 2026-07-1
 `config/no_pointer.js` to swallow every pointer/mouse/touch event in the page (Option A), and
 `launcher/src/touchmode.cpp` holds gamescope's global `STEAM_TOUCH_CLICK_MODE` at hover (0) while our
 window is focused (Option B). Verified on-Deck: at hover a tap produced 45 mousemoves and 0 clicks and
-did not navigate. The dead `touch_lock_*`/EVIOCGRAB machinery ships disabled. **Still** not verified on
-hardware:
+did not navigate. The dead `touch_lock_*`/EVIOCGRAB machinery ships disabled. **A THIRD touch state
+shipped 2026-07-31 (`durable/touch-gestures.md`, P12.4): `touch_gestures` (default OFF), the
+OPPOSITE of the lock and mutually exclusive with it.** At gamescope touch mode **4 (passthrough)**
+real `wl_touch` reaches Blink — so `input-ux` §11's "a gesture layer forces a permanent EVIOCGRAB"
+price never applied, and the router is an ordinary capture-phase page script whose queue the
+launcher polls and turns into trusted keys. Swipe / tap / accumulating double-tap seek /
+hold-left-for-0.5× / hold-right-for-2× / left-edge-swipe Back, an on-screen indicator, and a **Y (=
+the R4 grip) toggle**. Every gesture was driven by a finger on-Deck. **MULTITOUCH IS DELIVERED** —
+the router's `multiFinger` self-probe hit 5 in 48 sequences — which RETIRES `input-ux` §3's "don't
+rely on multitouch" (that came from Valve's FAQ, not a measurement); how *many* points arrive is
+still unknown and gates any pinch work. **`navigator.maxTouchPoints` reads 0 on a panel where touch
+demonstrably works**, so nothing can feature-detect this: any gate on `maxTouchPoints` /
+`'ontouchstart'` / `pointer: coarse` would disable touch exactly where it works, which is why the
+feature is config-gated. **Still** not verified on hardware:
 auto-repeat acceleration, mic capture, and voice search. **P4 power: PASSED 2026-07-10** — `just
 power` averaged **5.6 W** under HW-decode VP9 playback (OLED), under the ≤~9 W gate. **P6
 suspend/resume: PASSED 2026-07-10** — `just soak` ran `rtcwake` cycles with the app alive and the

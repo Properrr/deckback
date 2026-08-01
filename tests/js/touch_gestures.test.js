@@ -32,6 +32,7 @@ function mkWindow() {
   const timers = new Map();
   let nextId = 1;
   const win = {
+    CSSStyleSheet: function () { this.replaceSync = () => {}; },
     innerWidth: 1280,
     innerHeight: 800,
     setTimeout(fn, ms) { const id = nextId++; timers.set(id, {fn, ms}); return id; },
@@ -46,7 +47,12 @@ function mkWindow() {
     },
     _pending() { return timers.size; }
   };
-  win.document = {addEventListener() {}, removeEventListener() {}};
+  win.document = {
+    addEventListener() {},
+    removeEventListener() {},
+    adoptedStyleSheets: [],
+    documentElement: {style: {_p: {}, setProperty(k, v) { this._p[k] = v; }}}
+  };
   return win;
 }
 
@@ -391,6 +397,17 @@ function testMultiFingerIsInertAndCounted() {
   check(g.stats().multiFinger > 0, 'and it is counted, so real use can prove delivery');
 }
 
+function testTheCursorIsHidden() {
+  // The two touch policies are mutually exclusive, so with the router installed no_pointer.js is
+  // NOT -- and the cursor it used to hide comes back. gamescope composites our X cursor, so a
+  // visible pointer sits on screen over a 10-foot UI that has no use for one.
+  const {win} = load();
+  check(win.document.documentElement.style._p.cursor === 'none',
+    'the router must hide the cursor, since no_pointer.js is not there to do it');
+  check(win.document.adoptedStyleSheets.length === 1,
+    'and via a constructable stylesheet, because the CSP drops inline <style>');
+}
+
 function testEveryEventIsSwallowed() {
   const {g} = load();
   const e = evt('touchstart', 640, 400, 1000);
@@ -461,6 +478,7 @@ const tests = [
   testMovingCancelsTheLongPress,
   testALongPressDoesNotAlsoFireATap,
   testMultiFingerIsInertAndCounted,
+  testTheCursorIsHidden,
   testEveryEventIsSwallowed,
   testDisabledEmitsNothingButStillSwallows,
   testDrainReportsConfiguredSoAReloadCanBeDetected,

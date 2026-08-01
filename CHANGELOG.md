@@ -28,6 +28,13 @@ minor versions may include breaking changes.
 - **A fuller feature list** in the About panel and the README.
 
 ### Fixed
+- **The mouse pointer no longer sits on screen when touch gestures are on.** Deckback hides the
+  pointer as part of making the touchscreen inert, and turning gestures on replaces that — so the
+  pointer came back and stayed visible over the video.
+- **Turning gestures off while holding no longer leaves playback stuck at 2x.** Pressing Y during a
+  press-and-hold discarded the "let go" event, so the speed never returned to normal.
+- **The seek indicator no longer stops counting.** After six quick double-taps it stayed at
+  "+60 s" while the video kept moving 10 seconds per tap, so it understated where you actually were.
 - **Deckback would not install over itself if a previous install had been interrupted.** The
   installer checked the internal name Flatpak gives a sideloaded build, and Flatpak renames it when
   a leftover from an interrupted install is still present. The install had actually succeeded; only

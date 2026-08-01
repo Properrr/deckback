@@ -163,13 +163,102 @@ including that an unreadable answer is not an empty queue.
 **Verified ON HARDWARE (2026-07-31, OLED, gamescope 3.16.23.4), by a real finger:** the whole stack
 came up (`touch mode held at passthrough`, router installed, connected to the page), and every
 gesture was exercised — swipe (after two rounds of tuning, §5.1), single tap (activates the selected
-video / pauses), double-tap on playback (seeks forward), press-and-hold (2×, so P12.0b's
-`playbackRate` finding pays off end to end), and the Y toggle (off and on, with its toast). 50 ms
-polling was not reported as perceptible.
+video / pauses), double-tap on playback (seeks forward), press-and-hold at 2× **and hold-left at
+0.5× slow motion** (so P12.0b's `playbackRate` finding pays off end to end), and the Y toggle (off
+and on, with its toast). 50 ms polling was not reported as perceptible.
 
-**NOT verified:** the left-edge swipe → Back. Nothing on an LCD unit or any second device. Whether
-mode 4 stays put over a long session while Steam also manages that atom. And the feel numbers
-(`stepPx 70`, `tapSlop 16`) are one person's hands on one panel.
+**NOT verified:**
+
+* the **left-edge swipe → Back** — the one gesture no finger has tried, in any build;
+* the **three §7.1 review fixes** — the cursor hiding, the release of a hold stranded by the toggle,
+  and the indicator past six double-taps. They landed AFTER the last hardware round, so they carry
+  L0 coverage only. (The zone-split hold itself is *not* in this list: 0.5× was in the build that
+  was tested, and was confirmed by hand.)
+* nothing on an **LCD unit** or any second device;
+* whether **mode 4 stays put over a long session** while Steam also manages that atom;
+* the feel numbers (`stepPx 70`, `tapSlop 16`) are one person's hands on one panel.
+
+### 7.0 ★ OPEN: touch delivers NOTHING after a cold boot (2026-07-31, unresolved)
+
+**Do not ship this feature enabled, or publish v0.0.9's notes as they stand, until this is closed.**
+
+After a reboot, a real finger produces **zero events of any family** in the page — not touch, not
+pointer, not mouse. Everything above and below that reading looks correct:
+
+| Checked | State |
+|---|---|
+| Router present / enabled / configured | ✅ `version 2`, `enabled: true`, `configured: true` |
+| Listeners actually attached | ✅ a synthetic `touchstart` on `window` incremented `sequences` 0 → 1 |
+| Cursor fix (§7.1) | ✅ `cursor: "none"`, one adopted stylesheet |
+| `STEAM_TOUCH_CLICK_MODE` | ✅ **4** on `:1` where our `content_shell` is focused, stable over repeated polls, and 4 on `:0` too |
+| Touch panel present | ✅ `FTS3528:00 2808:1015`, `event14` + `event15` |
+| External display interfering | ✅ ruled out — `DP-1: disconnected` |
+
+So the recogniser, the listeners and the compositor mode are all fine, and the panel's input is not
+reaching Blink at all. Mode 4 does **no** pointer emulation, which is why the symptom is silence
+rather than the stray mousemoves mode 0 would give.
+
+**The obvious hypothesis is contradicted by our own log.** "The guard sets mode 4 ~1s AFTER the
+engine starts, so on a cold boot Chromium enumerates without a touch device" would explain it — but
+at 22:42 the same day, on the same code path, the guard set mode 4 after launch and every gesture
+worked by hand. Ordering alone does not account for it.
+
+**What is different is the reboot, and nothing else identified.** Candidates, none confirmed:
+gamescope/Xwayland not advertising an XI2 touch device on this boot; the two `FTS3528` nodes
+(`event14`, the plain one, and `event15`, `UNKNOWN`) enumerating differently across boots — node
+numbers are explicitly unstable (input-ux §1); or touch focus sitting somewhere other than our
+surface despite `xdotool` reporting our window focused.
+
+**The decisive experiment needs a finger and was not run:** relaunch with the compositor ALREADY in
+mode 4 (done — the app is in that state now), then tap and read `window.__dbFam` / `stats()`. If
+events appear, it is startup ordering after all and the fix is to set the mode before spawning the
+engine. If they do not, the cause is below us and the next step is `just touch-probe` with the
+router uninstalled, across modes 4/1/0, to see what the compositor delivers at all.
+
+**Why the verification missed it.** Every hardware confirmation of this feature happened on a boot
+where `just touch-probe` had already driven the compositor into mode 4 repeatedly before the app
+launched. The tests proved the router works *given* passthrough, and silently inherited a
+precondition the product is supposed to establish for itself — the same shape as every other finding
+here: not a wrong result, a result whose precondition nobody wrote down. The L2 test added the same
+day (`test_gamescope_touch_mode_matches_the_configured_policy`) would have passed throughout: it
+checks the mode is eventually 4, which was always true. Nothing checks that touch actually ARRIVES,
+and nothing can without a finger.
+
+**Blast radius if shipped as-is:** `touch_gestures` defaults to **false**, so a normal 0.0.9 install
+is unaffected — the panel stays inert exactly as in 0.0.8. Only a user who opts in gets a feature
+that may do nothing until something (unknown) puts the compositor in the right state.
+
+### 7.1 Three bugs a read-through found that the tests and the finger both missed
+
+Caught reviewing the finished feature, after it had been driven by hand on-Deck. All three would
+have shipped in v0.0.9; each is now a regression test.
+
+**The cursor came back.** `no_pointer.js` hides the X cursor (`cursor: none`, via a constructable
+stylesheet because the CSP drops inline `<style>`). The two touch policies are mutually exclusive,
+so with the router installed that script is *not* — and gamescope composites our X cursor, leaving a
+pointer visible over a 10-foot UI. Nothing in the gesture path hid it. **Inherited behaviour is not
+inherited when you replace the thing it lived in**, and mutual exclusion is exactly where that bites.
+
+**...and the first fix silently did nothing.** It used a bare `document` where the rest of the file
+uses `W.document`, inside a `try/catch` that swallowed the reference error. It read correctly, ran,
+and hid nothing. The only reason it surfaced is that the test asserts the *effect* (the property is
+set, the sheet is adopted) rather than that the function was reached — a test of the call would have
+passed.
+
+**A cap that capped nothing, and an indicator that lied.** The accumulating seek multiplied
+`skip_seconds` by the run length for the *indicator* while always seeking a constant increment, and
+then clamped the multiplier at 6 with the comment "so a long run cannot cross a whole video". The
+seek never used the multiplier, so the clamp protected nothing — it only truncated the display, so
+from the seventh double-tap the indicator understated where the user actually was. A comment
+describing behaviour the code does not have is worse than no comment: it stops the next reader from
+looking.
+
+**Turning the router off stranded the playback rate.** `setEnabled(false)` discards the queue, so a
+hold in progress never delivered its release and the video stayed at 2× (or 0.5×) permanently —
+pressing Y to stop touch doing things left the most visible thing touch had done. Every individual
+piece was correct; the bug lived in the interaction between the toggle and the queue, which is the
+kind only a state walk-through finds. The launcher now stops the scrub unconditionally when it
+disables, rather than trusting a queue it just threw away.
 
 **Default OFF**, and it stays off until at least a second unit agrees. `navigator.maxTouchPoints`
 reads **0** even where touch demonstrably works, so nothing can feature-detect this — any code that

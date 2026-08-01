@@ -62,6 +62,18 @@ void test_hold_rate_comes_from_the_zone() {
   assert(hold_rate_for_zone("", 2.0, 0.5) == 2.0);
 }
 
+// The indicator shows the RUNNING TOTAL of a burst while each tap seeks a constant interval. An
+// earlier version capped the multiplier at 6 "so a long run cannot cross a whole video" -- but the
+// seek never used the multiplier at all, so the cap protected nothing and only made the indicator
+// understate the real position from the seventh tap onward. A comment describing behaviour the code
+// does not have is worse than no comment.
+void test_the_indicator_tracks_the_whole_burst() {
+  const int skip = 10;
+  for (int n = 1; n <= 9; ++n)
+    assert(seek_hud_text(skip * n) == "+" + std::to_string(10 * n) + " s");
+  assert(seek_hud_text(-skip * 4) == "-40 s");
+}
+
 void test_hud_text_reads_at_a_glance() {
   // The ACCUMULATED total, so the user reads where they are going, not the increment.
   assert(seek_hud_text(30) == "+30 s");
@@ -197,6 +209,7 @@ DECKBACK_TEST_MAIN(gestures) {
   test_hold_phase_distinguishes_press_from_release();
   test_hold_rate_comes_from_the_zone();
   test_hud_text_reads_at_a_glance();
+  test_the_indicator_tracks_the_whole_burst();
   test_seek_accumulation_is_decoded();
   test_hold_zone_is_decoded();
   test_parse_drain_decodes_a_batch();
