@@ -141,6 +141,14 @@ soak n="25":
 touch-probe *args:
     python3 scripts/touch-probe.py {{args}}
 
+# Does touch still reach the gesture router? Runs the 2x2 OFF-DECK in the build container: each
+# engine preset (deck vs release/gold) x {router, router+hide_cursor}, dispatching REAL touch through
+# CDP Input.dispatchTouchEvent. Answers the page-script half of touch-gestures.md §7.0 without a
+# Deck. It does NOT exercise gamescope->Xwayland->XI2, so a FAILURE here is conclusive and a pass
+# narrows the question to the layer below. `just touch-bisect "deck release"` to pick presets.
+touch-bisect *args:
+    ./scripts/touch-bisect.sh {{args}}
+
 # P12.0 feature probes (durable/feature-landscape.md §7): classify a mechanism BEFORE building on it.
 #   player   what the TVHTML5 player exposes for playback rate/quality -> decides P12.5, P12.1, P12.9.
 #            Needs a video actually PLAYING: on the browse screen every quality getter answers []

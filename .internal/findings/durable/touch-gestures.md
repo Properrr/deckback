@@ -226,7 +226,47 @@ by argument.
 This does not answer the question — it makes the question cheap to answer on hardware, and it means
 the shipped router is the code that was actually tested.
 
-**The decisive experiment is armed and needs one tap.** The v0.0.9 app on the Deck is running the
+### 7.0.1 The page scripts are EXONERATED — off-Deck bisect, 2026-07-31
+
+`just touch-bisect` runs the 2×2 in the build container: each engine preset × {router,
+router+hide_cursor}, dispatching **real** touch through CDP `Input.dispatchTouchEvent`.
+
+| Engine | Scripts | Result |
+|---|---|---|
+| `deck` (every hand-tested build) | router | TOUCH ARRIVES |
+| `deck` | router + hide_cursor | TOUCH ARRIVES |
+| `release` (gold+ThinLTO, ships in v0.0.9) | router | TOUCH ARRIVES |
+| `release` | router + hide_cursor | TOUCH ARRIVES |
+
+`maxTouchPoints` reads 0 in all four, as it does on-Deck, and touch arrives anyway — the same
+capability-query lie recorded in §8.4 of feature-landscape.
+
+**And a logical step makes this stronger than four data points: a page script cannot reach X11/XI2.**
+It can only act on events already delivered to Blink. On-Deck *nothing* was delivered — not touch,
+not pointer, not mouse — so no page script can be the cause, categorically. The two launcher-side
+fixes are excluded the same way: one is arithmetic behind the indicator's text, the other only runs
+on `setEnabled(false)`.
+
+**So the §7.0 mitigation (splitting the cursor into its own script) was aimed at the wrong suspect.**
+It is kept because a runtime switch and a bounded, separately-tested script are worth having, not
+because it fixes anything.
+
+**What remains** is the layer the bisect deliberately cannot reach — gamescope → Xwayland → XI2 →
+Blink — where the engine binary is the only thing that changed between the working build and
+v0.0.9. `flatpak.sh` stages `out/<preset>`, so the deck bundles shipped `out/deck` and v0.0.9 ships
+`out/release`; they are different binaries. Blink-level touch handling is identical between them
+(rows 3–4 above), so the question is specifically whether the gold build enumerates or receives from
+an XI2 touch device differently — which CDP injection bypasses and Xvfb cannot reproduce, because it
+has no XI2 input devices to advertise.
+
+**Next decisive experiment (needs a Deck and a finger):** build a `deck`-preset bundle from current
+`main` and deploy it. Gestures working ⇒ the engine preset is implicated and no release may ship from
+`gold` until that is understood. Gestures still dead ⇒ neither the code nor the preset, and the cause
+is in the device's session/compositor state.
+
+**The armed A/B on the Deck is now redundant** — the bisect answered its question more cleanly.
+
+ The v0.0.9 app on the Deck is running the
 EXACT pre-review script (hot-pushed over CDP, `cursor` empty again) with per-family counters reset.
 Tap, then read `window.__dbFam` and `stats()`:
 
