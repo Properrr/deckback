@@ -178,55 +178,58 @@ and on, with its toast). 50 ms polling was not reported as perceptible.
 * whether **mode 4 stays put over a long session** while Steam also manages that atom;
 * the feel numbers (`stepPx 70`, `tapSlop 16`) are one person's hands on one panel.
 
-### 7.0 ★ OPEN: touch delivers NOTHING after a cold boot (2026-07-31, unresolved)
+### 7.0 ★ OPEN: touch delivers NOTHING to the page on the v0.0.9 build (2026-07-31, unresolved)
 
-**Do not ship this feature enabled, or publish v0.0.9's notes as they stand, until this is closed.**
+**Do not publish v0.0.9 until this closes** — its notes advertise the feature.
 
-After a reboot, a real finger produces **zero events of any family** in the page — not touch, not
-pointer, not mouse. Everything above and below that reading looks correct:
+A real finger produces **zero events of any family** — not touch, not pointer, not mouse — on the
+v0.0.9 build, while everything around it checks out: router present/enabled/configured, listeners
+provably attached (a synthetic `touchstart` on `window` incremented `sequences` 0 → 1), cursor fix
+applied, `STEAM_TOUCH_CLICK_MODE` = 4 stable on the display holding our focus, panel enumerated
+(`FTS3528`, event14/15), no external display attached. Mode 4 does no pointer emulation, so silence
+rather than stray mousemoves is the expected shape of "touch never arrived".
 
-| Checked | State |
-|---|---|
-| Router present / enabled / configured | ✅ `version 2`, `enabled: true`, `configured: true` |
-| Listeners actually attached | ✅ a synthetic `touchstart` on `window` incremented `sequences` 0 → 1 |
-| Cursor fix (§7.1) | ✅ `cursor: "none"`, one adopted stylesheet |
-| `STEAM_TOUCH_CLICK_MODE` | ✅ **4** on `:1` where our `content_shell` is focused, stable over repeated polls, and 4 on `:0` too |
-| Touch panel present | ✅ `FTS3528:00 2808:1015`, `event14` + `event15` |
-| External display interfering | ✅ ruled out — `DP-1: disconnected` |
+**An earlier version of this section blamed a cold boot. That was wrong, and the error is
+instructive.** The reboot happened BEFORE the build that was then tested by hand and worked
+(deployed 23:26, confirmed gesture by gesture including 0.5× slow motion); the failure appeared only
+on the build deployed at 23:55. Ordering the events wrongly turned "it worked, then we changed
+things, then it stopped" into "a reboot changed something", and sent the investigation at the
+compositor instead of at the diff. **The user's own framing — it worked before the changes — was the
+correct read and was talked past.**
 
-So the recogniser, the listeners and the compositor mode are all fine, and the panel's input is not
-reaching Blink at all. Mode 4 does **no** pointer emulation, which is why the symptom is silence
-rather than the stray mousemoves mode 0 would give.
+**TWO things changed between the working build and v0.0.9, not one:**
 
-**The obvious hypothesis is contradicted by our own log.** "The guard sets mode 4 ~1s AFTER the
-engine starts, so on a cold boot Chromium enumerates without a touch device" would explain it — but
-at 22:42 the same day, on the same code path, the guard set mode 4 after launch and every gesture
-worked by hand. Ordering alone does not account for it.
+1. **Three review fixes** (§7.1). Only one touches the page: the cursor hiding.
+2. **The entire engine binary.** `just release` builds `gold` + ThinLTO into `out/release` and
+   packages `preset=release`; every build ever tested by hand was `deck`/qa out of `out/deck`. **The
+   engine in v0.0.9 has never been exercised by a finger, or by anything else beyond `just smoke`.**
 
-**What is different is the reboot, and nothing else identified.** Candidates, none confirmed:
-gamescope/Xwayland not advertising an XI2 touch device on this boot; the two `FTS3528` nodes
-(`event14`, the plain one, and `event15`, `UNKNOWN`) enumerating differently across boots — node
-numbers are explicitly unstable (input-ux §1); or touch focus sitting somewhere other than our
-surface despite `xdotool` reporting our window focused.
+**Weighing them.** The script change is a poor fit for the symptom: `install()` runs BEFORE
+`hideCursor()`, the listeners were observed attached on the broken build, and `cursor: none` is
+paint state with no path to XI2/`wl_touch` delivery. It is not exonerated by `no_pointer.js` having
+carried the same code for months either — in that mode touch is *meant* to be dead, so a suppression
+there would never have been noticed. The launcher-side fixes cannot be responsible at all: one is
+arithmetic behind the indicator text, the other only runs on `setEnabled(false)`.
 
-**The decisive experiment needs a finger and was not run:** relaunch with the compositor ALREADY in
-mode 4 (done — the app is in that state now), then tap and read `window.__dbFam` / `stats()`. If
-events appear, it is startup ordering after all and the fix is to set the mode before spawning the
-engine. If they do not, the cause is below us and the next step is `just touch-probe` with the
-router uninstalled, across modes 4/1/0, to see what the compositor delivers at all.
+That leaves the untested `gold` engine as the more plausible candidate — and if it IS the engine,
+the finding is much larger than touch: it means the preset we ship is not the preset we validate.
 
-**Why the verification missed it.** Every hardware confirmation of this feature happened on a boot
-where `just touch-probe` had already driven the compositor into mode 4 repeatedly before the app
-launched. The tests proved the router works *given* passthrough, and silently inherited a
-precondition the product is supposed to establish for itself — the same shape as every other finding
-here: not a wrong result, a result whose precondition nobody wrote down. The L2 test added the same
-day (`test_gamescope_touch_mode_matches_the_configured_policy`) would have passed throughout: it
-checks the mode is eventually 4, which was always true. Nothing checks that touch actually ARRIVES,
-and nothing can without a finger.
+**The decisive experiment is armed and needs one tap.** The v0.0.9 app on the Deck is running the
+EXACT pre-review script (hot-pushed over CDP, `cursor` empty again) with per-family counters reset.
+Tap, then read `window.__dbFam` and `stats()`:
 
-**Blast radius if shipped as-is:** `touch_gestures` defaults to **false**, so a normal 0.0.9 install
-is unaffected — the panel stays inert exactly as in 0.0.8. Only a user who opts in gets a feature
-that may do nothing until something (unknown) puts the compositor in the right state.
+* **events appear** → the cursor change is the cause, the engine is exonerated, fix is in the script;
+* **still zero** → the script is exonerated and the `gold`/ThinLTO engine is the difference, which
+  needs its own investigation before any release ships from that preset.
+
+**Why every test missed this.** No test covers "touch actually ARRIVES" — they cover what happens
+once it has. The L2 test added the same day
+(`test_gamescope_touch_mode_matches_the_configured_policy`) passes throughout: it asserts the mode is
+eventually 4, which was always true. And nothing at any tier runs against the `gold` build, so a
+release-only regression has no gate in front of it at all.
+
+**Blast radius:** `touch_gestures` defaults to **false**, so a normal 0.0.9 install is unaffected —
+the panel stays inert exactly as in 0.0.8. Only opt-in users would meet a dead feature.
 
 ### 7.1 Three bugs a read-through found that the tests and the finger both missed
 

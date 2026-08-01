@@ -995,14 +995,18 @@ answer exits 0 — it is a finding; only "could not observe" is an error (3). Re
       queueing move to the phone and the deliverable is a `docs/SUPPORT.md` section — the cheapest
       available answer to R9 (no auto-OSK under Xwayland, `STEAM+X` soft-lock, QWERTY-forced BT
       keyboards; input-ux §8.3).
-- [!] **P12.4a-OPEN — after a cold boot, touch delivers NOTHING to the page.** Zero events of any
-      family, with the router healthy, listeners attached and `STEAM_TOUCH_CLICK_MODE` = 4 held and
-      stable. The startup-ordering hypothesis is CONTRADICTED by our own log (the guard set 4 after
-      launch at 22:42 the same day and gestures worked). Needs one on-Deck experiment: relaunch into
-      mode 4, tap, read `__dbFam`/`stats()`; if still zero, run `just touch-probe` with the router
-      uninstalled across modes 4/1/0. **v0.0.9 is built and drafted but MUST NOT be published until
-      this closes** — the notes advertise the feature. Default-off limits the blast radius to
-      opt-in users. Full detail: `durable/touch-gestures.md` §7.0.
+- [!] **P12.4-OPEN — touch delivers NOTHING to the page on the v0.0.9 build.** Zero events of any
+      family, with the router healthy, listeners provably attached and `STEAM_TOUCH_CLICK_MODE` = 4
+      held and stable. **NOT a cold-boot issue** — an earlier claim to that effect had the timeline
+      backwards: the reboot preceded the build that then worked by hand. **Two things changed at
+      once:** the three §7.1 review fixes (only the cursor hiding touches the page), and the whole
+      engine binary — `just release` builds `gold`+ThinLTO from `out/release` while every
+      hand-tested build was `deck`/qa. The script is a weak fit (listeners were observed attached;
+      `cursor: none` has no path to touch delivery); the untested engine is the stronger candidate,
+      and if it IS the engine the finding is bigger than touch — the preset we ship is not the
+      preset we validate. A/B is armed on the Deck (pre-review script on the gold engine): one tap
+      decides. **v0.0.9 MUST NOT be published until this closes.** Default-off limits the blast
+      radius to opt-in users. Full detail: `durable/touch-gestures.md` §7.0.
 - [x] **P12.4 — Touch gesture layer. BUILT AND TUNED ON HARDWARE 2026-07-31 (OLED)** — branch
       `feat/touch-gesture-router`, findings `durable/touch-gestures.md`. Page-layer router on real
       `wl_touch` (gamescope mode 4), launcher polls its queue and dispatches trusted keys. Every
