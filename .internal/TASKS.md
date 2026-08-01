@@ -995,18 +995,30 @@ answer exits 0 — it is a finding; only "could not observe" is an error (3). Re
       queueing move to the phone and the deliverable is a `docs/SUPPORT.md` section — the cheapest
       available answer to R9 (no auto-OSK under Xwayland, `STEAM+X` soft-lock, QWERTY-forced BT
       keyboards; input-ux §8.3).
-- [!] **P12.4-OPEN — touch delivers NOTHING to the page on the v0.0.9 build.** Zero events of any
-      family, with the router healthy, listeners provably attached and `STEAM_TOUCH_CLICK_MODE` = 4
-      held and stable. **NOT a cold-boot issue** — an earlier claim to that effect had the timeline
-      backwards: the reboot preceded the build that then worked by hand. **Two things changed at
-      once:** the three §7.1 review fixes (only the cursor hiding touches the page), and the whole
-      engine binary — `just release` builds `gold`+ThinLTO from `out/release` while every
-      hand-tested build was `deck`/qa. The script is a weak fit (listeners were observed attached;
-      `cursor: none` has no path to touch delivery); the untested engine is the stronger candidate,
-      and if it IS the engine the finding is bigger than touch — the preset we ship is not the
-      preset we validate. A/B is armed on the Deck (pre-review script on the gold engine): one tap
-      decides. **v0.0.9 MUST NOT be published until this closes.** Default-off limits the blast
-      radius to opt-in users. Full detail: `durable/touch-gestures.md` §7.0.
+- [x] **P12.4-OPEN — CLOSED 2026-07-31. Touch delivered nothing because OUR guard skipped a
+      same-value write, not because of the engine.** `touchmode.cpp` wrote
+      `STEAM_TOUCH_CLICK_MODE` only when the value was wrong; gamescope re-points touch on the
+      `PropertyNotify`, so a launch that inherited the right value from a previous run signalled
+      nothing and never got touch routed to its window. Every diagnostic read healthy throughout —
+      mode 4, router installed, listeners attached — which is why three successive theories (cold
+      boot, cursor script, `gold`/ThinLTO engine) were all wrong. **Proven live:** on one running
+      process, rewriting the atom with *the same value* took the router from `sequences: 0` to
+      `sequences: 6`. **The engine preset is exonerated and v0.0.9 is publishable.** A second path
+      into the same bug — the one users actually hit — is **changing screen brightness**: the atom
+      is a per-display mirror of a GLOBAL mode, and Steam sets 1 on `:0` every time a game takes
+      focus (measured: `GAMESCOPE_FOCUSED_APP` = 769 → mode 4, = our appid → mode 1). We are
+      contesting the atom, not initialising it. A rising-edge write was tried and **rejected by
+      measurement** — our window never loses X focus on `:1` when the QAM opens, so no observable
+      variable moves. Fix is therefore a **heartbeat**: assert every tick while focused, never read
+      first. Verified on-Deck: 750 ms writes landing mid-swipe disrupted nothing (59 sequences) and
+      the QAM stayed touch-usable. Pure `should_write_mode()` with L0 coverage in
+      `touchmode_test.cpp`, including a `static_assert` that blocks re-adding the value check.
+      Full detail: `durable/touch-gestures.md` §7.0.2.
+- [ ] **P12.4c — no tier asserts that touch ARRIVES.** The gap this bug walked through. The L2 test
+      checks `STEAM_TOUCH_CLICK_MODE` is eventually 4, which stayed true for the entire failure, so
+      it would have passed throughout. Asserting the *state we intend* instead of the *effect we
+      need* passes hardest exactly when the mechanism between them is broken. A real check needs a
+      finger or a synthetic XI2 touch device; the router's `stats().sequences` is the read-out.
 - [x] **P12.4 — Touch gesture layer. BUILT AND TUNED ON HARDWARE 2026-07-31 (OLED)** — branch
       `feat/touch-gesture-router`, findings `durable/touch-gestures.md`. Page-layer router on real
       `wl_touch` (gamescope mode 4), launcher polls its queue and dispatches trusted keys. Every

@@ -3,10 +3,14 @@ scope: durable
 title: Touch gestures — the page-layer router, and why the EVIOCGRAB price is gone
 created: 2026-07-31
 status: implemented and TUNED ON HARDWARE 2026-07-31 (OLED); every gesture exercised by a real
-        finger. Multitouch delivery is now PROVEN (§8). Untested on LCD, and on no second unit.
+        finger. Multitouch delivery is now PROVEN (§8). The delivery regression that looked like a
+        gold-engine bug is RESOLVED — it was our own touch-mode guard skipping a same-value write
+        (§7.0.2), fixed and proven before/after on a live process. Untested on LCD, no second unit.
 supersedes: input-ux §11 (the "gestures force a permanent exclusive grab" cost model)
 sources:
   - the 2026-07-31 touch probe (`just touch-probe --modes 4`), OLED, gamescope 3.16.23.4
+  - the 2026-07-31 live before/after on the Deck: same process, same-value atom write, 0 -> 6
+    sequences (§7.0.2) — the measurement that overturned the engine-preset theory
   - durable/touch-lock.md (the grab is not available to us at all)
   - input-ux §3 (mobile's spatial model), §4 (the never-silent policy), §7 (the gaps), §11 (priced)
 ---
@@ -178,9 +182,133 @@ and on, with its toast). 50 ms polling was not reported as perceptible.
 * whether **mode 4 stays put over a long session** while Steam also manages that atom;
 * the feel numbers (`stepPx 70`, `tapSlop 16`) are one person's hands on one panel.
 
-### 7.0 ★ OPEN: touch delivers NOTHING to the page on the v0.0.9 build (2026-07-31, unresolved)
+### 7.0.2 ★ RESOLVED — it was OUR guard, not the engine: the write we optimised away (2026-07-31)
 
-**Do not publish v0.0.9 until this closes** — its notes advertise the feature.
+**§7.0 and §7.0.1 below are kept for history and are WRONG about the cause.** They convicted the
+`gold`/ThinLTO engine on circumstantial evidence. The engine is innocent. So is the cursor script,
+so are all three review fixes, and so is the cold boot that an even earlier draft blamed.
+
+**The cause is `launcher/src/touchmode.cpp`: the guard wrote the touch-mode atom only when its value
+was wrong.**
+
+```cpp
+if (our_window_is_focused(c, root) && read_cardinal(c, root, mode_atom) != want) {   // the bug
+```
+
+gamescope re-points touch routing when it sees the **`PropertyNotify`**, not by reading the atom's
+value when a window maps. A run that inherits the correct value from a *previous* run therefore
+writes nothing, gamescope never learns our new window exists, and every finger falls on the floor —
+while every diagnostic reads healthy, which is exactly why this cost a day. `STEAM_TOUCH_CLICK_MODE`
+= 4, router installed, listeners provably attached, panel enumerated, focus ours: all true, all
+useless. **The absence of a symptom in the environment was mistaken for the absence of a cause in
+our code.**
+
+X11 emits a `PropertyNotify` on *every* `xcb_change_property` call, whether or not the value
+changed. So a same-value write is a real signal, and skipping it — which reads like an obvious
+optimisation, and which is correct for any atom whose *value* is the whole message — is the defect.
+
+**Proven, before and after, on one running process (OLED, 2026-07-31):**
+
+| | `sequences` | `emitted` |
+|---|---|---|
+| gestures dead, mode already 4, guard idle | **0** | **0** |
+| after `xprop -root -set STEAM_TOUCH_CLICK_MODE 4` — *the same value* | **6** | **6** |
+
+Nothing else changed: same process, same bundle, same engine, same config, no relaunch. Touch came
+back mid-session on a property write that altered nothing.
+
+**Why it hid for so long, and why it looked like a release-only regression.** The bug needs the mode
+to *already* be right at startup, which only happens on a second launch into a session a first
+launch left behind. Every hardware confirmation of this feature ran after `just touch-probe`, which
+cycles modes 4,1,0 and so always left a change for the guard to make. v0.0.9 was simply the first
+build launched into an already-primed session — and it happened to be the first `gold` build too.
+Two unrelated firsts coinciding produced a preset theory that survived a whole investigation.
+**`out/release` was never tested against, which made it a plausible-looking suspect; being untested
+is not evidence of being guilty.**
+
+**There is a SECOND way in, and it is the one users actually hit: changing screen brightness.** The
+user reported touch dying after a brightness change, which goes through the Steam QAM. Measured
+on-Deck while it was broken:
+
+```
+:0  mode=1  focus=steam                    <- Steam's Xwayland
+:1  mode=4  focus=chromium-content_shell   <- ours
+```
+
+Both are true at once, and the *effective* behaviour was mode 1: a finger moved the cursor and
+highlighted tiles instead of delivering `wl_touch`. gamescope runs one Xwayland per display
+(`--xwayland-count 2`), each with its own root and its own copy of the atom, but the touch mode it
+enforces is **global** — and Steam writes its own value on `:0` when the overlay opens. So:
+
+> **The value we can read is a stale mirror of a global state somebody else also writes.** It is not
+> evidence about the effective mode, and comparing against it is not a valid guard at all — not an
+> optimisation with an edge case, but a check on the wrong variable.
+
+The tile-highlighting is itself the tell, and worth remembering: it is **cursor motion**, so it is
+CSS `:hover`, which no amount of `stopImmediatePropagation` can swallow. **A page-layer swallow can
+suppress handlers but never hover** — if tiles light up under a finger, pointer emulation is live
+and the mode is wrong, whatever the atom says.
+
+**A rising-edge write was tried first, and the hardware rejected it.** The idea was to write
+unconditionally whenever our window *gains* focus — a fresh launch and the QAM handing focus back
+being the same event. A 60-second recording during a real brightness change killed it:
+
+```
+focus on :1   chromium-content_shell   <- all 95 samples; NEVER changed
+:1 mode       4                        <- never changed
+:0 mode       1 -> 4 -> 1              <- moved, on Steam's display
+```
+
+**Our window never loses X input focus on `:1` when the QAM opens.** So there is no rising edge to
+catch, and no drift to correct: *every variable the guard can observe stays constant while the
+effective mode moves underneath it.* The guard is blind to this failure by construction.
+
+**Which is why the fix is a heartbeat: assert every tick while focused, and never read first.** Once
+you accept that we cannot *detect* the bad state, the only correct move is to continuously assert
+the good one. This is not a workaround for an unknown mechanism — the mechanism is now measured, and
+it says we are **contesting** the atom, not initialising it:
+
+| `GAMESCOPE_FOCUSED_APP` | `:0` mode |
+|---|---|
+| `769` (Steam overlay / QAM) | **4** |
+| our appid | **1** |
+
+**Steam sets mode 1 whenever a game is focused**, on every focus change, because it assumes a game
+wants click emulation. A guard that writes once always loses; a guard that writes only on a mismatch
+never even tries.
+
+**Measured on-Deck (2026-07-31, OLED), all four claims the design rests on:**
+
+| Test | Result |
+|---|---|
+| same-value write revives a dead session | `sequences` 0 → **6** |
+| same-value write revives after a brightness change | 0 → **28**, tiles stopped highlighting |
+| 750 ms heartbeat, writes landing mid-swipe | **59** sequences, none disrupted |
+| Steam QAM used by finger *during* the heartbeat | **fully usable** |
+| heartbeat loop stops | touch breaks again within seconds — `:0` = 1, `:1` = 4 |
+
+The QAM staying usable is not luck: Steam itself wants mode 4 while its overlay is focused, so we
+agree with it exactly when it matters, and the focus gate keeps us quiet if the user leaves for
+another app entirely.
+
+**A better focus signal exists if one is ever needed.** `GAMESCOPE_FOCUSED_APP` on `:0`'s root is
+gamescope's own authoritative notion of focus and *does* track the QAM (it flips to `769` and back),
+where `XGetInputFocus` on `:1` does not move at all. We do not use it — the heartbeat needs no such
+discrimination and fewer moving parts is worth more — but it is the tool to reach for if we ever
+must know when Steam owns the screen. The decision is extracted as the
+pure `should_write_mode(focused, was_focused, current, want)` so it carries L0 coverage;
+`launcher/tests/touchmode_test.cpp` pins the case that reads like a pointless no-op — focused, value
+already correct, first tick — **because that case is the entire fix**.
+
+**What this says about the test suite, which is the durable lesson.** Nothing at any tier asserted
+that touch ARRIVES; the L2 test asserts the mode is *eventually* 4, which was true throughout the
+failure and would have stayed green. A check on the state we intend, rather than on the effect we
+need, passes hardest exactly when the mechanism that turns one into the other is broken.
+
+### 7.0 ✗ SUPERSEDED by §7.0.2 — the "engine preset" theory, kept for history
+
+**This section's conclusion is wrong.** It is retained because the reasoning that produced it is
+instructive, not because it is true. Read §7.0.2 first.
 
 A real finger produces **zero events of any family** — not touch, not pointer, not mouse — on the
 v0.0.9 build, while everything around it checks out: router present/enabled/configured, listeners
@@ -227,6 +355,12 @@ This does not answer the question — it makes the question cheap to answer on h
 the shipped router is the code that was actually tested.
 
 ### 7.0.1 The page scripts are EXONERATED — off-Deck bisect, 2026-07-31
+
+**Its verdict holds; its inference does not.** The bisect correctly cleared the page scripts, and the
+categorical argument in it is sound. But "what remains is the engine" was a false dichotomy: it
+enumerated the suspects it could *see* — page scripts and the engine binary — and never listed the
+launcher's own touch-mode guard, which is neither. §7.0.2 has the cause. The lesson is that
+narrowing by elimination is only as good as the suspect list, and ours omitted our own code.
 
 `just touch-bisect` runs the 2×2 in the build container: each engine preset × {router,
 router+hide_cursor}, dispatching **real** touch through CDP `Input.dispatchTouchEvent`.

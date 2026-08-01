@@ -13,6 +13,8 @@ bool focus_class_is_ours(std::string_view wm_class) {
   return ascii_lower(wm_class).find("content_shell") != std::string::npos;
 }
 
+bool should_write_mode(bool focused) { return focused; }
+
 }  // namespace deckback
 
 #if defined(DECKBACK_HAVE_XCB)
@@ -33,16 +35,12 @@ constexpr xcb_atom_t kNoAtom = XCB_ATOM_NONE;
 // gamescope --default-touch-mode: 0=hover, 1/2/3=synthesized click, 4=passthrough (real wl_touch).
 // Which one we hold is TouchModeGuard's `mode_` — see the enum's comment in touchmode.hpp.
 
-// Read a 32-bit CARDINAL property, or -1 if absent/short.
-long read_cardinal(xcb_connection_t* c, xcb_window_t w, xcb_atom_t prop) {
-  xcb_get_property_reply_t* r =
-      xcb_get_property_reply(c, xcb_get_property(c, 0, w, prop, XCB_ATOM_CARDINAL, 0, 1), nullptr);
-  long out = -1;
-  if (r && xcb_get_property_value_length(r) >= 4)
-    out = *static_cast<uint32_t*>(xcb_get_property_value(r));
-  free(r);
-  return out;
-}
+// There is deliberately NO read of the mode atom here. The guard used to read it and write only on
+// a mismatch; that read is what broke touch (touch-gestures.md §7.0.2). Our display's copy is a
+// stale mirror of a global mode Steam sets from its own Xwayland, so it can read "correct" while
+// touch is routed elsewhere — measured on-Deck as :0 = 1 and :1 = 4 simultaneously, behaving as 1.
+// If you are tempted to re-add it as an optimisation, that is the bug, and it is invisible to every
+// diagnostic we have.
 
 // WM_CLASS of a window as a raw string (may contain an embedded NUL), empty if unset.
 std::string window_class(xcb_connection_t* c, xcb_window_t w) {
@@ -109,7 +107,10 @@ void TouchModeGuard::loop() {
   bool announced = false;
   for (;;) {
     const uint32_t want = static_cast<uint32_t>(mode_);
-    if (our_window_is_focused(c, root) && read_cardinal(c, root, mode_atom) != want) {
+    // No read-before-write. Our copy of the atom is a stale mirror of a global mode Steam sets from
+    // another display, so "it already says 4" is not evidence that touch is routed to us — see
+    // should_write_mode() and touch-gestures.md §7.0.2. We assert, every tick, while focused.
+    if (should_write_mode(our_window_is_focused(c, root))) {
       uint32_t v = want;
       xcb_change_property(c, XCB_PROP_MODE_REPLACE, root, mode_atom, XCB_ATOM_CARDINAL, 32, 1, &v);
       xcb_flush(c);

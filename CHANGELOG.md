@@ -28,6 +28,14 @@ minor versions may include breaking changes.
 - **A fuller feature list** in the About panel and the README.
 
 ### Fixed
+- **Touch gestures no longer stop working after the first launch, or after using the Steam menu.**
+  They worked once, then went completely dead — no response at all, or your finger just moved the
+  highlight between tiles — until the Deck was rebooted. It also happened mid-session after opening
+  the Steam menu, for example to change screen brightness. Deckback has to ask the system to send it
+  real touch input, and Steam sets that back to its own preference every time it hands control to an
+  app. Deckback only asked once, and only when the setting looked wrong to it — but it was reading a
+  stale copy, so it usually looked fine when it wasn't. Deckback now keeps asking for as long as
+  it's on screen, so touch comes back within a second of anything taking it away.
 - **The mouse pointer no longer sits on screen when touch gestures are on.** Deckback hides the
   pointer as part of making the touchscreen inert, and turning gestures on replaces that — so the
   pointer came back and stayed visible over the video.
