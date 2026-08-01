@@ -171,15 +171,21 @@ video / pauses), double-tap on playback (seeks forward), press-and-hold at 2× *
 0.5× slow motion** (so P12.0b's `playbackRate` finding pays off end to end), and the Y toggle (off
 and on, with its toast). 50 ms polling was not reported as perceptible.
 
+**Also verified by finger on the FIXED build (2026-07-31, OLED, after §7.0.2):** gestures on a
+relaunch into an already-primed session — the exact condition that used to kill them — the
+**left-edge swipe → Back** (previously untried by anyone, in any build), the **Y-during-hold**
+release (2× returns to normal instead of stranding the rate), and **recovery across a Steam QAM
+brightness change**, which is the failure the user originally reported.
+
 **NOT verified:**
 
-* the **left-edge swipe → Back** — the one gesture no finger has tried, in any build;
-* the **three §7.1 review fixes** — the cursor hiding, the release of a hold stranded by the toggle,
-  and the indicator past six double-taps. They landed AFTER the last hardware round, so they carry
-  L0 coverage only. (The zone-split hold itself is *not* in this list: 0.5× was in the build that
-  was tested, and was confirmed by hand.)
+* the **seek indicator past six double-taps** — the last of the three §7.1 review fixes still
+  carrying L0 coverage only. The other two (cursor hiding, Y-during-hold release) are now confirmed
+  by finger;
 * nothing on an **LCD unit** or any second device;
-* whether **mode 4 stays put over a long session** while Steam also manages that atom;
+* whether **mode 4 stays put over a long session** — partly answered and worse than assumed: it does
+  NOT stay put, Steam re-asserts 1 on every focus change (§7.0.2). What is untested is whether the
+  750 ms heartbeat holds across hours, sleep/resume, and Steam updates;
 * the feel numbers (`stepPx 70`, `tapSlop 16`) are one person's hands on one panel.
 
 ### 7.0.2 ★ RESOLVED — it was OUR guard, not the engine: the write we optimised away (2026-07-31)
