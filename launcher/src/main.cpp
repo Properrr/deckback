@@ -523,6 +523,7 @@ int main(int argc, char** argv) {
                          cfg->error_retry_min_ms, cfg->error_retry_max_ms, cfg->error_title,
                          cfg->error_hint,         cfg->disable_touch};
     nav_policy.touch_gestures = gestures_on;
+    nav_policy.hide_cursor = gestures_on && cfg->touch_hide_cursor;
     navigator.emplace("127.0.0.1", cfg->remote_debugging_port, cfg->user_agent, url,
                       cfg->devtools_poll_ms, nav_policy);
     if (onboarding || osd)

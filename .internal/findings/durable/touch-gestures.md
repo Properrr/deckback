@@ -214,6 +214,18 @@ arithmetic behind the indicator text, the other only runs on `setEnabled(false)`
 That leaves the untested `gold` engine as the more plausible candidate — and if it IS the engine,
 the finding is much larger than touch: it means the preset we ship is not the preset we validate.
 
+**Mitigation applied 2026-07-31, before the cause is known.** The router is restored
+**byte-identical** to the build that was verified by hand, and the cursor hiding moved OUT of it into
+its own script (`config/scripts/hide_cursor.js`) behind its own flag (`touch_hide_cursor`, default
+on, user-overridable). The two suspects were entangled in one file, so neither could be dropped
+without dropping the other; now `"touch_hide_cursor": false` in `user.json` removes exactly the
+cursor script and nothing else, with no rebuild. An L0 test pins that the cursor script registers
+**no input listeners at all**, so its ability to affect touch is bounded by construction rather than
+by argument.
+
+This does not answer the question — it makes the question cheap to answer on hardware, and it means
+the shipped router is the code that was actually tested.
+
 **The decisive experiment is armed and needs one tap.** The v0.0.9 app on the Deck is running the
 EXACT pre-review script (hot-pushed over CDP, `cursor` empty again) with per-family counters reset.
 Tap, then read `window.__dbFam` and `stats()`:

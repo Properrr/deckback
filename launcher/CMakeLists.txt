@@ -266,6 +266,11 @@ if(BUILD_TESTING)
     add_test(NAME js_touch_gestures
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/touch_gestures.test.js)
+    # Separate from the router on purpose (touch-gestures.md §7.0): this pins that the cursor script
+    # hides the cursor and does NOTHING else -- in particular that it registers no input listeners.
+    add_test(NAME js_hide_cursor
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/hide_cursor.test.js)
   else()
     message(STATUS "node not found — skipping the JS tests (js_toggle_captions, js_osd_updates_nav,"
                    " js_touch_gestures)")

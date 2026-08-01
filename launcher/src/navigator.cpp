@@ -79,6 +79,13 @@ void Navigator::loop() {
           "navigator: touch gesture router installed (drag/flick, edge-swipe Back, double-tap "
           "seek)");
   }
+  if (policy_.hide_cursor) {
+    // Separate from the router deliberately: with no_pointer.js not installed under the gesture
+    // policy, the cursor it used to hide comes back — but this is also one of the two suspects for
+    // touch-gestures.md §7.0, so it has to be droppable on its own, without touching the router.
+    if (ScriptLibrary::instance().install_sticky(client_, "hide_cursor"))
+      info("navigator: cursor hidden (hide_cursor.js)");
+  }
   if (policy_.mic_autogrant) {
     const std::string origin = origin_of(url_);
     if (!origin.empty() && client_.grant_permissions(origin, "audioCapture"))

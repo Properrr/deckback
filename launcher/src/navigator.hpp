@@ -48,6 +48,10 @@ struct NavPolicy {
   // touchscreen would look broken rather than misconfigured. main() enforces the exclusion; this
   // comment is here because the two fields sit next to each other and look independent.
   bool touch_gestures = false;
+
+  // Inject hide_cursor.js alongside the router. Its own flag, and its own file, so it can be
+  // removed on hardware without touching the router — see touch-gestures.md §7.0.
+  bool hide_cursor = false;
 };
 
 class Navigator {

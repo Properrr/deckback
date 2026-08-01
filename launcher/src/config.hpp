@@ -90,6 +90,13 @@ struct Config {
   double touch_hold_rate = 2.0;
   double touch_hold_slow_rate = 0.5;
 
+  // Hide the X cursor while the gesture router is running. `disable_touch` gets this from
+  // no_pointer.js; the gesture policy needs its own, since the two are mutually exclusive.
+  // SEPARATELY INJECTED and separately switchable on purpose: it is one of two suspects for
+  // touch-gestures.md §7.0 (a build where a finger produced no events at all), and the other is the
+  // engine binary itself. Turning this off must remove exactly this and nothing else.
+  bool touch_hide_cursor = true;
+
   // First-run controls overlay (findings input-ux §17). `View (⧉)` = captions is unguessable, and
   // SUPPORT.md is invisible from Game Mode. Shown once; the same rows remain available in
   // Settings ▸ Keys via the fixed Menu button.

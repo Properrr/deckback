@@ -84,6 +84,8 @@ void ConfigStore::apply(Config& c) const {
     if (auto b = v->as_bool()) c.disable_touch = *b;
   if (const json::Value* v = find_member(overlay_, "touch_gestures"))
     if (auto b = v->as_bool()) c.touch_gestures = *b;
+  if (const json::Value* v = find_member(overlay_, "touch_hide_cursor"))
+    if (auto b = v->as_bool()) c.touch_hide_cursor = *b;
   if (const json::Value* v = find_member(overlay_, "caption_languages"))
     if (const std::vector<json::Value>* a = v->as_array()) {
       std::vector<std::string> langs;

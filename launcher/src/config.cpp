@@ -55,6 +55,7 @@ constexpr Field<bool> kBoolFields[] = {
     {"watchdog.restart_on_crash", &Config::watchdog_restart_on_crash},
     {"disable_touch", &Config::disable_touch},
     {"touch_gestures", &Config::touch_gestures},
+    {"touch_hide_cursor", &Config::touch_hide_cursor},
     {"first_run_overlay", &Config::first_run_overlay},
     {"captions_toast", &Config::captions_toast},
     {"caption_remember", &Config::caption_remember},
