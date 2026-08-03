@@ -2,7 +2,9 @@
 scope: durable
 title: Feature landscape — what is worth adding for the Steam Deck, and what it would cost
 created: 2026-07-28
-updated: 2026-07-31 — P12.0b and P12.0c RUN on hardware (OLED); see §8. P12.0a still unrun.
+updated: 2026-08-03 — §8.5 records P12.6 (sleep timer) as BUILT and unverified, and why it needed no
+         new sandbox permission. 2026-07-31 — P12.0b and P12.0c RUN on hardware (OLED); see §8.
+         P12.0a still unrun.
 status: research, partly measured — §8 records what the Deck actually answered; everything else is
         still a named probe, not a result
 method: read the plan, TASKS.md, the registered findings, and the launcher/config surface at ea08f9a;
@@ -114,9 +116,16 @@ and `touch-lock.md` proved on hardware that it does not even apply.
 - **Playback speed.** `<video>.playbackRate` is certain; whether the TVHTML5 player exposes a rate
   API (and whether it overrides ours on each video) needs the same method dump that found `seekBy`.
   Bind to a freed rear grip or an LT layer; mobile's hold-for-2× is the reference model.
-- **Sleep timer / "stop after this video."** An OSD tab, a player pause, an inhibitor release, and
-  optionally `login1.Suspend`. Falling asleep watching in bed is a handheld-only failure mode, and
-  every part of it is already wired.
+- **Sleep timer.** ✅ **BUILT 2026-08-03** (branch `feat/sleep-timer`, P12.6) — OSD sub-tab, duration
+  ladder, and a pause. **The `login1.Suspend` half of this entry turned out to be unnecessary, not
+  merely optional**, and that is the reusable part: pausing already drops play-state, which releases
+  the `playback active` inhibitor, which is what the host nudge is gated on, so SteamOS dims and
+  suspends by itself. The feature therefore costs **zero new sandbox permissions** — §1.1's price
+  never had to be paid. Prefer this shape for anything that wants the Deck to idle out: stop being
+  the reason it cannot, rather than asking for the authority to make it. Still unverified on
+  hardware; the chain past our pause is asserted from outside the app in `tests/deck/test_sleep.py`.
+  **"Stop after this video" is NOT in it** and is not merely unfinished — it is gated on an
+  unanswered probe (below).
 - **Free the rear grips.** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face buttons, so four
   physical controls are invisible to `input.cpp` by construction (they are not on the virtual pad —
   input-ux §1). Repointing two of them to distinct xinput buttons is a `.vdf` + keymap edit and
@@ -264,3 +273,37 @@ gesture layer built on that has been driven by a finger through every gesture
 `'ontouchstart' in window`, `pointer: coarse` — returns the wrong answer on a device where the
 feature works. Anything gated on them would disable itself exactly where it should run, which is why
 the gesture layer is config-gated rather than detected.
+
+### 8.5 P12.6 — the sleep timer needed no new authority, and that is the transferable part
+
+Built 2026-08-03 (branch `feat/sleep-timer`); **not yet run on a Deck**, so nothing below is a
+hardware result — it is a design record and the reason a permission was not added.
+
+§3 listed this as "an OSD tab, a player pause, an inhibitor release, and optionally
+`login1.Suspend`". Three of those four turned out to be one thing. The launcher already holds a
+logind `idle`-block inhibitor exactly while `PlayState.playing`, and the host `idle-nudge` helper
+nudges exactly while that inhibitor is listed (`keep-awake.md`). So **pausing the video is the whole
+mechanism**: play-state drops, the inhibitor is released, the nudge stops, gamescope's idle timer
+fires, SteamOS dims and auto-suspends on its own. No inhibitor code of ours, no Suspend call, and —
+the part that matters for §1.1 — **no `finish-args` change, so no installed user is stranded on
+self-update**. `just preflight`'s `check-permissions` gate proves the manifest is untouched.
+
+Generalise it as a question to ask before designing anything that wants the Deck to change power
+state: *are we the reason it currently cannot?* Removing our own hold is free; asking for the
+authority to force the transition costs a migration. The same reading applies in reverse to P12.1
+(audio-only), which wants the opposite — and whose known trade-off is that a `sleep`-block inhibitor
+also blocks a deliberate power-button sleep.
+
+Two things deliberately left open rather than guessed:
+
+- **"Stop after this video" is not shipped** (P12.6a). It needs to see a video END before Leanback's
+  autoplay swaps the next one in, and whether a 1 s poll ever observes that window is unknown.
+  `player_state.js` computes `ended` today, but only as one bit of a bitmask sampled at the
+  play-state cadence. Probe:
+  `tests/deck/test_sleep.py::test_is_the_end_of_a_video_observable_at_our_poll_cadence`.
+- **The chain above is asserted, not assumed.** `test_pausing_releases_the_playback_inhibitor` reads
+  logind's `ListInhibitors` over D-Bus from outside the sandbox — deliberately not
+  `systemd-inhibit --list`, whose ellipsized WHY column is what silently broke the nudge helper
+  before (`keep-awake.md`). It is a gate even though it would have passed before this feature
+  existed: it is the assumption the design rests on, and a SteamOS or Cobalt bump could break it
+  without touching a line of our code.

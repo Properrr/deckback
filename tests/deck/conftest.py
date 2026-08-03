@@ -42,6 +42,11 @@ def pytest_configure(config):
         "markers", "uinput: needs /dev/uinput on the Deck (udev rule; see lib/uinput.py)."
     )
     config.addinivalue_line("markers", "playback: needs a video playing.")
+    config.addinivalue_line(
+        "markers",
+        "slow: waits out a real-time countdown (minutes). Exclude with -m 'not slow' for a quick "
+        "pass; it is still a gate and a release run must include it.",
+    )
 
 
 def pytest_addoption(parser):

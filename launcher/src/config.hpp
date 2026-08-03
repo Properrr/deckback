@@ -186,6 +186,18 @@ struct Config {
   // URLs / auth token. 0 = disabled (always nudge). Duration is measured with CLOCK_BOOTTIME.
   int resume_reload_after_ms = 0;
 
+  // Sleep timer (TASKS P12.6, launcher/src/sleeptimer.hpp). Off = the OSD Sleep sub-tab is not
+  // offered at all; the timer never arms itself, so this only decides whether the surface exists.
+  bool sleep_timer = true;
+  // The duration ladder the Sleep sub-tab offers, minutes, comma-separated. Hot-swappable, and
+  // parsed leniently: junk entries are dropped and an empty result falls back to the shipped ladder
+  // (5, 15, 30, 45, 60, 90, 120), so a bad config push cannot leave a menu with nothing in it.
+  // Fractional values are allowed, which is what lets the on-Deck fire test run in bounded time.
+  std::string sleep_timer_options_minutes;
+  // Lead time of the "playback stops in a minute" toast. 0 disables the warning; it is also
+  // suppressed for any duration not longer than the lead, where it would fire on arming.
+  int sleep_timer_warn_seconds = 60;
+
   // Self-update policy via the Flatpak portal (findings durable/self-update.md):
   //   off    — the updater is never constructed; update only via Desktop Mode `flatpak update`.
   //   notify — DEFAULT. Detect a newer commit and surface a passive indicator + a one-time card,

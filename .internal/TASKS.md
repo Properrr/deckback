@@ -1049,8 +1049,31 @@ answer exits 0 — it is a finding; only "could not observe" is an error (3). Re
       exposes `setPlaybackRate` + `getAvailablePlaybackRates() -> [0.25 … 2]` — use that list rather
       than inventing steps. Still open: whether the rate survives a video CHANGE (only one video was
       sampled), and `setPlaybackRate` was proven to exist, not to work. Needs a free control — P12.7.
-- [ ] **P12.6 — Sleep timer / "stop after this video."** OSD tab + player pause + inhibitor release,
-      optionally `login1.Suspend`. Handheld-only failure mode; every part already wired.
+- [~] **P12.6 — Sleep timer. BUILT 2026-08-03, NOT YET RUN ON A DECK** — branch
+      `feat/sleep-timer`, `launcher/src/sleeptimer.cpp` + the OSD's **Settings ▸ Sleep** sub-tab.
+      Duration ladder 5–120 min, live countdown, warning toast a minute out, per-session (never
+      persisted — a timer that re-armed itself every launch would stop playback for reasons set days
+      ago). **`login1.Suspend` was considered and deliberately NOT used**: pausing already drops
+      play-state → the logind `playback active` inhibitor is released → the host idle-nudge helper
+      stops nudging → gamescope's idle timer fires and SteamOS dims/suspends by itself, so the
+      Suspend call buys nothing and any permission widening strands installed users (§1.1). The
+      manifest is unchanged; `just preflight`'s `check-permissions` gate confirms it. Countdown is
+      CLOCK_BOOTTIME, so one that elapses during suspend is over on wake. L0: `sleeptimer_test.cpp`
+      (fire/warn edges, ladder parse, OSD model) + `tests/js/osd_sleep_subtab.test.js` (the
+      namespace generalisation — a Sleep edit that still said `cc.` would be routed to
+      CaptionSettings, rejected, and dropped with nothing on screen looking wrong).
+      **Unverified until `just test-deck` runs `tests/deck/test_sleep.py`** (5 tests, written to
+      fail first per TEST-PLAN §0). Its `slow` fire test waits out a real 5-minute countdown;
+      exclude with `-m "not slow"` for a quick pass, but a release run must include it.
+- [ ] **P12.6a — "Stop after this video". DEFERRED, gated on a probe, not on difficulty.** The
+      option P12.6's original title named and v1 does not ship. It needs to observe a video ENDING
+      before Leanback's autoplay swaps the next one in, and whether a poll at the launcher's cadence
+      ever *sees* that window is unknown — `player_state.js` already computes `ended`, but only as
+      one bit of a play/open/focus bitmask that is sampled once a second. The probe is written and
+      ready: `tests/deck/test_sleep.py::test_is_the_end_of_a_video_observable_at_our_poll_cadence`
+      (marked `probe` — a failure is a finding, not a regression). Run it near the end of a short
+      video. If `ended` is never observed, this needs a different lever (or dropping); do not build
+      it on the assumption that polling works.
 - [ ] **P12.7 — Free the rear grips.** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face
       buttons, so four physical controls are invisible to `input.cpp` by construction (grips are not
       on the virtual pad, input-ux §1). Repoint two to distinct xinput buttons; unblocks P12.5/P12.1.

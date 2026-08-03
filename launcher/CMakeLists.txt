@@ -152,6 +152,7 @@ add_library(deckback_core STATIC
   src/pageoverlay.cpp
   src/http.cpp
   src/caption_settings.cpp
+  src/sleeptimer.cpp
   src/platform.cpp
   src/updater.cpp
   src/simwatch.cpp  # sim-only: the --selftest-watch reconnect driver (isolated from updater.cpp)
@@ -235,7 +236,7 @@ if(BUILD_TESTING)
 
   deckback_test_group(pure
     json util sha256 config config_store caption_settings caption_fuzz about scripts log profile
-    gestures)
+    gestures sleeptimer)
 
   deckback_test_group(cdp devtools navigator player errorpage)
 
@@ -260,6 +261,12 @@ if(BUILD_TESTING)
     add_test(NAME js_osd_updates_nav
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/osd_updates_nav.test.js)
+    # The Sleep sub-tab, and the namespace generalisation it rides on. A verdict that still said
+    # "cc." would be routed to CaptionSettings, rejected, and dropped with nothing on screen looking
+    # wrong -- the page updates its own text before the verdict is ever read.
+    add_test(NAME js_osd_sleep_subtab
+             COMMAND ${NODE_EXECUTABLE}
+                     ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/osd_sleep_subtab.test.js)
     # The gesture recogniser, driven by synthetic touch streams. A threshold that reads a tap as a
     # drag, or an edge swipe as a scroll, does not fail on hardware -- it just feels wrong, which is
     # the hardest kind of bug to notice and the easiest to cover here.
@@ -273,6 +280,6 @@ if(BUILD_TESTING)
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/hide_cursor.test.js)
   else()
     message(STATUS "node not found — skipping the JS tests (js_toggle_captions, js_osd_updates_nav,"
-                   " js_touch_gestures)")
+                   " js_osd_sleep_subtab, js_touch_gestures)")
   endif()
 endif()

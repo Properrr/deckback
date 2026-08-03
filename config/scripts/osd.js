@@ -5,11 +5,14 @@
 // Component lives on window.__dbOSD. CSP-safe (adoptedStyleSheets + CSSOM only, no style element or
 // inline style attribute, no innerHTML) and keep-alive'd like the other launcher overlays.
 //
-// Settings has sub-tabs (Keys read-only, Captions writable). The Captions sub-tab is an editable
-// surface: combo rows (←/→ cycle) and a dynamic preferred-language list (X removes an entry, ←/→
-// reorders it by priority, A on the add-row opens a full-language picker). A combo/list edit returns
-// "apply:cc.<key>=<val>" so the launcher persists it WITHOUT closing the menu. Held ↑/↓ auto-repeat
-// (the launcher's own acceleration) for fast scanning; L1/R1 page-jump the picker ±10.
+// Settings has sub-tabs (Keys read-only, Captions and Sleep writable). An editable sub-tab is a
+// model object with combo rows (←/→ cycle); Captions adds a dynamic preferred-language list (X
+// removes an entry, ←/→ reorders it by priority, A on the add-row opens a full-language picker). A
+// combo/list edit returns "apply:<ns>.<key>=<val>" so the launcher persists it WITHOUT closing the
+// menu. The namespace comes from the model's own `ns` field rather than being hard-coded, which is
+// what lets a second editable sub-tab reuse this widget without the launcher having to guess which
+// owner a verdict belongs to. Held ↑/↓ auto-repeat (the launcher's own acceleration) for fast
+// scanning; L1/R1 page-jump the picker ±10.
 (function (p) {
   var ID = '__deckback_osd';
 
@@ -105,6 +108,11 @@
     "#__deckback_osd .cval{color:#fff;display:flex;align-items:center;gap:12px;}" +
     "#__deckback_osd .cval .arrow{color:#9a9a9a;font-weight:700;}" +
     "#__deckback_osd .chead{color:#9fd0ff;font-weight:700;padding:8px 18px 0;}" +
+    // The sleep sub-tab's launcher-computed countdown, and the one line explaining what expiry
+    // actually does (pause, then let the Deck idle out) — the part a user cannot infer from a
+    // duration picker.
+    "#__deckback_osd .sstat{font-size:28px;font-weight:600;color:#9fd0ff;padding:6px 18px 2px;}" +
+    "#__deckback_osd .snote{color:#9a9a9a;font-size:20px;padding:10px 18px 0;max-width:60ch;}" +
     "#__deckback_osd .langrow{display:flex;align-items:center;justify-content:space-between;" +
     "gap:24px;padding:10px 18px 10px 34px;border-radius:11px;font-size:23px;}" +
     "#__deckback_osd .langrow .x{color:#9a9a9a;font-weight:600;font-size:19px;}" +
@@ -219,6 +227,7 @@
 
     var hasUpdate = !!p.upd_has;
     var cc = p.cc || null;
+    var sleep = p.sleep || null;
 
     var order = ['settings', 'updates'];
     if (p.about_name) order.push('about');
@@ -243,6 +252,7 @@
     pSettings.setAttribute('data-tab', 'settings');
     var subs = ['keys'];
     if (cc) subs.push('captions');
+    if (sleep) subs.push('sleep');
 
     var subSel = el('div', 'subsel');
     subSel.setAttribute('data-focus', '1');
@@ -367,6 +377,7 @@
       subs: subs,
       sub: 'keys',
       cc: cc,
+      sleep: sleep,
       subLabel: subLabel,
       subContent: subContent,
       keysScroll: keysScroll,
@@ -395,8 +406,11 @@
       return code;
     }
 
-    function buildCaptions() {
-      var rows = (S.cc && S.cc.rows) || [];
+    // Renders one editable model's rows. `model.ns` is carried onto each combo node, so the verdict
+    // a cycle produces names its own owner and a second editable sub-tab needs no new widget.
+    function buildRows(model) {
+      var ns = (model && model.ns) || 'cc';
+      var rows = (model && model.rows) || [];
       for (var r = 0; r < rows.length; r++) {
         var row = rows[r];
         if (row.kind === 'combo') {
@@ -413,6 +427,7 @@
           cr.appendChild(val);
           cr.__row = row;
           cr.__vtext = vtext;
+          cr.__ns = ns;
           S.subContent.appendChild(cr);
         } else {
           S.subContent.appendChild(el('div', 'chead', row.label));
@@ -434,10 +449,25 @@
       }
     }
 
+    var SUB_LABELS = { keys: 'Keys', captions: 'Captions', sleep: 'Sleep' };
+
+    // The countdown and the note bracket the picker: the status line answers "is it running?" before
+    // the user reads a duration, and the note carries what expiry does — pausing is the whole
+    // mechanism, and nothing about a duration picker says so.
+    function buildSleep() {
+      var m = S.sleep || {};
+      S.sleepStat = el('div', 'sstat', m.status || '');
+      S.subContent.appendChild(S.sleepStat);
+      buildRows(m);
+      if (m.note) S.subContent.appendChild(el('div', 'snote', m.note));
+    }
+
     function renderSub() {
-      S.subLabel.textContent = S.sub === 'captions' ? 'Captions' : 'Keys';
+      S.subLabel.textContent = SUB_LABELS[S.sub] || 'Keys';
       while (S.subContent.firstChild) S.subContent.removeChild(S.subContent.firstChild);
-      if (S.sub === 'captions' && S.cc) buildCaptions();
+      S.sleepStat = null;
+      if (S.sub === 'captions' && S.cc) buildRows(S.cc);
+      else if (S.sub === 'sleep' && S.sleep) buildSleep();
       else S.subContent.appendChild(S.keysScroll);
     }
 
@@ -527,7 +557,7 @@
       i = (i + dir + opts.length) % opts.length;
       row.value = opts[i].value;
       node.__vtext.textContent = opts[i].label;
-      return 'apply:cc.' + row.key + '=' + row.value;
+      return 'apply:' + (node.__ns || 'cc') + '.' + row.key + '=' + row.value;
     }
     function removeLang(node) {
       var code = node.getAttribute('data-code');
@@ -753,6 +783,26 @@
       return 'ok';
     };
 
+    // Re-point the sleep sub-tab at a fresh launcher model. Patch, never re-render: the countdown
+    // updates once a second while the menu is open, and rebuilding the rows that often would fight
+    // the focus ring and make ←/→ feel like it drops presses.
+    S.setSleep = function (m) {
+      if (!m) return 'ok';
+      S.sleep = m;
+      if (S.sub !== 'sleep') return 'ok';
+      if (S.sleepStat) S.sleepStat.textContent = m.status || '';
+      var rows = m.rows || [];
+      var nodes = S.subContent.querySelectorAll('.crow');
+      for (var i = 0; i < rows.length; i++) {
+        for (var n = 0; n < nodes.length; n++) {
+          if (nodes[n].getAttribute('data-key') !== rows[i].key || !nodes[n].__vtext) continue;
+          nodes[n].__row = rows[i];
+          nodes[n].__vtext.textContent = comboText(rows[i]);
+        }
+      }
+      return 'ok';
+    };
+
     S.state = function () {
       if (!S.root || !S.root.isConnected) return 'gone';
       return 'tab=' + S.tab + ';idx=' + S.focusIdx + ';sub=' + S.sub + ';pick=' + (S.picker ? 1 : 0);
@@ -776,6 +826,10 @@
   if (op === 'upd') {
     if (!S.root || !S.root.isConnected) return 'gone';
     return S.setUpdate(p);
+  }
+  if (op === 'sleep') {
+    if (!S.root || !S.root.isConnected) return 'gone';
+    return S.setSleep(p.sleep);
   }
   var live = !!(S.root && S.root.isConnected);
   if (op === 'close') {

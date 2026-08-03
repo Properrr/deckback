@@ -127,6 +127,7 @@ The unit tests are good tests of the wrong layer. Each of these is **unproven wh
 | Error page (`errorpage_test`) | a failed `Page.navigate` is *seen* as failed; backoff saturates instead of overflowing; the classifier refuses to guess; hot-swapped text is escaped | that the injected page renders under gamescope, or that an injected Enter reaches its Retry button |
 | Controls card (`onboarding_test`) | rows are derived from the shipped app.json, dead controls are omitted, disabled features are not advertised, the marker is one-shot and versioned | that the card renders over Leanback, or that swallowing evdev events freezes focus behind it |
 | OSD Settings menu (`osdmenu_test`, `scripts_test`) | status line / action-button set / verdict parser are correct; `osd.js`/`osd_button.js` use only the CSP-safe style path + keep-alive observer | that the menu renders and navigates over Leanback, that *capture ⇔ paint* holds under a real body swap, and that input is restored after the menu closes — the two-bug L2 suite (`tests/deck/test_osd.py`) exists but has **not** run on a Deck |
+| Sleep timer (`sleeptimer_test`, `js_osd_sleep_subtab`) | the fire/warn edges (once each, disarm on fire, a countdown that elapsed during suspend is *over*), the ladder parse, the OSD model; and that a Sleep edit emits `apply:sleep.*` while captions still emit `apply:cc.*` | **the entire point of the feature** — that pausing releases the logind inhibitor, that the nudge helper then stops, and that SteamOS actually dims and suspends. That chain is logind + gamescope + a host service, none of which exist here; `tests/deck/test_sleep.py` asserts it from outside the app and has **not** run on a Deck |
 | `devtools_test` | RFC6455 codec against a loopback CDP server | a real Cobalt target |
 
 ### C. Implemented, **zero verification** — highest risk
@@ -228,6 +229,11 @@ tests/deck/
   test_keys.py       # the §4 keycode spikes, with negative controls
   test_touch.py      # TouchGuard: gamescope really loses touch
   test_media.py      # decoder identity, dropped frames, AV1 steering
+  test_sleep.py      # P12.6: the OSD arms it, the deadline pauses playback, and — the link the
+                     #   feature rests on and does not implement — a pause releases the logind
+                     #   "playback active" inhibitor so the Deck may idle out. Its fire test is
+                     #   `slow` (waits out a real countdown); `-m "not slow"` skips it, a release
+                     #   run must not. Also carries the `probe` that decides P12.6a.
   test_power.py      # closed-loop: start playback, sample power_now, assert
   test_lifecycle.py  # suspend/resume, launch/kill cycles, single-instance
   test_conformance.py# L3 driver (§6)

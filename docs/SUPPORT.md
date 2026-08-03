@@ -31,6 +31,8 @@ A small **Settings** button sits in the top-right corner (except while a video i
 
 - **Settings ▸ Keys** — the controller hot-keys currently in use, read live from your `app.json` (so
   it always matches your real mapping). More settings arrive here over time.
+- **Settings ▸ Sleep** — a sleep timer: stop playback in 5 / 15 / 30 / 45 / 60 / 90 / 120 minutes.
+  See [Sleep timer](#sleep-timer).
 - **Updates** — the configured update policy and its current status. In notify mode, a new release
   shows what's new and the actions to take; the screen does not claim your version is current before
   the portal has reported an update state.
@@ -313,6 +315,31 @@ Deckback's playback signal — reinstall it (`just idle-nudge`) and, if it persi
 stays lit, the service just needs a restart (`systemctl --user restart deckback-idle-nudge`); if it
 dims even under `--force`, a newer gamescope has stopped honoring the synthetic nudge and the helper
 needs an update — please file an issue with your SteamOS version.
+
+## Sleep timer
+
+For the case the section above is the other half of: falling asleep watching, with the Deck happily
+playing video until the battery is flat.
+
+Open the Settings menu (**Menu ☰**) and use **←/→** on the *Section* row to reach **Sleep**, then
+**←/→** on *Stop playback in* to pick a duration — 5 to 120 minutes, or *Off* to cancel. The row
+above shows the live countdown. It works while a video is playing, so you can set it without
+leaving what you are watching.
+
+A minute before it runs out you get a toast, so there is time to open the menu and set it back to
+*Off*. When it does run out Deckback **pauses the video** — and that is all it does. Pausing is
+enough: the idle-nudge helper only keeps the screen alive *while something is playing*, so once
+playback stops SteamOS dims and auto-suspends on its own, exactly as it would if you had put the Deck
+down. Deckback never suspends the machine itself, so the power button and the Steam menu keep
+behaving normally the whole time.
+
+The timer is **per session**: it always starts *Off* when Deckback launches, so a duration you set
+one evening can never stop playback the next. A countdown that runs out while the Deck is asleep is
+simply over on wake — it does not resume counting.
+
+Two `app.json` knobs, both under `power`: `sleep_timer_options_minutes` replaces the duration list
+(comma-separated minutes), and `sleep_timer_warn_seconds` moves or disables the warning toast (`0`
+disables it). Set `sleep_timer: false` to hide the sub-tab entirely.
 
 ## Uninstalling Deckback
 

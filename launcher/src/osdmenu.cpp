@@ -6,6 +6,8 @@
 
 #include "caption_settings.hpp"
 #include "log.hpp"
+#include "sleeptimer.hpp"
+#include "util.hpp"
 
 namespace deckback {
 
@@ -81,6 +83,10 @@ bool OsdMenuController::inject_open(DevToolsClient& client) {
     pm.set_raw("cc", cfg_.captions->osd_model_json());
   else
     pm.set_raw("cc", std::string_view("null"));
+  if (cfg_.sleep)
+    pm.set_raw("sleep", cfg_.sleep->osd_model_json(boottime_ms()));
+  else
+    pm.set_raw("sleep", std::string_view("null"));
   pm.set("upd_has", has_update)
       .set("upd_status", status)
       .set("upd_notes", notes)
@@ -144,7 +150,14 @@ std::string OsdMenuController::exec(std::string_view cmd) {
         cfg_.on_update_ignore();
       break;
     case OsdVerdict::Kind::Apply:
-      if (cfg_.captions) cfg_.captions->apply_action(pv.action);
+      // Routed by the verdict's own namespace, not by the sub-tab we think is showing: the menu is
+      // the authority on which surface produced the edit, and a mis-attributed apply would silently
+      // drop a setting rather than fail loudly.
+      if (pv.action.starts_with("sleep.")) {
+        if (cfg_.sleep && cfg_.sleep->apply_action(pv.action, boottime_ms())) push_sleep_model();
+      } else if (cfg_.captions) {
+        cfg_.captions->apply_action(pv.action);
+      }
       break;
     case OsdVerdict::Kind::Hold:
       // The input layer owns the hold deadline (it sees the release edge); nothing to do here.
@@ -162,6 +175,17 @@ void OsdMenuController::tick(bool on_watch) {
   if (open_.load(std::memory_order_acquire) &&
       model_dirty_.exchange(false, std::memory_order_acq_rel)) {
     push_update_model();
+  }
+
+  // A running countdown must visibly run — and a finished one must visibly stop. The throttled push
+  // covers the first; the armed-state edge covers the second, which has no edit behind it to
+  // trigger a repaint. An idle, disarmed menu pushes nothing.
+  if (open_.load(std::memory_order_acquire) && cfg_.sleep) {
+    const bool armed = cfg_.sleep->armed();
+    if (armed != sleep_was_armed_ || (armed && sleep_probe_.due())) {
+      sleep_was_armed_ = armed;
+      push_sleep_model();
+    }
   }
 
   if (open_.load(std::memory_order_acquire)) {
@@ -246,6 +270,14 @@ void OsdMenuController::push_update_model() {
       .set("upd_has", has_update)
       .set("upd_status", status)
       .set("upd_buttons", osd_update_buttons(has_update, can_check));
+  if (eval_op(client_, pm) == "gone") open_.store(false, std::memory_order_release);
+}
+
+void OsdMenuController::push_sleep_model() {
+  if (!cfg_.sleep) return;
+  ScriptParams pm;
+  pm.set("op", std::string_view("sleep"));
+  pm.set_raw("sleep", cfg_.sleep->osd_model_json(boottime_ms()));
   if (eval_op(client_, pm) == "gone") open_.store(false, std::memory_order_release);
 }
 

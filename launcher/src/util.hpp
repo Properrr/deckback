@@ -15,6 +15,16 @@ inline long mono_ms() {
   return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
 }
 
+// CLOCK_BOOTTIME in milliseconds. Unlike CLOCK_MONOTONIC it keeps counting across system suspend,
+// so a duration measured with it is real elapsed time. Used by player.cpp's slept-long-enough
+// reload and by the sleep timer, which must expire while the Deck was asleep rather than resume a
+// countdown the user set an hour ago.
+inline long boottime_ms() {
+  timespec ts{};
+  clock_gettime(CLOCK_BOOTTIME, &ts);
+  return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
+}
+
 // Test one bit in the unsigned-long array the EVIOCGBIT ioctls fill in.
 inline bool test_bit(int bit, const unsigned long* arr) {
   return (arr[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1UL;

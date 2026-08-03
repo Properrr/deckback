@@ -15,6 +15,7 @@ class UpdatePromptController;
 class OsdMenuController;
 class CaptionSettings;
 class GestureRouter;
+class SleepTimer;
 
 // Everything GamepadInput is wired to. Bundled so the call site in main() labels what it passes.
 //
@@ -37,6 +38,9 @@ struct GamepadOptions {
   OsdMenuController* osd = nullptr;                 // in-app Settings menu; null = feature off
   // Touch gesture router (P12.4); null = touch gestures are off, and the toggle binding is inert.
   GestureRouter* gestures = nullptr;
+  // Sleep timer (P12.6). Ticked by this loop and edited by the OSD, both on the input thread, so
+  // the two never need a lock. Null = the feature is off. Not owned.
+  SleepTimer* sleep = nullptr;
 };
 
 // Phase 3 input (S0.6 mechanism = key injection). Reads the gamepad directly from evdev
@@ -95,6 +99,9 @@ class GamepadInput {
   // Per-tick: on a video start (Local-override mode) enforce our caption on/off state + language,
   // retrying until the caption module has loaded.
   void tick_caption_apply(bool on_watch);
+  // Per-tick: run the sleep countdown. On the warning edge, toast; on expiry, pause the video —
+  // which is the whole mechanism (sleeptimer.hpp explains why nothing else is needed).
+  void tick_sleep_timer();
   Layer layer() const;  // Browse when no LayerState is attached
 
   DevToolsClient client_;
@@ -150,6 +157,10 @@ class GamepadInput {
 
   // Self-update: feeds the OSD Updates tab each tick. Not owned; may be null.
   UpdatePromptController* update_prompt_ = nullptr;
+
+  // Sleep timer (P12.6). This loop owns its clock; the OSD Sleep sub-tab owns its value. Both run
+  // on this thread, so the shared pointer needs no lock. Not owned; may be null.
+  SleepTimer* sleep_ = nullptr;
 
   // In-app OSD Settings menu (osd-menu-plan.md). Not owned; may be null. Its nav buttons are fixed
   // (keymap-independent, resolved via control_code), like the old update card's.

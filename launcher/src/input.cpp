@@ -19,6 +19,7 @@
 #include "osdmenu.hpp"
 #include "overlay.hpp"
 #include "scripts.hpp"
+#include "sleeptimer.hpp"
 #include "updateprompt.hpp"
 #include "util.hpp"
 
@@ -62,6 +63,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       gestures_(opts.gestures),
       onboarding_(opts.onboarding),
       update_prompt_(opts.update_prompt),
+      sleep_(opts.sleep),
       osd_(opts.osd),
       fast_cfg_(opts.fast_scroll) {
   KeymapConfig& keymap = opts.keymap;
@@ -335,6 +337,43 @@ void GamepadInput::toggle_captions() {
     show_toast(client_, "No captions for this video", 1800);
 }
 
+void GamepadInput::tick_sleep_timer() {
+  if (!sleep_) return;
+  switch (sleep_->tick(boottime_ms())) {
+    case SleepTimer::Tick::None:
+      break;
+    case SleepTimer::Tick::Warn:
+      // Long enough to be read from across a room, and worded so the way out is obvious: the menu
+      // is the only place the timer can be changed, and a toast cannot be acted on itself. The
+      // duration comes from the configured lead — "a minute" would be a lie the moment
+      // sleep_timer_warn_seconds is hot-swapped.
+      show_toast(client_,
+                 std::format("Sleep timer: playback stops in {} (Menu to change)",
+                             format_remaining(sleep_->warn_seconds() * 1000L)),
+                 6000);
+      break;
+    case SleepTimer::Tick::Fire: {
+      // Pause and nothing else. Dropping play-state is what releases the idle inhibitor, stops the
+      // host nudge, and lets SteamOS dim and suspend on its own (sleeptimer.hpp).
+      const std::optional<double> at =
+          client_.eval_number(ScriptLibrary::instance().render("player_pause"));
+      // player_pause.js answers -1 when there is no <video> at all, which is not a failure: the
+      // timer ran out on the browse screen and there was nothing to stop.
+      if (at && *at >= 0)
+        info(std::format("sleep: timer expired, paused at {:.1f}s", *at));
+      else if (at)
+        info("sleep: timer expired with no video playing");
+      else
+        warn("sleep: timer expired but the pause was not accepted (engine unreachable?)");
+      // Say it even when nothing was playing: the user armed a timer and is owed the news that it
+      // is over, or the next silence looks like the timer still running.
+      show_toast(client_, at && *at >= 0 ? "Sleep timer: playback stopped" : "Sleep timer finished",
+                 5000);
+      break;
+    }
+  }
+}
+
 void GamepadInput::tick_caption_apply(bool on_watch) {
   constexpr int kMaxTicks = 40;
   constexpr long kCaptionTickMs = 300;
@@ -590,6 +629,7 @@ void GamepadInput::loop() {
     if (update_prompt_) update_prompt_->tick(on_watch);
     if (osd_) osd_->tick(on_watch);
     tick_caption_apply(on_watch);
+    tick_sleep_timer();
 
     // Health-check the first-run card BEFORE acting on its visibility: a reload deletes it without
     // telling us, and both effects below are gated on believing it is still up.

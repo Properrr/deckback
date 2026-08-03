@@ -16,6 +16,7 @@
 namespace deckback {
 
 class CaptionSettings;
+class SleepTimer;
 
 // In-app OSD Settings menu (findings osd-menu-plan.md). Focus/tab/scroll state lives in
 // config/scripts/osd.js; this owns open/close, the top-right Settings button, playback gating, and
@@ -37,9 +38,11 @@ std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_upd
                                                                     bool can_check);
 
 struct OsdVerdict {
-  // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
-  // a one-shot that closes (the Updates buttons); Hold = A landed on a hold-to-confirm control (the
-  // Exit row), which acts only once the caller's hold deadline elapses.
+  // Apply = a settings change to persist WITHOUT closing the menu (the Captions and Sleep
+  // sub-tabs); Action = a one-shot that closes (the Updates buttons); Hold = A landed on a
+  // hold-to-confirm control (the Exit row), which acts only once the caller's hold deadline
+  // elapses. An Apply's action carries its owner's namespace ("cc.type=..", "sleep.timer=.."), so
+  // exec() routes by prefix instead of by which sub-tab it believes is showing.
   enum class Kind { Consumed, Close, Action, Apply, Hold, Gone } kind = Kind::Consumed;
   std::string action;
 };
@@ -57,6 +60,9 @@ struct OsdMenuConfig {
   // owned; null hides the sub-tab. Same object the input layer's View toggle reads, so an OSD edit
   // takes effect on the next press with no restart.
   CaptionSettings* captions = nullptr;
+  // Sleep sub-tab: the same object the input loop ticks, so a duration chosen here is running the
+  // moment the menu closes. Not owned; null hides the sub-tab (sleep_timer=false in app.json).
+  SleepTimer* sleep = nullptr;
   std::function<void()> on_update_confirm;
   std::function<void()> on_update_ignore;
   std::function<void()> on_update_check;
@@ -116,6 +122,9 @@ class OsdMenuController {
 
   // Patch the Updates panel of an already-open menu (input thread).
   void push_update_model();
+  // Same, for the sleep countdown. Called on every edit and on a 1 s throttle while the menu is
+  // open, because a countdown that only refreshes when you reopen the menu is a label.
+  void push_sleep_model();
 
   std::atomic<bool> open_{false};
   std::atomic<bool> reloaded_{false};
@@ -133,6 +142,11 @@ class OsdMenuController {
   // The menu's own liveness question is richer than element presence (the keep-alive re-appends a
   // detached node), so it asks the script for its state — but on the same schedule.
   Throttle menu_probe_{kOverlayReconcileMs};
+  Throttle sleep_probe_{1000};
+  // The armed state at the last push. A countdown that expires with the menu open disarms without
+  // any edit, and pushing only while armed would leave "Stops in 0 s" frozen on a timer that has
+  // already fired.
+  bool sleep_was_armed_ = false;
 
   mutable std::mutex model_mu_;
   bool has_update_ = false;

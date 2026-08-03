@@ -1,7 +1,6 @@
 #include "player.hpp"
 
 #include <cstdlib>
-#include <ctime>
 #include <format>
 
 #include "fileio.hpp"
@@ -10,6 +9,7 @@
 #include "overlay.hpp"
 #include "platform.hpp"
 #include "scripts.hpp"
+#include "util.hpp"
 
 namespace deckback {
 namespace {
@@ -20,14 +20,6 @@ namespace {
 constexpr const char* kKeepAwakeToast =
     "Keep-awake helper not running \xE2\x80\x94 screen may dim during video";
 constexpr int kKeepAwakeToastMs = 9000;
-
-// CLOCK_BOOTTIME (unlike CLOCK_MONOTONIC) keeps counting across system suspend, so the delta
-// between on_suspend and on_resume is the real wall-clock time the Deck slept.
-long boottime_ms() {
-  timespec ts{};
-  clock_gettime(CLOCK_BOOTTIME, &ts);
-  return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
-}
 
 // The play-state poll, suspend checkpoint, and resume nudge now live in config/scripts/player_*.js
 // (ScriptLibrary). player_state.js packs three signals into a bitmask (see decode_play_state); its

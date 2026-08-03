@@ -30,6 +30,7 @@
 #include "profile.hpp"
 #include "scripts.hpp"
 #include "simwatch.hpp"
+#include "sleeptimer.hpp"
 #include "touchmode.hpp"
 #include "updateprompt.hpp"
 #include "updater.hpp"
@@ -285,6 +286,13 @@ int main(int argc, char** argv) {
                            cfg->caption_remember, cfg->captions_toast, cfg->caption_on,
                            system_language());
 
+  // Deliberately NOT persisted through user_store: a sleep timer that silently re-armed itself on
+  // every launch would stop playback for reasons the user set days ago. It starts off, every time.
+  std::optional<SleepTimer> sleep_timer;
+  if (cfg->sleep_timer)
+    sleep_timer.emplace(parse_sleep_options(cfg->sleep_timer_options_minutes),
+                        cfg->sleep_timer_warn_seconds);
+
   const std::string log_dir = resolve_log_dir(cfg->log_dir, runtime_dir);
   log_init(log_dir + "/deckback.log", cfg->log_max_bytes, cfg->log_max_files, cfg->log_to_stderr);
   info(version_line());
@@ -433,6 +441,7 @@ int main(int argc, char** argv) {
                       .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll, gestures_on},
                       .about = parse_metainfo(load_metainfo().value_or("")),
                       .captions = &captions,
+                      .sleep = sleep_timer ? &*sleep_timer : nullptr,
                       .on_update_confirm =
                           [&update_prompt] {
                             if (update_prompt) update_prompt->confirm_update();
@@ -550,6 +559,7 @@ int main(int argc, char** argv) {
     gp.update_prompt = update_prompt ? &*update_prompt : nullptr;
     gp.osd = osd ? &*osd : nullptr;
     gp.gestures = gestures ? &*gestures : nullptr;
+    gp.sleep = sleep_timer ? &*sleep_timer : nullptr;
     gamepad.emplace("127.0.0.1", cfg->remote_debugging_port, std::move(gp));
     gamepad->start();
     if (gestures) {

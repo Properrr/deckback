@@ -49,6 +49,7 @@ constexpr Field<std::string> kStringFields[] = {
     {"caption_language", &Config::caption_language},
     {"caption_control", &Config::caption_control},
     {"caption_type", &Config::caption_type},
+    {"power.sleep_timer_options_minutes", &Config::sleep_timer_options_minutes},
 };
 
 constexpr Field<bool> kBoolFields[] = {
@@ -67,6 +68,7 @@ constexpr Field<bool> kBoolFields[] = {
     {"log.log_mirror_stderr", &Config::log_to_stderr},
     {"power.idle_inhibit_synthetic_fallback", &Config::idle_inhibit_synthetic_fallback},
     {"power.keep_awake_warn", &Config::keep_awake_warn},
+    {"power.sleep_timer", &Config::sleep_timer},
 };
 
 struct IntField {
@@ -102,6 +104,9 @@ constexpr IntField kIntFields[] = {
     {"power.resume_probe_port", &Config::resume_probe_port, {1, 65535}},
     {"power.resume_online_timeout_ms", &Config::resume_online_timeout_ms, {0, 120'000}},
     {"power.resume_reload_after_ms", &Config::resume_reload_after_ms, {0, 86'400'000}},
+    // 0 disables the pre-expiry toast. The ceiling is an hour: a lead longer than that would warn
+    // before most ladder entries have even started counting.
+    {"power.sleep_timer_warn_seconds", &Config::sleep_timer_warn_seconds, {0, 3'600}},
 };
 
 struct LongField {

@@ -236,7 +236,7 @@ not run on a Deck.
 ### Settings menu (OSD) + self-update 🟡 Implemented — not yet on a Deck
 `osdmenu.cpp` + `config/scripts/osd.js` are an in-app, controller-driven **Settings** menu, opened
 from a persistent top-right button (Menu ☰) — the app's engineering surface. Tabs: **Settings**
-(sub-tabs ‹ Keys | Captions ›), **Updates**, **About**. **Settings ▸ Keys** shows the live keymap
+(sub-tabs ‹ Keys | Captions | Sleep ›), **Updates**, **About**. **Settings ▸ Keys** shows the live keymap
 (reusing the controls-card derivation so the two can't disagree); **Settings ▸ Captions** is the
 first *writable* surface — an ordered preferred-language list (add/remove + a full-language picker,
 L1/R1 page-jump), the author/auto source policy, remember-last, and the toast. Edits persist to a
@@ -252,6 +252,23 @@ a menu that isn't on screen (the failure mode of the old update card). **Self-up
 feeds the Updates tab + the button's amber badge instead of drawing its own pill/card. L0-tested
 (controller helpers, verdict parser, CSP-safe scripts); an L2 regression suite
 (`tests/deck/test_osd.py`) guards the two prior input bugs but has **not** run on hardware yet.
+
+### Sleep timer 🟡 Implemented — not yet on a Deck
+`sleeptimer.cpp` + the OSD's **Settings ▸ Sleep** sub-tab: stop playback in 5–120 minutes, for the
+handheld failure mode nothing else covers — falling asleep watching, with the Deck playing until the
+battery is flat. What makes it small is that expiry **pauses the video and does nothing else**.
+Pausing drops the play-state, which releases the logind *playback active* idle inhibitor, which is
+the signal the host idle-nudge helper is gated on — so gamescope's idle timer finally fires and
+SteamOS dims and suspends by itself. There is deliberately **no `login1.Suspend` call**: it is
+unnecessary given that chain, and any new sandbox permission would strand every installed user on
+self-update (`durable/feature-landscape.md` §1.1). `just preflight`'s `check-permissions` gate
+confirms the manifest is unchanged. The countdown is CLOCK_BOOTTIME, so one that elapses while the
+Deck is asleep is *over* on wake rather than resuming; it is per-session by design (never persisted,
+always starts Off) so a duration set one evening cannot stop playback the next. L0-tested (the
+fire/warn edges, the ladder parse, the OSD model) plus a JS test for the namespace generalisation
+that let a second editable sub-tab reuse the captions combo widget. **The chain past our pause is
+the part only hardware can confirm** — `tests/deck/test_sleep.py` asserts it from outside the app
+via logind's `ListInhibitors`, and has not run yet.
 
 ### Error page + netprobe 🟡 Implemented
 `errorpage.cpp` replaces Chromium's controller-unfocusable error screen with a kiosk **Try again**
