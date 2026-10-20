@@ -22,9 +22,11 @@ namespace fs = std::filesystem;
 // with it on, because no_pointer.js would make it read zero for the wrong reason. P12.4 was gated
 // behind a full release build on every machine that ever wants to re-ask the question, including
 // after a Cobalt bump. One overlay key retires that.
+// `touch_hide_cursor` is the other half of the same bisect (touch-gestures.md §7.0): apply()
+// honoured it, but a key missing here is dropped by load() first, so the knob silently did nothing.
 constexpr std::string_view kOverlayable[] = {
     "captions_toast",  "caption_remember", "caption_type",  "caption_language", "caption_languages",
-    "caption_control", "caption_on",       "disable_touch", "touch_gestures",
+    "caption_control", "caption_on",       "disable_touch", "touch_gestures",   "touch_hide_cursor",
 };
 
 const json::Value* find_member(const std::vector<json::Member>& members, std::string_view key) {

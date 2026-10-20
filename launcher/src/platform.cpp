@@ -63,9 +63,8 @@ class SdBusPlatform final : public Platform {
       warn("platform: sd_bus_open_system failed — running without power integration");
       return;
     }
-    if (pipe(wake_pipe_) == 0) {
-      fcntl(wake_pipe_[0], F_SETFL, O_NONBLOCK);
-    }
+    // CLOEXEC: the engine is forked from this process and must not inherit our wake pipe.
+    if (pipe2(wake_pipe_, O_CLOEXEC | O_NONBLOCK) != 0) wake_pipe_[0] = wake_pipe_[1] = -1;
     sleep_fd_ = take_inhibitor("sleep", "Deckback: pause/checkpoint before suspend", "delay");
     sd_bus_match_signal(bus_, &slot_, kLogind, kLogindPath, kManager, "PrepareForSleep",
                         &on_prepare_for_sleep, this);
@@ -200,6 +199,9 @@ class SdBusPlatform final : public Platform {
       }
     } else {
       info("platform: PrepareForSleep(false) — resumed; re-arming delay lock, running resume hook");
+      // An unpaired `false` (one with no `true` before it) would otherwise leak the lock still
+      // held, and logind would wait out InhibitDelayMaxSec on every later suspend.
+      if (self->sleep_fd_ >= 0) close(self->sleep_fd_);
       self->sleep_fd_ =
           self->take_inhibitor("sleep", "Deckback: pause/checkpoint before suspend", "delay");
       {

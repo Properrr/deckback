@@ -73,7 +73,9 @@ std::string update_policy_status(SelfUpdateMode mode) {
 // Single-instance lock: flock a file in the runtime dir. Held for the process lifetime.
 bool acquire_single_instance_lock(const std::string& runtime_dir) {
   const std::string path = runtime_dir + "/deckback.lock";
-  int fd = ::open(path.c_str(), O_CREAT | O_RDWR, 0600);
+  // O_CLOEXEC: the engine must not inherit the lock, or an engine outliving the launcher would keep
+  // it held and refuse the next launch.
+  int fd = ::open(path.c_str(), O_CREAT | O_RDWR | O_CLOEXEC, 0600);
   if (fd < 0) {
     warn("lock: cannot open " + path + " (continuing without single-instance guard)");
     return true;

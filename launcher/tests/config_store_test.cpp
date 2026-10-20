@@ -153,6 +153,17 @@ void test_disable_touch_is_overlayable_for_the_touch_probe() {
   s5.apply(c5);
   assert(c5.touch_gestures == true && c5.disable_touch == false);
 
+  // ...and so does the cursor half of the touch bisect (touch-gestures.md §7.0). apply() always
+  // read it, but load() dropped it first, so the documented no-rebuild knob did nothing.
+  write_file(path, R"({"touch_hide_cursor": false})");
+  ConfigStore s6(path);
+  s6.load();
+  assert(s6.has("touch_hide_cursor"));
+  Config c6;
+  assert(c6.touch_hide_cursor == true);  // shipped default: hide_cursor.js injected
+  s6.apply(c6);
+  assert(c6.touch_hide_cursor == false);
+
   // A non-bool must not silently read as false and leave touch live: the default stands.
   write_file(path, R"({"disable_touch": "false"})");
   ConfigStore s4(path);

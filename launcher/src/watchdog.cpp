@@ -1,5 +1,6 @@
 #include "watchdog.hpp"
 
+#include <sys/prctl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -49,6 +50,7 @@ int Watchdog::run() {
   long window_start = mono_seconds();
   int restarts_in_window = 0;
 
+  const pid_t launcher = getpid();
   while (!g_shutdown.load()) {
     pid_t pid = fork();
     if (pid < 0) {
@@ -56,13 +58,27 @@ int Watchdog::run() {
       return 1;
     }
     if (pid == 0) {
+      // Die with the launcher. Killed outright (OOM, kill -9) it runs no shutdown path, and an
+      // orphaned engine would keep the debugging port and the profile in use, so the next launch
+      // could not start cleanly. The getppid() check covers a launcher that died before prctl().
+      prctl(PR_SET_PDEATHSIG, SIGTERM);
+      if (getppid() != launcher) _exit(0);
+      // The engine inherits only stdio. Everything else the launcher has open -- the log file, CDP
+      // sockets, bus connections -- is ours; marking it here covers fds a std::ofstream cannot open
+      // with O_CLOEXEC, and any added later.
+      close_range(3, ~0U, CLOSE_RANGE_CLOEXEC);
       execv(cobalt_bin_.c_str(), argv.data());
-      // Only reached if execv fails.
-      std::perror("execv");
+      // Only reached if execv fails. write(), not perror(): after fork() in a threaded process, a
+      // stdio lock held by another thread at fork time would deadlock the child, and the launcher
+      // with it in waitpid().
+      constexpr char kMsg[] = "deckback: execv of the engine failed\n";
+      [[maybe_unused]] const ssize_t n = write(STDERR_FILENO, kMsg, sizeof kMsg - 1);
       _exit(127);
     }
 
     g_child.store(pid);
+    // A shutdown request that landed between fork() and the store above saw no child to signal.
+    if (g_shutdown.load()) kill(pid, SIGTERM);
     info(std::format("watchdog: started cobalt pid={}", pid));
 
     int status = 0;
