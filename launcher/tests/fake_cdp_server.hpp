@@ -14,6 +14,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -113,6 +114,28 @@ class FakeServer {
     std::lock_guard lk(req_mu_);
     osd_state_ = std::move(s);
   }
+  // List a service worker BEFORE the page in /json/list, as Chromium does when the worker was
+  // active last. `last_ws_path` is the path the client upgraded on.
+  void set_list_decoy(bool on) { list_decoy_.store(on); }
+  std::string last_ws_path() {
+    std::lock_guard lk(req_mu_);
+    return last_ws_path_;
+  }
+  // Drop every WebSocket session after `n` text frames (0 = never): a reconnect on demand.
+  void close_after_frames(int n) { close_after_.store(n); }
+  // Hold the Page.navigate reply this long, as Chromium does until the navigation commits.
+  void set_navigate_delay_ms(int ms) { navigate_delay_ms_.store(ms); }
+
+  // One batch for the gesture router's next drain (gestures.js `drain()` JSON); later drains read
+  // an empty queue. `gestures_drained` tells a test the router has collected it.
+  void queue_gestures(std::string drain_json) {
+    std::lock_guard lk(req_mu_);
+    gestures_ = std::move(drain_json);
+  }
+  bool gestures_drained() {
+    std::lock_guard lk(req_mu_);
+    return gestures_.empty();
+  }
   // Whether the persistent Settings button is still painted. Lets the OSD unit test model a
   // same-URL document reload: the old local `button_shown_` flag survives, the DOM does not.
   void set_osd_button_present(bool present) { osd_button_present_.store(present); }
@@ -148,14 +171,23 @@ class FakeServer {
     std::string req = recv_until(c, "\r\n\r\n");
     if (req.find("Upgrade: websocket") != std::string::npos) {
       ws_upgrades_.fetch_add(1);
+      {
+        std::lock_guard lk(req_mu_);
+        const size_t sp = req.find(' ');
+        last_ws_path_ = req.substr(sp + 1, req.find(' ', sp + 1) - sp - 1);
+      }
       send_str(c,
                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\n"
                "Connection: Upgrade\r\nSec-WebSocket-Accept: x\r\n\r\n");
       serve_ws(c);
     } else {
       http_gets_.fetch_add(1);
-      const std::string body = std::string("[{\"type\":\"page\",\"webSocketDebuggerUrl\":\"ws://") +
-                               "127.0.0.1:" + std::to_string(port_) + "/devtools/page/DECK\"}]";
+      const std::string ws = "ws://127.0.0.1:" + std::to_string(port_);
+      std::string body = "[";
+      if (list_decoy_.load())
+        body += "{\"type\":\"service_worker\",\"webSocketDebuggerUrl\":\"" + ws +
+                "/devtools/page/WORKER\"},";
+      body += "{\"type\":\"page\",\"webSocketDebuggerUrl\":\"" + ws + "/devtools/page/DECK\"}]";
       send_str(c, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: " +
                       std::to_string(body.size()) + "\r\nConnection: close\r\n\r\n" + body);
     }
@@ -164,9 +196,12 @@ class FakeServer {
   void serve_ws(int c) {
     std::string rx;
     ws::Frame f;
+    int frames = 0;
     while (recv_frame(c, rx, f)) {
       if (f.opcode == ws::kClose) return;
       if (f.opcode != ws::kText) continue;
+      ++frames;
+      if (const int n = close_after_.load(); n > 0 && frames > n) return;  // unanswered: dropped
       const std::string& e = f.payload;
       {
         std::lock_guard lk(req_mu_);
@@ -194,6 +229,8 @@ class FakeServer {
       // avoid. about:blank always commits, even when the network is down, so the error page itself
       // can always be drawn.
       if (e.find("Page.navigate") != std::string::npos) {
+        if (const int ms = navigate_delay_ms_.load(); ms > 0)
+          std::this_thread::sleep_for(std::chrono::milliseconds(ms));
         std::string err;
         {
           std::lock_guard lk(req_mu_);
@@ -202,6 +239,19 @@ class FakeServer {
         result = err.empty() ? "\"result\":{\"frameId\":\"F\",\"loaderId\":\"L\"}"
                              : "\"result\":{\"frameId\":\"F\",\"loaderId\":\"L\",\"errorText\":\"" +
                                    err + "\"}";
+      } else if (e.find("g.drain()") != std::string::npos) {
+        std::string batch;
+        {
+          std::lock_guard lk(req_mu_);
+          batch = std::exchange(gestures_, {});
+        }
+        if (batch.empty()) batch = R"({"configured":true,"enabled":true,"q":[]})";
+        std::string quoted;
+        for (char ch : batch) {
+          if (ch == '"' || ch == '\\') quoted += '\\';
+          quoted += ch;
+        }
+        result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"" + quoted + "\"}}";
       } else if (e.find("/*osd-button-state*/") != std::string::npos) {
         result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
                  (osd_button_present_.load() ? "true" : "false") + "}}";
@@ -294,6 +344,11 @@ class FakeServer {
   std::atomic<bool> overlay_present_{true};
   std::string nav_error_;                          // guarded by req_mu_
   std::string osd_state_ = "tab=settings;idx=-1";  // guarded by req_mu_
+  std::string gestures_;                           // guarded by req_mu_
+  std::string last_ws_path_;                       // guarded by req_mu_
+  std::atomic<bool> list_decoy_{false};
+  std::atomic<int> close_after_{0};
+  std::atomic<int> navigate_delay_ms_{0};
   std::atomic<bool> saw_reload_{false};
   std::mutex req_mu_;
   std::vector<std::string> reqs_;

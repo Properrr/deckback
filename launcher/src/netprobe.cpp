@@ -30,7 +30,7 @@ bool tcp_reachable(const std::string& host, int port, int timeout_ms) {
 
   bool ok = false;
   for (addrinfo* ai = res; ai && !ok; ai = ai->ai_next) {
-    int fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    int fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
     if (fd < 0) continue;
     int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);

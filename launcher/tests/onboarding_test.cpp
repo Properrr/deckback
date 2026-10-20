@@ -376,6 +376,18 @@ void test_tick_keeps_the_card_while_it_is_still_painted() {
   assert(c.visible());
 }
 
+// A hide that never reached the page leaves the card on screen, so it must still count as visible
+// (modal). Clearing the flag before the call stranded the card painted, with nothing left to retry
+// the hide or re-probe it.
+void test_a_failed_hide_keeps_the_card() {
+  testing::FakeServer server;
+  OnboardingController c("127.0.0.1", server.port(), shipped(), fresh_marker());
+  assert(c.show(false));
+  server.close_after_frames(1);  // the session drops the next request unanswered
+  c.hide();
+  assert(c.visible());
+}
+
 void test_dead_engine_leaves_it_hidden() {
   // If the card cannot be drawn, `visible()` must stay false — otherwise the input layer would go
   // modal and swallow every button press with nothing on screen to explain why.
@@ -446,6 +458,7 @@ DECKBACK_TEST_MAIN(onboarding) {
   test_show_is_idempotent_and_hide_is_cheap();
   test_tick_releases_capture_when_the_page_ate_the_card();
   test_tick_keeps_the_card_while_it_is_still_painted();
+  test_a_failed_hide_keeps_the_card();
   test_dead_engine_leaves_it_hidden();
 
   test_touch_rows_track_the_router();

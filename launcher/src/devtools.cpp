@@ -168,7 +168,7 @@ int connect_tcp(const std::string& host, int port, int timeout_ms) {
 
   int fd = -1;
   for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-    fd = socket(ai->ai_family, ai->ai_socktype, ai->ai_protocol);
+    fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
     if (fd < 0) continue;
 
     int flags = fcntl(fd, F_GETFL, 0);
@@ -279,6 +279,7 @@ class CdpSession {
       stopping_ = true;
       shutdown_locked();
     }
+    std::lock_guard rk(reconnect_mu_);  // a reconnect in progress owns reader_ until it returns
     join_reader();
   }
 
@@ -292,7 +293,8 @@ class CdpSession {
 
   // Send `method` and wait for its reply. nullopt on transport error, CDP error, or timeout. The
   // reply is already parsed — the reader thread does it once, so no caller re-scans the bytes.
-  std::optional<json::Value> request(std::string_view method, std::string_view params_json) {
+  std::optional<json::Value> request(std::string_view method, std::string_view params_json,
+                                     long timeout_ms = kRequestTimeoutMs) {
     if (!ensure_connected()) return std::nullopt;
 
     const uint64_t id = next_id_.fetch_add(1) + 1;
@@ -313,8 +315,8 @@ class CdpSession {
     // The wait is OUTSIDE every lock. This is the whole point: seven clients existed because the
     // old request() held its mutex across the round trip, so one poll could stall key injection.
     std::unique_lock lk(slot->mu);
-    const bool got = slot->cv.wait_for(lk, std::chrono::milliseconds(kRequestTimeoutMs),
-                                       [&] { return slot->done; });
+    const bool got =
+        slot->cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&] { return slot->done; });
     std::optional<json::Value> body = got ? std::move(slot->body) : std::nullopt;
     lk.unlock();
     forget(id);
@@ -369,9 +371,10 @@ class CdpSession {
     return apply_grant();
   }
 
- private:
+ public:
   static constexpr long kRequestTimeoutMs = 2500;
 
+ private:
   struct Pending {
     std::mutex mu;
     std::condition_variable cv;
@@ -420,13 +423,13 @@ class CdpSession {
     std::lock_guard lk(send_mu_);  // held for the write only, never across a wait
     if (fd_ < 0) return false;
     const uint32_t mask = rng_();
-    return send_all(ws::encode_frame(ws::kText, msg, /*masked=*/true, mask));
+    return send_all(fd_, ws::encode_frame(ws::kText, msg, /*masked=*/true, mask));
   }
 
-  bool send_all(const std::string& bytes) {
+  static bool send_all(int fd, const std::string& bytes) {
     size_t off = 0;
     while (off < bytes.size()) {
-      const ssize_t n = ::send(fd_, bytes.data() + off, bytes.size() - off, MSG_NOSIGNAL);
+      const ssize_t n = ::send(fd, bytes.data() + off, bytes.size() - off, MSG_NOSIGNAL);
       if (n < 0) {
         if (errno == EINTR) continue;
         return false;
@@ -437,16 +440,21 @@ class CdpSession {
   }
 
   bool ensure_connected() {
-    std::unique_lock lk(conn_mu_);
-    if (stopping_) return false;
-    if (fd_ >= 0) return true;
-
-    // The previous reader has exited (or is about to); join before replacing it.
-    lk.unlock();
-    join_reader();
-    lk.lock();
-    if (stopping_) return false;
-    if (fd_ >= 0) return true;  // another thread won the race
+    {
+      std::lock_guard lk(conn_mu_);
+      if (stopping_) return false;
+      if (fd_ >= 0) return true;
+    }
+    // One reconnect at a time. reader_ is joined and replaced only under reconnect_mu_: two callers
+    // that both saw the socket die once raced here, joined the same thread (EINVAL ->
+    // std::system_error) or assigned over a joinable one, and either way hit std::terminate.
+    std::lock_guard rk(reconnect_mu_);
+    {
+      std::lock_guard lk(conn_mu_);
+      if (stopping_) return false;
+      if (fd_ >= 0) return true;  // another caller reconnected while this one waited
+    }
+    join_reader();  // the old reader's last act was fd_ = -1, so it has exited or is about to
 
     auto path = discover_ws_path();
     if (!path) {
@@ -459,16 +467,23 @@ class CdpSession {
     }
     const int fd = connect_tcp(host_, port_, 1500);
     if (fd < 0) return false;
-    fd_ = fd;
-    if (!ws_handshake(*path)) {
-      close(fd_);
-      fd_ = -1;
+    // Handshake on the private fd, and publish it only once it speaks WebSocket: a sender seeing
+    // fd_ >= 0 earlier would have written frames into an un-upgraded HTTP connection.
+    if (!ws_handshake(fd, *path)) {
+      close(fd);
       return false;
+    }
+    {
+      std::scoped_lock lk(conn_mu_, send_mu_);
+      if (stopping_) {
+        close(fd);
+        return false;
+      }
+      fd_ = fd;
     }
     warned_unreachable_ = false;
     info("devtools: WebSocket session established");
     reader_ = std::thread([this] { read_loop(); });
-    lk.unlock();
 
     // Re-arm the sticky state on the fresh target. Leanback tears the page target down on
     // navigation, and a new target reverts to content_shell defaults -- without this the app would
@@ -528,7 +543,9 @@ class CdpSession {
     }
 
     {
-      std::lock_guard lk(conn_mu_);
+      // Both locks: a sender holding send_mu_ has checked fd_ >= 0 and is about to write. Closing
+      // under it, the number could be recycled by an unrelated open() and receive our frame.
+      std::scoped_lock lk(conn_mu_, send_mu_);
       if (fd_ >= 0) {
         close(fd_);
         fd_ = -1;
@@ -542,7 +559,7 @@ class CdpSession {
     switch (f.opcode) {
       case ws::kPing: {
         std::lock_guard lk(send_mu_);
-        if (fd_ >= 0) send_all(ws::encode_frame(ws::kPong, f.payload, true, rng_()));
+        if (fd_ >= 0) send_all(fd_, ws::encode_frame(ws::kPong, f.payload, true, rng_()));
         return true;
       }
       case ws::kClose:
@@ -622,9 +639,20 @@ class CdpSession {
     const json::ParseResult targets = json::parse(std::string_view(*resp).substr(sep + 4));
     if (!targets.ok()) return std::nullopt;
     const std::vector<json::Value>* list = targets.value->as_array();
-    if (!list || list->empty()) return std::nullopt;
-    const json::Value* ws = list->front().find("webSocketDebuggerUrl");
-    if (!ws || !ws->as_string()) return std::nullopt;
+    if (!list) return std::nullopt;
+    // The first PAGE. Chromium sorts /json/list by last activity, so the front can be a service
+    // worker, an iframe, or another tool's page (cert.py opens one with /json/new); attaching there
+    // would steer and navigate the wrong document. scripts/cdp.py picks the same way.
+    const json::Value* ws = nullptr;
+    for (const json::Value& t : *list) {
+      const json::Value* type = t.find("type");
+      const json::Value* url = t.find("webSocketDebuggerUrl");
+      if (type && type->as_string() && *type->as_string() == "page" && url && url->as_string()) {
+        ws = url;
+        break;
+      }
+    }
+    if (!ws) return std::nullopt;
     const std::string url = *ws->as_string();  // ws://host:port/devtools/page/ID
 
     size_t scheme = url.find("://");
@@ -634,26 +662,29 @@ class CdpSession {
     return url.substr(slash);
   }
 
-  // Runs before the reader thread exists, so it may read fd_ directly.
-  bool ws_handshake(const std::string& path) {
+  // On a socket not yet published as fd_, so nothing else reads or writes it.
+  bool ws_handshake(int fd, const std::string& path) {
     unsigned char key_raw[16];
-    for (unsigned char& b : key_raw) b = static_cast<unsigned char>(rng_() & 0xFF);
+    {
+      std::lock_guard lk(send_mu_);  // rng_ is shared with the senders
+      for (unsigned char& b : key_raw) b = static_cast<unsigned char>(rng_() & 0xFF);
+    }
     const std::string key = base64(key_raw, sizeof key_raw);
     const std::string req = std::format(
         "GET {} HTTP/1.1\r\nHost: {}:{}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n"
         "Sec-WebSocket-Key: {}\r\nSec-WebSocket-Version: 13\r\n\r\n",
         path, host_, port_, key);
-    if (!send_all(req)) return false;
+    if (!send_all(fd, req)) return false;
 
     std::string rx;
     const long deadline = mono_ms() + 2000;
     while (rx.find("\r\n\r\n") == std::string::npos) {
       const long left = deadline - mono_ms();
       if (left <= 0) return false;
-      pollfd pfd{fd_, POLLIN, 0};
+      pollfd pfd{fd, POLLIN, 0};
       if (poll(&pfd, 1, static_cast<int>(left)) <= 0) return false;
       char buf[2048];
-      const ssize_t n = recv(fd_, buf, sizeof buf, 0);
+      const ssize_t n = recv(fd, buf, sizeof buf, 0);
       if (n <= 0) return false;
       rx.append(buf, static_cast<size_t>(n));
       if (rx.size() > 64 * 1024) return false;
@@ -675,10 +706,11 @@ class CdpSession {
   std::string host_;
   int port_;
 
-  std::mutex conn_mu_;  // guards fd_/stopping_/warned_unreachable_ and serializes connect attempts
+  std::mutex reconnect_mu_;  // serializes reconnects; owns reader_ (join/replace) and the handshake
+  std::mutex conn_mu_;       // guards fd_/stopping_; fd_ is written under conn_mu_ AND send_mu_
   int fd_ = -1;
   bool stopping_ = false;
-  bool warned_unreachable_ = false;
+  bool warned_unreachable_ = false;  // reconnect_mu_
   std::thread reader_;
 
   std::mutex send_mu_;  // serializes writers on the socket
@@ -767,10 +799,19 @@ bool DevToolsClient::set_user_agent_override(std::string_view ua) {
 
 bool DevToolsClient::navigate(std::string_view url) { return navigate_checked(url).sent; }
 
+namespace {
+// Outlasts a DNS timeout plus a TCP connect timeout: the slow failures the error page explains.
+constexpr long kNavigateTimeoutMs = 30'000;
+}  // namespace
+
 DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url) {
   session_->request("Page.enable", "{}");
-  auto body =
-      session_->request("Page.navigate", std::format(R"({{"url":"{}"}})", json_escape(url)));
+  // Page.navigate replies at commit or failure, not on receipt, so a slow DNS / connect / captive
+  // portal outlasts the 2.5 s default. Timing out there read as "engine unreachable" (no error page
+  // for exactly the failures it explains), dropped the shared session, and re-navigated over the
+  // load in flight -- so any page slower than ~3.5 s to commit restarted forever.
+  auto body = session_->request("Page.navigate", std::format(R"({{"url":"{}"}})", json_escape(url)),
+                                kNavigateTimeoutMs);
   if (!body) return {};
 
   NavStatus st;

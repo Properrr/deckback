@@ -17,7 +17,9 @@ bool PageOverlay::draw_js(std::string_view js) {
 
 void PageOverlay::hide(std::string_view hide_script_name) {
   if (!set_painted(false)) return;  // already hidden: do not spend a round trip per button press
-  ScriptLibrary::instance().invoke(client_, hide_script_name);
+  // A hide that did not run (engine busy, CDP timeout) leaves the overlay drawn: keep believing it
+  // is painted, or nothing would ever retry and lost() would never probe it again.
+  if (!ScriptLibrary::instance().invoke(client_, hide_script_name)) set_painted(true);
 }
 
 bool PageOverlay::lost() {

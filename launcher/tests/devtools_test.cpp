@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -322,6 +323,51 @@ void test_sticky_state_is_shared_and_survives_a_reconnect() {
   // ...but the session remembers one, so a reconnect re-arms it once, not twice.
 }
 
+// Chromium sorts /json/list by last activity, so the front entry can be a service worker (or
+// another tool's page). Attaching there would steer and navigate the wrong document.
+void test_attaches_to_the_page_not_the_first_target() {
+  FakeServer srv;
+  srv.set_list_decoy(true);
+  DevToolsClient c("127.0.0.1", srv.port());
+  assert(c.dispatch_key("Enter"));
+  assert(srv.last_ws_path() == "/devtools/page/DECK");
+}
+
+// Several threads that all see the socket die reconnect at once. Unserialized, two of them joined
+// the same reader thread (std::system_error) or assigned over a joinable one -- std::terminate,
+// i.e. the launcher crashing on an ordinary Leanback teardown. Passing = the process survives
+// many reconnects and keeps delivering keys.
+void test_concurrent_reconnects_do_not_crash() {
+  FakeServer srv;
+  srv.close_after_frames(3);
+  std::atomic<int> delivered{0};
+  std::vector<std::thread> threads;
+  const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(1500);
+  for (int t = 0; t < 4; ++t)
+    threads.emplace_back([&] {
+      DevToolsClient c("127.0.0.1", srv.port());
+      while (std::chrono::steady_clock::now() < until)
+        if (c.eval_bool("WANT_TRUE") == true) delivered.fetch_add(1);
+    });
+  for (std::thread& t : threads) t.join();
+  std::printf("  reconnects: %d, replies: %d\n", srv.ws_upgrades(), delivered.load());
+  assert(srv.ws_upgrades() > 10);
+  assert(delivered.load() > 10);
+}
+
+// Page.navigate replies at commit, not on receipt. A navigation slower than the default request
+// timeout must still count as sent, and must not tear down the shared session (and with it the TV
+// UA and the sticky scripts).
+void test_slow_navigation_is_not_a_transport_failure() {
+  FakeServer srv;
+  srv.set_navigate_delay_ms(3500);
+  DevToolsClient c("127.0.0.1", srv.port());
+  const DevToolsClient::NavStatus st = c.navigate_checked("https://www.youtube.com/tv");
+  assert(st.sent);
+  assert(st.error_text.empty());
+  assert(srv.ws_upgrades() == 1);
+}
+
 // Different endpoints must NOT share: the registry is keyed by host:port.
 void test_different_endpoints_do_not_share() {
   FakeServer a, b;
@@ -413,6 +459,9 @@ DECKBACK_TEST_MAIN(devtools) {
   test_clients_to_one_endpoint_share_one_connection();
   test_sticky_state_is_shared_and_survives_a_reconnect();
   test_different_endpoints_do_not_share();
+  test_attaches_to_the_page_not_the_first_target();
+  test_concurrent_reconnects_do_not_crash();
+  test_slow_navigation_is_not_a_transport_failure();
   test_requests_from_two_threads_do_not_serialize_on_a_lock();
   test_dispatch_mouse();
   test_unreachable_server();
