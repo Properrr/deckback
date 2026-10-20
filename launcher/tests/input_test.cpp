@@ -4,15 +4,19 @@
 #include "input.hpp"
 
 #include <linux/input.h>
+#include <time.h>
 
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include "config.hpp"
 #include "harness.hpp"
 #include "scripts.hpp"
+#include "util.hpp"
 
 using namespace deckback;
 
@@ -678,6 +682,34 @@ void test_launcher_action_is_not_reported_unmapped_when_enabled() {
   assert(on[0].find("y") != std::string::npos);
 }
 
+// ---- the input thread itself
+// ------------------------------------------------------------------------
+
+double process_cpu_seconds() {
+  timespec ts{};
+  clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+  return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
+}
+
+// With no gamepad open the thread must SLEEP until its next rescan. poll() on an empty fd set
+// returns at once, so a loop that only blocks in poll() burns a whole core whenever no pad is
+// attached (a workstation, CI, or the Deck before Steam's virtual pad appears). Port 1: nothing
+// listens there, and an idle loop sends no CDP traffic anyway. A machine with a readable pad opens
+// it and exercises the poll() path instead -- the test still holds, it just proves less.
+void test_idle_without_a_gamepad_does_not_spin() {
+  GamepadInput in("127.0.0.1", 1);
+  const double cpu0 = process_cpu_seconds();
+  in.start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(600));
+  const long t0 = mono_ms();
+  in.stop();
+  const long stop_ms = mono_ms() - t0;
+  const double cpu = process_cpu_seconds() - cpu0;
+  std::printf("  idle: %.3f s CPU over 600 ms, stop took %ld ms\n", cpu, stop_ms);
+  assert(cpu < 0.2);
+  assert(stop_ms < 500);  // the idle sleep must wake on stop(), not run out its 2 s
+}
+
 // ---- the actually-shipped config/app.json
 // --------------------------------------------------------
 
@@ -792,6 +824,8 @@ DECKBACK_TEST_MAIN(input) {
   test_empty_base_keeps_builtin_defaults();
 
   test_shipped_app_json_keymap_is_current();
+
+  test_idle_without_a_gamepad_does_not_spin();
 
   std::puts("input_test: all assertions passed");
   return 0;

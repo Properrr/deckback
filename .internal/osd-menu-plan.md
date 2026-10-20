@@ -10,6 +10,12 @@ and the toast; each edit returns the non-closing `apply:cc.<key>=<val>` verdict 
 Widget model (combo + langlist + picker) verified on-Deck over CDP. Remaining writable settings
 (button remap, hardware-decode toggles, reset-to-defaults) are still roadmap. Original design below.
 
+**Where the shipped controls differ from the design below** (checked against `input.cpp` 2026-10-20):
+Menu **closes** the OSD (it maps to `back`, like B) instead of switching tabs — only L1/R1 switch
+tabs (O9, §9, §13.1's "D-pad location" rule); and since `fe3141d` (`exit-design.md`) Menu **does**
+open the OSD over playback, where Exit and settings are most wanted (O5, §9, and the L2 suite's
+"Menu does not open the OSD over playback" case).
+
 Status (original): **DESIGN — nothing implemented.** Branch `feature/osd-settings-menu`. Written 2026-07-15
 against launcher/config state at `main` commit `79eae9b` (Release v0.0.4). **Amended 2026-07-15
 after code-grounded reviews:** §12 is restructured around the tiers that actually exist (the focus

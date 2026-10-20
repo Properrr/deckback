@@ -233,7 +233,14 @@ void GestureRouter::loop() {
           configure_page(client);
           if (!enabled_.load(std::memory_order_acquire)) client.eval_void(set_enabled_expr(false));
         }
-        for (const Gesture& g : batch.gestures) act(client, g);
+        // The page and enabled_ can disagree when the push above failed: push again, and act as
+        // enabled_ says. Behind a modal surface a tap must not become an Enter on the video under
+        // it. Either way a hold RELEASE still applies, or a hold begun earlier stays at 2x.
+        if (batch.enabled != enabled_.load(std::memory_order_acquire))
+          push_enabled_.store(true, std::memory_order_release);
+        const bool drop = !enabled_.load(std::memory_order_acquire) || (cfg_.modal && cfg_.modal());
+        for (const Gesture& g : batch.gestures)
+          if (!drop || gesture_hold_phase(g.kind, g.on) < 0) act(client, g);
       }
     }
     if (worker_.wait_or_stop(cfg_.poll_ms)) break;

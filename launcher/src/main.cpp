@@ -515,6 +515,9 @@ int main(int argc, char** argv) {
     gc.skip_seconds = cfg->skip_seconds;
     gc.hold_rate = cfg->touch_hold_rate;
     gc.hold_slow_rate = cfg->touch_hold_slow_rate;
+    gc.modal = [&osd, &onboarding] {
+      return (osd && osd->open()) || (onboarding && onboarding->visible());
+    };
     gestures.emplace(std::move(gc));
   }
 

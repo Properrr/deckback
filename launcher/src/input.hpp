@@ -68,6 +68,7 @@ class GamepadInput {
   void discover_new_devices();
   void close_devices();
   void handle_event(int type, int code, int value);
+  void drop_held_state();  // forget held controls whose release may never arrive
   void set_direction(
       const char* key);       // arm/replace the auto-repeating directional key (nullptr=clear)
   void dispatch_direction();  // resolve dir_key_ under the current layer/modifiers and send

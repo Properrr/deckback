@@ -234,10 +234,9 @@ if(BUILD_TESTING)
   endfunction()
 
   deckback_test_group(pure
-    json util sha256 config config_store caption_settings caption_fuzz about scripts log profile
-    gestures)
+    json util sha256 config config_store caption_settings caption_fuzz about scripts log profile)
 
-  deckback_test_group(cdp devtools navigator player errorpage)
+  deckback_test_group(cdp devtools navigator player errorpage gestures)
 
   # onboarding/input read the real shipped config, so a keymap change cannot make the launcher and
   # the first-run card advertise a control that does not work.

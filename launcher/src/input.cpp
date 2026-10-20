@@ -257,6 +257,19 @@ void GamepadInput::dispatch_direction() {
   dispatch_key(dir_key_);
 }
 
+// Forget every held control, for when a release cannot be trusted to arrive: the pad went away, or
+// the kernel dropped queued events. A still-held control resumes on its next press.
+void GamepadInput::drop_held_state() {
+  hat_x_ = hat_y_ = stick_x_ = stick_y_ = 0;
+  rstick_x_ = rstick_y_ = 0;
+  lt_down_ = rt_down_ = false;
+  if (exit_hold_deadline_ != 0) {  // a lost Y release must not complete the hold and exit
+    exit_hold_deadline_ = 0;
+    if (osd_ && osd_->open()) osd_->exec("hold_cancel");
+  }
+  set_direction(nullptr);  // also hands back / stops the right-stick scroll
+}
+
 void GamepadInput::set_direction(const char* key) {
   if (key != dir_key_) {  // pointer identity: same literal constant
     dir_key_ = key;
@@ -564,9 +577,12 @@ void GamepadInput::loop() {
     std::vector<pollfd> pfds;
     pfds.reserve(fds_.size());
     for (int fd : fds_) pfds.push_back(pollfd{fd, POLLIN, 0});
-    int n = pfds.empty() ? 0 : poll(pfds.data(), pfds.size(), static_cast<int>(timeout));
-    if (n < 0 && errno != EINTR) { /* transient */
-    }
+    // With no pad open, poll() on an empty set returns at once and would spin this thread between
+    // rescans; sleep on the worker instead, which stop() also wakes.
+    if (pfds.empty())
+      worker_.wait_or_stop(static_cast<int>(timeout));
+    else
+      poll(pfds.data(), pfds.size(), static_cast<int>(timeout));  // EINTR/errors: just loop again
 
     bool lost = false;
     for (size_t i = 0; i < pfds.size(); ++i) {
@@ -579,7 +595,14 @@ void GamepadInput::loop() {
         continue;
       }
       const size_t count = static_cast<size_t>(r) / sizeof(input_event);
-      for (size_t k = 0; k < count; ++k) handle_event(evs[k].type, evs[k].code, evs[k].value);
+      for (size_t k = 0; k < count; ++k) {
+        // The kernel overflowed this device's queue (the thread was blocked on CDP) and discarded
+        // events, releases included: nothing held can be trusted until it is pressed again.
+        if (evs[k].type == EV_SYN && evs[k].code == SYN_DROPPED)
+          drop_held_state();
+        else
+          handle_event(evs[k].type, evs[k].code, evs[k].value);
+      }
     }
 
     // Feed the OSD update state, then reconcile the Settings button (drawn off playback). Cheap on
@@ -600,6 +623,10 @@ void GamepadInput::loop() {
 
     // Hold-to-confirm completed on the OSD's Exit row. Rumble first: it is the only feedback that
     // the hold took, and the app is about to go away.
+    // The hold belongs to the open menu. Closed under it (B or Menu mid-hold, a page reload), the
+    // Y release never reaches osd_event, so cancel here -- or the app quits after the user backs
+    // out.
+    if (exit_hold_deadline_ != 0 && !(osd_ && osd_->open())) exit_hold_deadline_ = 0;
     if (exit_hold_deadline_ != 0 && mono_ms() >= exit_hold_deadline_) {
       exit_hold_deadline_ = 0;
       ensure_haptic();
@@ -631,10 +658,11 @@ void GamepadInput::loop() {
     if (lost || (fds_.empty() && mono_ms() - last_scan >= 2000)) {
       rescan_devices();
       last_scan = mono_ms();
-      hat_x_ = hat_y_ = stick_x_ = stick_y_ = 0;
-      rstick_x_ = rstick_y_ = 0;
-      set_direction(nullptr);  // drop any held direction (and the right-stick scroll) across a
-                               // device change: with the pad gone, no release event is coming
+      drop_held_state();  // with the pad gone, no release event is coming
+      // Steam re-creates its virtual pad under a new node (e.g. across resume): let the next pulse
+      // re-attach rumble instead of writing to the dead node for the rest of the session.
+      haptic_.detach();
+      haptic_tried_ = false;
     } else if (mono_ms() - last_scan >= kHotplugScanMs) {
       // Hotplug: a pad attached while another is already open would otherwise never be seen,
       // because neither `lost` nor `fds_.empty()` ever becomes true. Non-destructive — held keys

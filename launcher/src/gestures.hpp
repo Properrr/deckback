@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -88,6 +89,9 @@ struct GestureRouterConfig {
   double hold_rate = 2.0;
   // ...and what the LEFT third asks for. 0.5 is half speed; 0.25 is the slowest the player offers.
   double hold_slow_rate = 0.5;
+  // True while a modal surface (the OSD, the first-run card) owns input. Polled per drain from the
+  // router's thread, so it must only read atomics. Null = never modal.
+  std::function<bool()> modal;
 };
 
 class GestureRouter {

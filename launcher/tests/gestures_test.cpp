@@ -10,10 +10,14 @@
 // dead engine as a quiet user retries nothing and reports nothing.
 #include "gestures.hpp"
 
+#include <atomic>
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <string>
+#include <thread>
 
+#include "fake_cdp_server.hpp"
 #include "harness.hpp"
 
 namespace deckback {
@@ -197,6 +201,34 @@ void test_every_emitted_gesture_kind_has_an_action() {
   }
 }
 
+// Run one router over one queued batch and return how many keys it sent to the page.
+int keys_sent_for(const char* batch, bool modal) {
+  testing::FakeServer srv;
+  GestureRouterConfig cfg;
+  cfg.cdp_port = srv.port();
+  cfg.poll_ms = 10;
+  cfg.modal = [modal] { return modal; };
+  srv.queue_gestures(batch);
+  GestureRouter router(cfg);
+  router.start();
+  for (int i = 0; i < 300 && !srv.gestures_drained(); ++i)
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  std::this_thread::sleep_for(std::chrono::milliseconds(50));  // let act() finish the batch
+  router.stop();
+  int keys = 0;
+  for (const std::string& r : srv.take_requests())
+    if (r.find("Input.dispatchKeyEvent") != std::string::npos) ++keys;
+  return keys;
+}
+
+// The OSD has no pointer path, so a tap while it is open used to reach Leanback as a trusted Enter
+// and start the video behind the menu. A modal surface owns input; touch must not get around it.
+void test_a_modal_surface_swallows_touch() {
+  const char* tap = R"({"configured":true,"enabled":true,"q":[{"g":"tap"}]})";
+  assert(keys_sent_for(tap, false) > 0);  // control: the same batch does press Enter
+  assert(keys_sent_for(tap, true) == 0);
+}
+
 }  // namespace
 }  // namespace deckback
 
@@ -219,6 +251,7 @@ DECKBACK_TEST_MAIN(gestures) {
   test_configured_defaults_false_so_a_reload_is_reconfigured();
   test_malformed_entries_are_skipped_not_guessed();
   test_every_emitted_gesture_kind_has_an_action();
+  test_a_modal_surface_swallows_touch();
   std::puts("gestures_test: all assertions passed");
   return 0;
 }
