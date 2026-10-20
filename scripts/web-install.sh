@@ -40,8 +40,18 @@ say "Adding the runtime + Deckback repos ..."
 # The Freedesktop runtime comes from Flathub; --if-not-exists so an existing remote is left alone.
 flatpak remote-add --user --if-not-exists flathub "$FLATHUB" >/dev/null 2>&1 || true
 flatpak remote-add --user --if-not-exists deckback "$BASE/deckback.flatpakrepo"
-say "Installing Deckback (first run also pulls the Freedesktop runtime — a few minutes) ..."
-flatpak install --user -y deckback "$APP"
+# An install from another remote (a bundle's "deckback-origin") cannot be switched over in place:
+# flatpak refuses with "already installed from remote X", which would abort here under `set -e`.
+origin="$(flatpak info --user --show-origin "$APP" 2>/dev/null || true)"
+if [ -n "$origin" ] && [ "$origin" != deckback ]; then
+  die "Deckback is installed from '$origin', which never receives these updates. Remove it (your
+     sign-in and settings are kept): flatpak uninstall --user $APP — then run this again."
+fi
+say "Installing or updating Deckback (first run also pulls the Freedesktop runtime — a few minutes) ..."
+# --or-update: re-running this is ALSO the documented fix when a release adds a sandbox permission,
+# which the in-app self-update cannot accept (findings/durable/self-update.md). A plain install
+# prints "already installed" and changes nothing, so that fix used to be a no-op.
+flatpak install --user -y --or-update deckback "$APP"
 
 # --- 2. Confirm evdev access. Without 'input', the gamepad + touch lock fail SILENTLY (F1). --------
 # Mirrors scripts/lib.sh:flatpak_grants_input — only the devices= line counts; 'all' is a superset.

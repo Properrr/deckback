@@ -127,6 +127,10 @@ struct UpdatePromptConfig {
   UpdateState* state = nullptr;      // shared availability, written by the updater. Not owned.
   Updater* updater = nullptr;        // request_update() on confirm. Not owned.
   OsdMenuController* osd = nullptr;  // the Updates-tab UI + button badge. Not owned.
+  // How long "Updating…" may wait for the portal's verdict before reading as a failure. A real
+  // deploy of the ~77 MB engine finishes in seconds to minutes; silence past this means a hung
+  // transaction or an updater that is not running, and the tab would otherwise never move on.
+  long deploy_timeout_ms = 10L * 60 * 1000;
 };
 
 class UpdatePromptController {
@@ -154,6 +158,8 @@ class UpdatePromptController {
   void on_deploy_result(UpdateProgress progress, const std::string& error_name,
                         const std::string& error_message);
 
+  DeployPhase deploy_phase() const;  // for diagnostics and tests
+
  private:
   void kick_changelog();
   bool fetch_done() const;
@@ -179,6 +185,7 @@ class UpdatePromptController {
   DeployPhase deploy_phase_ = DeployPhase::Idle;
   std::string deploy_error_;
   bool deploy_fresh_ = false;
+  long requested_at_ms_ = 0;  // input thread: when the pending deploy was requested
 
   // Changelog fetch: 0 idle, 1 fetching, 2 done. cached_ is published by the release-store of
   // fetch_state_ = 2; the input thread reads it only after an acquire-load sees 2.

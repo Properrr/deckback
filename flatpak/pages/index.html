@@ -60,11 +60,12 @@
 
   <div class="card">
     <p><strong>From a terminal (Konsole)</strong> — add the repo once, then install:</p>
-    <pre>flatpak remote-add --if-not-exists deckback \
+    <pre>flatpak remote-add --user --if-not-exists deckback \
   https://properrr.github.io/deckback/deckback.flatpakrepo
-flatpak install deckback io.github.properrr.deckback</pre>
-    <p class="mut">Update anytime with <code>flatpak update io.github.properrr.deckback</code> — or let
-      the Deck's background updater handle it.</p>
+flatpak install --user deckback io.github.properrr.deckback</pre>
+    <p class="mut"><code>--user</code> matters: it is the install Deckback can update by itself
+      (Settings ▸ Updates). Update by hand anytime with
+      <code>flatpak update --user io.github.properrr.deckback</code>.</p>
   </div>
 
   <div class="card">

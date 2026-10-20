@@ -174,7 +174,7 @@ How you get updates depends on how you installed Deckback:
 | You installed from… | How updates reach you |
 |---|---|
 | A **`.flatpak` bundle** (a single Releases file) | **Manual.** A bundle has no remote to poll — download the newer `.flatpak` and `flatpak install` it again to upgrade. |
-| Our **Flatpak repo** at [properrr.github.io/deckback](https://properrr.github.io/deckback/) (added once, above) | **Automatic** — `flatpak update`, and Discover's background updates on the Deck. |
+| Our **Flatpak repo** at [properrr.github.io/deckback](https://properrr.github.io/deckback/) (added once, above) | **In the app** — Deckback finds new versions itself and offers them in *Settings ▸ Updates*. `flatpak update --user` (or Discover, in Desktop Mode) also works, and is what keeps the Freedesktop runtime current. |
 | **Flathub** *(planned — see below)* | **Automatic.** Every Deck already trusts the `flathub` remote, so updates just arrive. |
 
 ## 📦 Official store

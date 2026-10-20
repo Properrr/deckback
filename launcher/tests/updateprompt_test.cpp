@@ -7,11 +7,15 @@
 #include "updateprompt.hpp"
 
 #include <cassert>
+#include <chrono>
 #include <cstdio>
 #include <filesystem>
+#include <memory>
 #include <string>
+#include <thread>
 
 #include "harness.hpp"
+#include "osdmenu.hpp"
 
 using namespace deckback;
 
@@ -280,6 +284,81 @@ void test_deploy_toast() {
   assert(deploy_toast(DeployPhase::Idle).empty());
 }
 
+// "Check for updates" answered Empty, then the portal announces a commit published later in the
+// session: the badge and the Update button must come back. A verdict from an earlier deploy used to
+// pin the phase for the rest of the session, so the panel kept saying "latest" over a real update.
+void test_new_commit_after_an_empty_check_is_announced() {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "deckback_updateprompt_recheck";
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+
+  OsdMenuConfig ocfg;
+  ocfg.cdp_port = 1;  // nothing listens: the menu stays closed, only its update model is observed
+  OsdMenuController osd(ocfg);
+  UpdateState state;
+  UpdatePromptConfig cfg;
+  cfg.cdp_port = 1;
+  cfg.state_dir = dir.string();
+  cfg.local_version = "0.0.9";
+  cfg.releases_url = "http://127.0.0.1:1/releases";  // refused at once: no network in a unit test
+  cfg.state = &state;
+  cfg.osd = &osd;
+  const std::unique_ptr<Updater> updater = Updater::create(UpdaterConfig{});  // never started
+  cfg.updater = updater.get();
+  {
+    UpdatePromptController ctl(cfg);
+    ctl.check_now();
+    ctl.on_deploy_result(UpdateProgress::Empty, "", "");
+    ctl.tick(false);
+    assert(!osd.update_available());
+
+    state.set_available(true, "abc123def456");
+    ctl.tick(false);
+    assert(osd.update_available());
+  }
+  fs::remove_all(dir);
+}
+
+// An Update() that never gets a verdict -- a hung portal transaction, or an updater that is not
+// running -- must not leave the tab on "Updating…" with no buttons until the next launch.
+void test_a_deploy_that_never_answers_times_out() {
+  namespace fs = std::filesystem;
+  const fs::path dir = fs::temp_directory_path() / "deckback_updateprompt_timeout";
+  fs::remove_all(dir);
+  fs::create_directories(dir);
+
+  OsdMenuConfig ocfg;
+  ocfg.cdp_port = 1;
+  OsdMenuController osd(ocfg);
+  UpdateState state;
+  UpdatePromptConfig cfg;
+  cfg.cdp_port = 1;
+  cfg.state_dir = dir.string();
+  cfg.local_version = "0.0.9";
+  cfg.releases_url = "http://127.0.0.1:1/releases";
+  cfg.state = &state;
+  cfg.osd = &osd;
+  cfg.deploy_timeout_ms = 50;
+  const std::unique_ptr<Updater> updater = Updater::create(UpdaterConfig{});  // never answers
+  cfg.updater = updater.get();
+  {
+    UpdatePromptController ctl(cfg);
+    ctl.check_now();
+    ctl.tick(false);
+    assert(ctl.deploy_phase() == DeployPhase::Requested);
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    ctl.tick(false);
+    assert(ctl.deploy_phase() == DeployPhase::Failed);
+    // ...and a verdict that does arrive still lands: the timeout is not a latch.
+    ctl.check_now();
+    ctl.on_deploy_result(UpdateProgress::Done, "", "");
+    ctl.tick(false);
+    assert(ctl.deploy_phase() == DeployPhase::Done);
+  }
+  fs::remove_all(dir);
+}
+
 DECKBACK_TEST_MAIN(updateprompt) {
   test_version_compare();
   test_parse_and_summarize();
@@ -290,6 +369,8 @@ DECKBACK_TEST_MAIN(updateprompt) {
   test_release_notes_for();
   test_updates_view();
   test_deploy_toast();
+  test_new_commit_after_an_empty_check_is_announced();
+  test_a_deploy_that_never_answers_times_out();
   std::puts("updateprompt: ok");
   return 0;
 }

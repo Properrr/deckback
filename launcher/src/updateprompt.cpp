@@ -13,6 +13,7 @@
 #include "overlay.hpp"
 #include "scripts.hpp"
 #include "updater.hpp"
+#include "util.hpp"
 
 namespace deckback {
 namespace {
@@ -42,6 +43,7 @@ constexpr std::string_view kPermissionBlockedStatus =
 constexpr std::string_view kPermissionBlockedToast =
     "Update needs new permissions \xE2\x80\x94 install it from Desktop Mode (see Settings "
     "\xE2\x96\xB8 Updates)";
+constexpr std::string_view kNoAnswerError = "the update service did not answer";
 constexpr std::string_view kFailedToast =
     "Update failed \xE2\x80\x94 see Settings \xE2\x96\xB8 Updates";
 
@@ -276,7 +278,7 @@ UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool
     case DeployPhase::Failed:
       v.status =
           error_message.empty()
-              ? "The update could not be installed. It will be retried later."
+              ? "The update could not be installed. Check for updates to try again."
               : std::string("The update could not be installed: ") + std::string(error_message);
       v.can_check = updater_present;  // transient causes (network, remote) are worth retrying
       return v;
@@ -371,6 +373,13 @@ void UpdatePromptController::tick(bool on_watch) {
     phase = deploy_phase_;
     deploy_error = deploy_error_;
     fresh = std::exchange(deploy_fresh_, false);
+    if (phase == DeployPhase::Requested && mono_ms() - requested_at_ms_ >= cfg_.deploy_timeout_ms) {
+      // No verdict ever came (see deploy_timeout_ms). Report it now, and toast it next tick.
+      phase = deploy_phase_ = DeployPhase::Failed;
+      deploy_error = deploy_error_ = std::string(kNoAnswerError);
+      deploy_fresh_ = true;
+      warn("update: no answer from the update service — giving up on this request");
+    }
   }
   // Exactly once per verdict, and only from here: this is the input thread, which owns client_.
   // A toast is the fallback surface: when the menu is open the Updates panel is patched in place
@@ -384,6 +393,15 @@ void UpdatePromptController::tick(bool on_watch) {
     const std::string commit = cfg_.state->commit();
     if (!commit.empty() && commit != last_commit_) {
       last_commit_ = commit;
+      // A newer commit makes an earlier "latest" / failed / blocked verdict stale (a later release
+      // can be the very fix for a blocked one); a staged deploy or one in flight still stands.
+      if (phase == DeployPhase::Empty || phase == DeployPhase::Failed ||
+          phase == DeployPhase::PermissionBlocked) {
+        std::lock_guard lk(deploy_mu_);
+        if (deploy_phase_ == phase) deploy_phase_ = DeployPhase::Idle;
+        phase = deploy_phase_;
+        deploy_error = deploy_error_;
+      }
       const NotifyDecision d =
           decide_notification(commit, read_update_marker(update_card_marker_path(cfg_.state_dir)),
                               read_update_marker(update_dot_marker_path(cfg_.state_dir)));
@@ -400,8 +418,10 @@ void UpdatePromptController::tick(bool on_watch) {
                                      cfg_.local_version, idle, cfg_.updater != nullptr);
 
   // Prefer the pending release's notes; fall back to the running version's, so the tab is never
-  // empty. Only link out when the fetch produced nothing at all.
-  std::string notes = cv.notes.empty() ? installed_notes_ : cv.notes;
+  // empty. Only link out when the fetch produced nothing at all. installed_notes_ is written by the
+  // fetch thread, so it is read only once the fetch has published.
+  std::string notes = cv.notes;
+  if (notes.empty() && fetch_done()) notes = installed_notes_;
   if (notes.empty() && fetch_done()) notes = std::string(kReleaseNotesFallback);
   feed(v.has_update, v.can_check, v.status, notes);
 }
@@ -458,6 +478,7 @@ void UpdatePromptController::request_deploy(const char* why) {
     deploy_error_.clear();
     deploy_fresh_ = false;  // Requested never toasts; the tab shows it
   }
+  requested_at_ms_ = mono_ms();
   notify_ = false;
   hidden_status_.clear();
   if (cfg_.updater) cfg_.updater->request_update();
@@ -495,6 +516,11 @@ void UpdatePromptController::on_deploy_result(UpdateProgress progress,
   deploy_phase_ = phase;
   deploy_error_ = error_message;
   deploy_fresh_ = true;
+}
+
+DeployPhase UpdatePromptController::deploy_phase() const {
+  std::lock_guard lk(deploy_mu_);
+  return deploy_phase_;
 }
 
 void UpdatePromptController::ignore_version() {

@@ -64,9 +64,15 @@ By default (`self_update_mode: "notify"` in `app.json`) Deckback **tells you** w
 out but never installs it behind your back. A new release shows up as an amber dot on the Settings
 button and, on the **Updates** tab, the changelog with **Update now** / **Ignore this version**.
 Choosing *Update now* downloads only Deckback, from its own repo — no root, no password — and it
-applies the next time you open the app. Prefer silent updates? Set `self_update_mode: "auto"`.
-`"off"` disables it and you update from Desktop Mode with `flatpak update`. Keeping the runtime and
-your other Flatpaks current is always a separate `flatpak update`.
+applies the next time you open the app. **Check for updates** asks the repo right away instead of
+waiting for the periodic check (up to ~30 min, and skipped on a metered connection) — and installs
+the update if there is one. Keeping the runtime and your other Flatpaks current is always a separate
+`flatpak update --user` in Desktop Mode.
+
+If the Updates tab says a version **needs new system permissions**, Deckback cannot install it by
+itself (Flatpak forbids that for a self-update). In Desktop Mode, run the install one-liner again —
+`curl -fsSL https://properrr.github.io/deckback/install.sh | bash` — it updates in place and keeps
+your sign-in.
 
 ## Audio
 

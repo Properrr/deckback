@@ -237,16 +237,17 @@ void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u,
 }
 
 // Session-bus client for the Flatpak update portal. sd-bus is not thread-safe, so every sd-bus call
-// happens on one owned event-loop thread. Connect once at start; on any bus/portal failure the
-// updater goes inert for the session and the next launch re-checks (durable/self-update.md).
+// happens on one owned event-loop thread. A dropped bus or a restarted portal is reconnected with
+// backoff, going inert only after repeated failures (durable/dbus-reconnect.md); every launch
+// re-checks from scratch regardless.
 class PortalUpdater final : public Updater {
  public:
   explicit PortalUpdater(UpdaterConfig cfg) : cfg_(std::move(cfg)) {
-    if (pipe(wake_pipe_) != 0) {
+    // CLOEXEC: the engine is forked from this process and must not inherit our wake pipe.
+    if (pipe2(wake_pipe_, O_CLOEXEC | O_NONBLOCK) != 0) {
       warn("updater: pipe() failed — self-update disabled");
       return;
     }
-    fcntl(wake_pipe_[0], F_SETFL, O_NONBLOCK);
     if (!open_bus()) {
       warn("updater: sd_bus_open_user failed — self-update disabled");
       return;
@@ -719,7 +720,12 @@ class PortalUpdater final : public Updater {
     int r = sd_bus_call(bus_, req, kCallTimeoutUsec, &err, &reply);
     sd_bus_message_unref(req);
     if (r < 0) {
-      warn(std::string("updater: Update(): ") + (err.message ? err.message : "error"));
+      const std::string msg = err.message ? err.message : "error";
+      warn("updater: Update(): " + msg);
+      // A refused call is a verdict too: no Progress signal will follow it, so without this the
+      // Updates tab would say "Updating…" until the next launch.
+      record_terminal(UpdateProgress::Failed, msg);
+      if (cfg_.on_terminal) cfg_.on_terminal(UpdateProgress::Failed, err.name ? err.name : "", msg);
       sd_bus_error_free(&err);
       updating_ = false;
       return false;

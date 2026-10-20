@@ -458,7 +458,9 @@ int main(int argc, char** argv) {
                             info("exit: user confirmed — shutting down");
                             Watchdog::request_shutdown();
                           }});
-    osd->set_update_model(false, cfg->self_update_mode != SelfUpdateMode::Off,
+    // "Check for updates" is wired through the notify-mode prompt, so offer it only there: in auto
+    // mode the button had no handler behind it.
+    osd->set_update_model(false, cfg->self_update_mode == SelfUpdateMode::Notify,
                           update_policy_status(cfg->self_update_mode), "");
   }
 
@@ -466,16 +468,20 @@ int main(int argc, char** argv) {
   // updater. auto_deploy distinguishes them: auto deploys on detection, notify only publishes
   // availability into update_state and waits for the user's "Update now" via update_prompt.
   if (cfg->self_update_mode != SelfUpdateMode::Off) {
-    updater = Updater::create(UpdaterConfig{
-        .auto_deploy = (cfg->self_update_mode == SelfUpdateMode::Auto),
-        .state = &update_state,
-        .cdp_port = cdp_nav ? cfg->remote_debugging_port : 0,
-        // Runs on the updater's loop thread. update_prompt is emplaced below and updater->start()
-        // is called after it, and shutdown stops the updater first, so the reference is live for
-        // every call. Null in auto mode, where the updater keeps announcing deploys itself.
-        .on_terminal = [&update_prompt](UpdateProgress p, std::string name, std::string msg) {
-          if (update_prompt) update_prompt->on_deploy_result(p, name, msg);
-        }});
+    UpdaterConfig uc;
+    uc.auto_deploy = cfg->self_update_mode == SelfUpdateMode::Auto;
+    uc.state = &update_state;
+    uc.cdp_port = cdp_nav ? cfg->remote_debugging_port : 0;
+    // Set ONLY when the notify prompt below exists: a non-null handler suppresses the updater's own
+    // "restart to apply" toast, so setting it unconditionally left auto mode announcing nothing.
+    // Runs on the updater's loop thread. update_prompt is emplaced below and updater->start() is
+    // called after it, and shutdown stops the updater first, so the reference is live for every
+    // call.
+    if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav)
+      uc.on_terminal = [&update_prompt](UpdateProgress p, std::string name, std::string msg) {
+        if (update_prompt) update_prompt->on_deploy_result(p, name, msg);
+      };
+    updater = Updater::create(std::move(uc));
     info(std::format("startup: self-update mode = {}",
                      self_update_mode_name(cfg->self_update_mode)));
     if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav) {
