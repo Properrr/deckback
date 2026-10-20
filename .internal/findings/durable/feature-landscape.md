@@ -2,7 +2,9 @@
 scope: durable
 title: Feature landscape — what is worth adding for the Steam Deck, and what it would cost
 created: 2026-07-28
-updated: 2026-07-31 — P12.0b and P12.0c RUN on hardware (OLED); see §8. P12.0a still unrun.
+updated: 2026-10-20 — §9 adds a desk-research delta (no device): new candidates P12.15–P12.22,
+         new evidence for planned items, and two places where §2/§8 are contradicted.
+         2026-07-31 — P12.0b and P12.0c RUN on hardware (OLED); see §8. P12.0a still unrun.
 status: research, partly measured — §8 records what the Deck actually answered; everything else is
         still a named probe, not a result
 method: read the plan, TASKS.md, the registered findings, and the launcher/config surface at ea08f9a;
@@ -264,3 +266,72 @@ gesture layer built on that has been driven by a finger through every gesture
 `'ontouchstart' in window`, `pointer: coarse` — returns the wrong answer on a device where the
 feature works. Anything gated on them would disable itself exactly where it should run, which is why
 the gesture layer is config-gated rather than detected.
+
+## 9. Research delta 2026-10-20 (desk research, no device)
+
+Sources: a sibling Leanback client's source and all 279 of its issues
+(github.com/shy1132/VacuumTube, "VT#n" below), the SmartTube and DeckTube READMEs, the Decky store
+API, SteamOS 3.8 coverage, and the fork research preserved on branch `backup/jul08-refactor`. Tags:
+**[V]** checked in a primary source; **[I]** inference; **[U]** unverified. Engine-source facts were
+checked in the local checkout at the **m114** pin `a9181df`, not M138: re-verify after a sync.
+Tasks: TASKS P12.15–P12.22.
+
+### 9.1 New candidates (not shipped, planned, or rejected before)
+
+| Task | Feature | Evidence of demand | Mechanism / main risk |
+|---|---|---|---|
+| P12.15 | 60 fps unlock | VT `media-capabilities.js`; SmartTube lists 60 fps as a headline feature | page script rejecting absurd `framerate/width/eotf` in `isTypeSupported` / decode load, must stay on `VaapiVideoDecoder` |
+| P12.16 | Long-press A → context menu | VT#57 (Enter held ~500 ms), VT#282 | launcher sends down/up separately / auto-repeat may cancel the timer |
+| P12.17 | Resume after a crash | [I] | `t=` deep link / Leanback may ignore `t=` |
+| P12.18 | `h5vcc` shim → deep links, then DIAL cast target | VT `h5vcc/index.js`; VT#229/#260/#269 | page script + launcher SSDP/HTTP / Leanback may assume Cobalt platform services once `h5vcc` exists |
+| P12.19 | Pause on headphone unplug | [I] phone-standard | evdev `SW_HEADPHONE_INSERT` / jack may not expose a switch; BT needs a permission or the host helper |
+| P12.20 | SABR/attestation canary + honest error | VT#189/#198/#224/#258 (Jun–Sep 2026) | harness + toast / a guest canary may never hit an enforced account |
+| P12.21 | Channel/playlist Steam tiles | VT#80, VT#112 | deep-link grammar / route drift |
+| P12.22 | Remaining time / "ends at" | VT#254 (merged) | page script / `idomkey` drift |
+
+Unranked: dock state via gamescope's read-only `GAMESCOPE_DISPLAY_IS_EXTERNAL` atom. After §8.2 it
+is only useful as a *trigger* (dock/AC drives P12.9; turning touch off when docked). Value low.
+
+### 9.2 Facts worth keeping
+
+- **Leanback maps console gamepad codes itself** [V VT `controller-support.js`, untrusted DOM
+  events]. The codes are `0x8000 + button` (Starboard `kSbKeyGamepad*`), plus `MediaPlayPause`
+  `0xB3` and `Subtitle` `0x1CC`; all three exist in `starboard/key.h` [V m114 tree]. Whether a CDP
+  `windowsVirtualKeyCode` of 32768+ surfaces as `event.keyCode` is [U]. If it does, the pending
+  bindings for seek, captions and play/pause can send native codes instead of hand-built behaviour
+  (input-ux §8.1).
+- **Chrobalt's `h5vcc` has no `dial` module** [V m114 tree], and our build exposes no `h5vcc` at all
+  (`preview.md`).
+- **A UA override without `userAgentMetadata` turns off the Sec-CH-UA client hints** [V m114 tree,
+  `client_hints.cc`]. So our requests do not present a second, desktop identity, the mismatch class
+  behind VT#258. What `navigator.userAgentData` returns is [U].
+- Leanback's max quality follows `h5vcc.system.getVideoContainerSizeOverride`; VT had to stop a
+  1280×800 screen rounding down to 720p (VT#209) [V].
+- The cast label is the feature switch `mdx_device_label` [V VT `cast-label.js`].
+- AI "super resolution" formats are tagged in `adaptiveFormats[].xtags` [V VT source]. Filtering them
+  is response tampering (A3); keep this as a bitrate/battery fact only.
+
+### 9.3 Where §2 and §8 are contradicted
+
+- **§8.1 / P12.9 "hd720 matches our surface, so a cap can only lower quality"** is too strong. There
+  are two independent ceilings: 720p plausibly from the missing container-size override, and 30 fps
+  from Chromium ignoring Cobalt's extra MIME parameters. P12.0b's labels (no `720p60`) are
+  suggestive only, since we do not know whether that video had a 60 fps rendition. P12.15 decides.
+- **§4 / P12.13 "the only MPRIS consumer is `mpris-proxy`"**: two Decky plugins consume MPRIS
+  (MusicControl ~76k, Music Control ~38k downloads, store API 2026-10-20) [V].
+- **§2.1 audio-only "drop to the lowest quality"**: a native audio-only player flag exists, but using
+  it rewrites the player response. That is an owner decision under A3, not an engineering gap.
+- **R1/R2 drift to watch:** attestation enforcement is reaching sibling clients, guests are being
+  asked to sign in "to prove you're not a bot" (VT#158/#233), and the late-2025 TV watch-screen
+  redesign is DOM drift risk for the `idomkey`/overlay scripts. The smoke canary (guest, UI-only)
+  catches none of these: P12.20.
+- **SteamOS 3.8** adds preliminary LCD hibernation, wake from a Steam Controller, and "better scaling
+  on TVs" [V secondary]. Re-probe §8.2 on 3.8.x (record the SteamOS build next to the reading), but
+  do not reopen P12.2 on that alone. `PrepareForSleep` should cover hibernate [I].
+
+### 9.4 Still not recommended
+
+As §5/§6, plus the fork's list, which this pass agrees with: Discord RPC, offline downloads,
+PO-token/attestation spoofing, and a Chromecast (`CrKey`) UA (lands in cast-receiver idle, m114
+S0.2).
+

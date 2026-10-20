@@ -181,8 +181,17 @@ been **deleted** rather than shipped disabled; the `touch_lock_*` config keys st
 ignored, so an old hot-swapped `app.json` neither resurrects it nor warns. See
 [`.internal/findings/durable/touch-lock.md`](../.internal/findings/durable/touch-lock.md).
 
-### Hardware video decode (VA-API) ⛔ Blocked — ships software decode
-Intended as the P4 battery win. Selecting `VaapiVideoDecoder` needs
+### Hardware video decode (VA-API) ✅ Ships on M138 (OLED verified) — ⛔ was blocked on m114
+**Current engine (M138 / cobalt-27):** the same two flags were re-tested on-Deck through the Flatpak
+in Game Mode during real Leanback VP9 playback, under a dual gate: `VaapiVideoDecoder` +
+`kIsPlatformVideoDecoder`, **and** a composited screenshot through the pixel-corruption check. The
+result was clean (0.0% green-band rows across 5 frames, visually confirmed), so `config/app.json`
+**ships hardware decode**. `just power` measured **5.6 W** under hardware-decoded VP9, inside the
+≤ ~9 W gate. The LCD unit is untested. Re-run the **pixel** check after every Cobalt bump. See
+[`.internal/findings/milestones/m138.md`](../.internal/findings/milestones/m138.md) §"Media &
+VA-API".
+
+**History (m114):** intended as the P4 battery win. Selecting `VaapiVideoDecoder` needs
 `--enable-features=VaapiVideoDecodeLinuxGL` **and** `--use-angle=gl`. On-Deck those flags engaged
 the hardware decoder **but painted green-band corruption on every frame** — ANGLE's DMA-buf import
 of the tiled NV12 VA surface is broken on radeonsi. Worse, every automated metric false-passed
@@ -335,12 +344,12 @@ pytest over SSH+CDP), `soak`/`power`, `cert` (`js_mse_eme` conformance), `flatpa
 | **P0** | Research / de-risking spikes | ✅ Done |
 | **P1** | Build & bring-up on Deck | 🟡 Partial (profile ✅; forced-720 surface, Crashpad, 30-min gate ⬜) |
 | **P2** | Session & lifecycle | 🟡 Partial (deep link + error page 🟡; 50-cycle gate ⬜) |
-| **P3** | Input / controls | 🟡 Partial (buttons + hotplug ✅; OSK/latency/layers/touch-gesture ⬜) |
-| **P4** | Media pipeline & HW decode | ⛔ Blocked (VA-API corrupt, reverted; ships software; AV1 steering 🟡) |
+| **P3** | Input / controls | 🟡 Partial (buttons + hotplug + touch gestures ✅; OSK/latency/layers ⬜) |
+| **P4** | Media pipeline & HW decode | ✅ HW decode ships on M138 (OLED, pixel-clean, 5.6 W); LCD untested; AV1 steering 🟡 |
 | **P5** | Audio & microphone | 🟡 Partial (audio out + repair ✅; voice ⬜/disabled) |
 | **P6** | Sleep / resume / idle-inhibit | ✅ Core verified 2026-07-10 (audio-restore + no-dim clauses 🟡) |
 | **P7** | Widevine path | 🟡 Registration patch built + run; no CDM ever loaded |
-| **P8** | Packaging & distribution | ✅ Built + installed; ⬜ extra-data CDM wiring, grid art, <5-min gate |
+| **P8** | Packaging & distribution | ✅ Built + installed + self-updating, Steam artwork via the installer; ⬜ extra-data CDM wiring, <5-min gate, update recall/deltas |
 | **P9** | Test & hardening (OLED matrix) | ⬜ Not started |
 | **P10** | Flathub submission & maintenance | ⬜ Not started |
 | **P11** | Focus/hover preview | ⬜ Not started (probe-first) |
@@ -355,5 +364,5 @@ impossible under Xwayland/without Steamworks; passing `js_mse_eme` is **not** ce
 Still unverified on hardware: auto-repeat acceleration, right-stick scroll, keymap layers, captions'
 actual effect (the new player-caption-module toggle — the old `c` keystroke is confirmed dead), mic
 capture, **voice search end-to-end**, single-instance lock, resume audio-restore,
-audio device hot-swap, and any hardware-decode path. Not built: text-entry/OSK, touch gesture layer,
-input-latency measurement, Crashpad, forced 720p surface + glyph-size check, grid art.
+audio device hot-swap, and hardware decode on the LCD unit. Not built: text-entry/OSK,
+input-latency measurement, Crashpad, forced 720p surface + glyph-size check.

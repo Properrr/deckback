@@ -1,5 +1,77 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★★★ REVIEW 2026-10-20 — what is still weak, what was fixed, the plan (no device)
+
+A desk review of the whole update path, from the launcher through the release pipeline to the live
+Pages repo, done without a Deck. Tags: **[V]** checked in our code, the flatpak 1.16.x source, or
+the live repo; **[I]** inference; **[U]** unverified. Nothing in this section has run on hardware.
+The plan is TASKS Phase 8 §"Self-update hardening".
+
+**Facts the earlier sections did not have:**
+- **The repo is signed** [V]. The live `.flatpakrepo`/`.flatpakref` inline `GPGKey`, and
+  `summary.sig`/`summary.idx.sig` are served. The key is EdDSA `E16880BE44008CDC`, held only as an
+  Actions secret, with no expiry (RELEASING.md). Only the first v0.0.1 deploy (~20 min) was
+  unsigned. This matters because flatpak refreshes remote config (`xa.redirect-url`, keys) only on
+  signed remotes, so moving hosts or rotating keys stays possible.
+- **The published repo is rebuilt from zero every release** [V]. `publish-repo.sh` runs `rm -rf` +
+  `ostree init` + one bundle. The static-delta and prune flags therefore do nothing: the live
+  commit's parent 404s, there is no from-parent delta, and every update is a ~77 MB download
+  (185 MB installed, from the live `xa.cache`). **There is also nothing to roll back to.**
+- **A bad release cannot be recalled today** [V chain].
+  - Re-publishing an older tag re-imports that bundle's original, older commit.
+  - The portal compares commits for inequality, so it offers that commit to everyone.
+  - flatpak then refuses the downgrade ("Update is older than current version").
+  - Result: every user is offered an update that can never install, over and over.
+- **Detection is 0–30 min by construction** [V source]. flatpak-portal arms ONE global poll timer and
+  every app's monitor shares it, so a fresh launch inherits whatever is left on it. This explains
+  both the "60 s" and the "~30 min" observations above. It **never checks on a metered network**,
+  and the app is not told.
+- **The runtime and GL.default (Mesa, i.e. the VA-API driver) refresh only alongside a real Deckback
+  update**, and only if they live in the same (user) installation [V source, U Deck]. Nothing on
+  SteamOS updates Flatpaks in Game Mode. A system-wide runtime is never refreshed by us.
+- The CDN caches `summary*` for `max-age=600` [V headers]. Because each deploy deletes the old
+  objects, a client holding a cached summary can 404 right after a release [I].
+
+**Fixed in `1f4e398` (L0 tests + a CI replay on GCC 13/Clang 18; NOT run on a Deck):**
+- **The documented recovery for a permission-adding release was a no-op.** The in-app
+  PermissionBlocked text, this file and `check-permissions.sh` all say "re-run install.sh", which
+  ran a plain `flatpak install` and printed "already installed". It now uses `--or-update`, and
+  explains instead of aborting when the app came from another remote.
+- **A "Check for updates" that answered Empty hid every later release in that session.** The
+  verdict pinned the phase. A newer commit now clears Empty/Failed/PermissionBlocked.
+- **"Updating…" could hang until relaunch.**
+  - A synchronously rejected `Update()` produced no verdict.
+  - An accepted `Update()` with no terminal Progress produced none either.
+  - Rejections are now reported as Failed, and Requested times out after 10 min.
+- **Auto mode:** `on_terminal` was never null, which silenced the fallback "restart to apply" toast,
+  and the OSD offered a Check button with no handler. Neither mode is user-reachable today
+  (app.json is read-only; the user.json allowlist excludes it).
+- The Failed text no longer promises a retry that does not exist. The Pages terminal instructions
+  now use `--user`, and the `.flatpakref` suggests the remote name `deckback`.
+
+**Still weak (ranked; plan items in brackets, see TASKS):**
+1. No recall or rollback, and full-size updates [U1 linear repo history, U2 recall runbook].
+2. Slow or silent detection; Check for updates *installs* rather than checks, skipping notify
+   mode's consent step [U4 non-installing check].
+3. Stale runtime and Mesa in Game Mode [U7 host timer — owner decision].
+4. No "Restart now" [U6]; no progress display [U5].
+5. Install paths diverge: Releases bundles carry no `--repo-url` and never update [U8].
+6. No kill-switch or incident banner [U9], no beta channel [U10]. Pages' soft 100 GB/month at
+   77 MB/update is ≈1,300 updates/month [U11].
+7. Key custody: one never-expiring key, CI-only, no rotation plan (owner decision).
+
+**None of the plan adds a sandbox permission.** In particular, never add
+`--talk-name=org.freedesktop.Flatpak` to run host flatpak commands: that permission add would
+strand every installed user, exactly as 0.0.7 did.
+
+**Corrections to the sections below:**
+- §"Design decisions" says connect-once with no reconnect. The code reconnects with backoff and
+  goes inert only after repeated failures (`durable/dbus-reconnect.md`).
+- §"Config & permission" names a `self_update` bool defaulting to true. The setting is the
+  tri-state `self_update_mode`, default `notify`; the legacy bool still maps onto it.
+- §"Architecture" says "toast + mark ready". Notify mode reports the verdict to the OSD Updates tab
+  instead; only auto mode toasts.
+
 ## ★★ FIX VERIFIED ON-DECK, REAL REMOTE, 0.0.7 → 0.0.8 (2026-07-24, OLED, Game Mode)
 
 The permission fix below is **proven on hardware**, on the production GitHub-Pages remote, through an
@@ -664,6 +736,10 @@ is always manual when introducing a self-updater — that is expected, not a bug
   Access blocker stands — it is not unit-specific.)
 
 ## Design decisions (deliberate — recovery is by relaunch, not in-session)
+
+> **Superseded in part (2026-10-20):** the loop now reconnects (`durable/dbus-reconnect.md`), and the
+> UI times out a deploy with no verdict after 10 min (`updateprompt.cpp`). The "connect-once" and
+> "no deploy watchdog" bullets below record the original design, not the code.
 
 The loop is intentionally minimal: **connect once at start, watch, and on any failure go inert for the
 session.** Updates are not urgent (a kiosk app is relaunched often), so the extra state machine for

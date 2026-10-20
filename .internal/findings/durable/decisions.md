@@ -16,7 +16,7 @@ Carries across Cobalt versions. Reversing one of these is a project-level pivot,
 | D1 | Engine base | Chrobalt (Chromium-based Cobalt), **26+ only** — verified 2026-07-08 that ≤25 is classic Starboard Cobalt (own renderer, no Blink) and unusable here. Pinned 26.eap / M114. |
 | D2 | Content scope | Free YouTube + best-effort Widevine L3 (desktop `libwidevinecdm.so`, user-fetched) |
 | D3 | Runtime | Game Mode (gamescope) only; Desktop Mode untested/unsupported in v1 |
-| A1 | HW decode | **Ships software decode.** VA-API was tried and engaged on-Deck but renders green-band corruption (reverted 2026-07-10); the "VA-API required before Flathub" assumption is now in question. Any HW-decode re-enable is gated on a pixel-clean check (`b3fcd58` / `milestones/m114.md`), never decoder-name. |
+| A1 | HW decode | **Superseded 2026-07-10 on M138: ships HARDWARE decode** — pixel-clean under the dual gate on the OLED, 5.6 W (`milestones/m138.md` §Media; CLAUDE.md). The rest of this row is the m114 history: **Ships software decode.** VA-API was tried and engaged on-Deck but renders green-band corruption (reverted 2026-07-10); the "VA-API required before Flathub" assumption is now in question. Any HW-decode re-enable is gated on a pixel-clean check (`b3fcd58` / `milestones/m114.md`), never decoder-name. |
 | A3 | Ad-blocking / UI mods | None in v1 (keeps Flathub acceptance + takedown risk low) |
 
 ## Identity

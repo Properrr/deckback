@@ -605,8 +605,9 @@ the suspend/resume/idle hooks. `devtools_test` covers the frame codec + a loopba
       pulls it on install — verified against a fresh flatpak user dir.
       `install.sh` does install + evdev verification + `steamos-add-to-steam` + prints the
       controls/layout/DRM steps (refreshed for the new `.vdf` + touch chord). **`docs/SUPPORT.md`
-      now complete** (controls table, layout import, touch lock, DRM opt-in, sign-in, logs). Grid art
-      still TODO.
+      now complete** (controls table, layout import, touch lock, DRM opt-in, sign-in, logs). Grid art:
+      the one-line installer (`web-install.sh`) writes the shortcut plus full tile artwork through
+      `steam_shortcuts.py` (CHANGELOG 0.0.2); the local `just install` path still does not.
 - [ ] **Document Steam Input as the user remap path** in SUPPORT.md (input-ux §7): rebinding a
       physical control to a different xinput button in Steam's configurator remaps Deckback without
       touching app.json — users can't realistically edit JSON in Game Mode; `keymap` stays the
@@ -626,6 +627,74 @@ the suspend/resume/idle hooks. `devtools_test` covers the frame codec + a loopba
       on affected SteamOS builds (P6 measurement); troubleshooting entry: `LD_PRELOAD=""` in the
       shortcut's launch options if Game Mode develops hitches an SSH launch doesn't show (Steam
       overlay preload — `durable/platform.md`).
+
+*Self-update hardening — review 2026-10-20 (`durable/self-update.md` §"★★★ REVIEW 2026-10-20"):*
+
+The portal path works for the happy case (0.0.7 → 0.0.8 verified on-Deck). What is weak is
+everything around it: there is no recall or rollback, updates are full-size, detection is slow or
+silent, and the runtime goes stale. **No item here may add a sandbox permission** — a permission add
+strands every installed user on their current version.
+
+- [x] **Live traps closed in `1f4e398`** — L0 + CI replay only, **not yet run on a Deck**:
+  - `install.sh` re-run now really updates (`--or-update`). It was the documented recovery for a
+    permission-adding release and was a no-op.
+  - A newer commit clears a stale Empty/Failed/blocked verdict.
+  - A deploy with no verdict times out instead of showing "Updating…" forever; a rejected
+    `Update()` is reported as Failed.
+  - Auto-mode wiring is fixed; a changelog data race is fixed.
+  - Pages instructions now say `--user`; the `.flatpakref` gains `SuggestRemoteName`.
+
+  **On-Deck check (T1, staging repo):**
+  - Check → Empty, then publish a newer commit: it is offered.
+  - With a permission-adding staging commit: the tab shows the blocked text, and re-running
+    `install.sh` in Desktop Mode installs it.
+- [ ] **U1 — Linear history in the published repo** (M, release pipeline). Mirror-pull the live repo,
+      then `build-commit-from --timestamp=NOW --gpg-sign` so each release's parent is the commit
+      users actually have, then `build-update-repo --generate-static-deltas --prune
+      --prune-depth=2`. That gives from-parent deltas (MB instead of ~77 MB per update), a rollback
+      target, a fix for the CDN race (old objects survive a deploy), and the base for U2 and U10.
+      The first run must pull with `--depth=0`, because the live parent 404s today. Verify off-device
+      with two dummy bundles and a local `flatpak --user` remote, then a T2 production run.
+- [ ] **U2 — Recall runbook** (S, RELEASING.md). Re-commit the last good tree forward with a fresh
+      timestamp (`build-commit-from` keeps the old timestamp by default, and the portal refuses
+      downgrades). Document `flatpak mask` as the user-side "hold this version". Needs U1.
+- [ ] **U3 — Publish-time permission gate against the LIVE repo** (S). Diff the new commit's
+      `[Context]` against the live summary's `xa.cache` before deploying. `check-permissions.sh`
+      compares against git tags, which misses a bundle built from the wrong tree.
+- [ ] **U4 — A check that does not install** (S–M, launcher).
+      - GET `repo/refs/heads/app/<id>/x86_64/master` (65 B) and compare it with `[Instance]
+        app-commit` in `/.flatpak-info`, at launch and on Check for updates; feed the result into
+        `UpdateState`. The portal stays the only installer and the only signature verifier; a
+        forged ref can at worst cause a harmless Empty.
+      - Fixes the 0–30 min detection, the metered-network blind spot, and Check *installing* (which
+        skips notify mode's consent step).
+      - L0 with a fake HTTP server, then T1.
+- [ ] **U5 — Show deploy progress** (S): `on_progress` ignores `n_ops/op/progress`. A runtime bump
+      (hundreds of MB) currently sits behind "this can take a minute".
+- [ ] **U6 — "Restart now" on Done** (S): the graceful exit path (`on_exit`) plus "reopen from your
+      Library". Spike the portal's `Spawn` with `LATEST_VERSION` later: it may escape gamescope
+      focus [U].
+- [ ] **U7 — Host-side update timer** (M, installer, owner decision). A `systemd --user` timer
+      (`OnCalendar=` + `Persistent=true`; `network-online.target` does nothing in the user manager)
+      running `flatpak update --user -y --noninteractive`. It is the only thing that keeps the
+      runtime and Mesa/VA-API current in Game Mode, and it accepts permission adds. Decide the scope:
+      Deckback + its runtime only, or everything.
+- [ ] **U8 — Updatable bundles** (S–M): export the Releases bundle with `--repo-url` + `--gpg-keys` so
+      a bundle install joins the update channel. An existing `*-origin` remote cannot be changed in
+      place, so this helps new installs only.
+- [ ] **U9 — Signed `status.json`** (M): a minisign-signed kill-switch and incident banner (blocked
+      commits + a message). It shares key handling with the signed remote-config idea (UA/keymap
+      hotfixes). Check that OpenSSL 3 is still in the 25.08 runtime before choosing the verifier.
+- [ ] **U10 — `beta` branch** (M, needs U1). Keep `master` for stable: renaming it creates a new ref
+      and forces a reinstall.
+- [ ] **U11 — Hosting headroom** (M): Pages is soft-capped at 100 GB/month, ≈1,300 full updates. U1's
+      deltas buy most of the headroom. Move hosting (R2 on a custom domain, or Flathub) through
+      `xa.redirect-url` only when needed; that works only because the repo is signed. R2 uploads are
+      not atomic, so upload `summary` last.
+- **Owner decisions this needs:** signing-key custody (offline backup, subkey/expiry, rotation via
+  `--gpg-import`); whether to run U7 and how wide; history depth vs Pages' 1 GB; a beta channel;
+  any telemetry or update ping (a privacy statement); who may trigger a recall; whether auto mode
+  becomes user-reachable; when to move to 26.08 (25.08 is supported to ~Aug 2027 [I]).
 
 **Gate:** clean SteamOS (**OLED**): GitHub release → playing in Game Mode in < 5 min, one command.
 LCD is best-effort/untested and cannot gate a release we have no way to validate.
@@ -867,6 +936,47 @@ before the grab test passes: it is built entirely on the assumption that grabbin
       commit** (v21 differs from v18 — e.g. `struct sigaction sa {}` → `sa{}`), separate from any
       feature branch so the diff is pure formatting. Verify CI (v21) and `just fmt` agree.
 
+*Launcher review follow-ups (2026-10-20).* The same review fixed 20+ bugs in `c8a4fc7`…`1f4e398`
+(all L0-tested, TSan-clean, CI-replayed; none run on a Deck). These were found but deliberately not
+changed, because each touches an on-Deck-verified path or needs a seam first:
+
+- [ ] **Input state-machine test seam.** Extract `track_axes(code, value)`: the HAT/stick/trigger
+      bookkeeping duplicated between the normal and OSD paths. Then the first-run card can let axis
+      releases through: it currently swallows them, so a D-pad held across the card resolves to a
+      stale direction afterwards. The same seam makes the exit-hold and SYN_DROPPED fixes
+      unit-testable; today `handle_event` is private.
+- [ ] **Resume hook on the logind bus thread.** `player->on_resume()` → `wait_online()` blocks the
+      platform loop for up to `resume_online_timeout_ms` (8 s) inside `PrepareForSleep(false)`. A
+      quick re-suspend in that window would sleep without the pause/checkpoint [PLAUSIBLE]. Hand the
+      callbacks to the player's worker. P6 soak passed on-Deck, so re-run `just soak` after.
+- [ ] **Platform bus has no reconnect.** After a system-bus drop it warns once a second forever, with
+      power integration dead. Give it the updater's reconnect via one shared sd-bus loop helper:
+      wake pipe, nudge, drain, timeout and pump are duplicated ~50 lines between `platform.cpp` and
+      `updater.cpp`.
+- [ ] **CDP re-arm race.** The UA/scripts/grant are re-armed *after* the new session is published,
+      so another thread's `Page.navigate` can beat `setUserAgentOverride` (an extra desktop-redirect
+      cycle). Gate callers until the re-arm finishes.
+- [ ] **`Network.enable` cost during playback** [PLAUSIBLE]. It is sent only for the UA override, and
+      enables network events for every MSE segment. Measure it against the 9 W gate (`just power`);
+      drop it if `setUserAgentOverride` works without it. `Page.enable` is likewise re-sent before
+      every navigate; once per session suffices.
+- [ ] **OSD `exec()` timeout reads as "gone"** and releases capture while the menu is still painted.
+      Return a distinct verdict on `nullopt` and let the reconcile tick decide, as `reconcile_open`
+      already does.
+- [ ] **CDM install is not atomic.** `cdm_fetcher` keeps a private `write_file` that checks `good()`
+      before close, writes in place, and never re-hashes an existing file. A truncated `.so` reads as
+      installed forever. Use `fileio` + `.part` + rename, and re-verify `cdm_sha256` at startup.
+- [ ] Small:
+      - `gestures_action` accepts `"touch_gestures"`, but the lookup only checks two other names: a
+        silently dead binding.
+      - LT+View toggles captions past the LT layer.
+      - Axis ranges assume the Xbox virtual pad; there is no `EVIOCGABS`.
+      - Tests use fixed `/tmp` names and are flaky under concurrent runs; add a `mkdtemp` helper.
+      - Two JSON string escapers exist (`util.hpp`/`json.cpp`).
+      - `netprobe` duplicates `connect_tcp`/`mono_ms`.
+      - `kOverlayable` and `ConfigStore::apply` should come from one table; `touch_hide_cursor` was
+        exactly that drift.
+
 ## Phase 10 — Flathub submission & maintenance  (3–4 ED + ongoing)
 
 - [ ] Flathub review (sandbox/zypak, extra-data, trademark).
@@ -1083,6 +1193,66 @@ answer exits 0 — it is a finding; only "could not observe" is an error (3). Re
 - [ ] **P12.14 — Loudness compression** for the Deck's quiet speakers (Web Audio graph on the media
       element). Re-assert decoder identity afterwards: a feature that silently drops us to software
       decode is a regression wearing a feature's clothes.
+
+*Research delta 2026-10-20 (`durable/feature-landscape.md` §9) — new candidates, each probe-first:*
+
+- [ ] **P12.15 — 60 fps unlock (and the 720p question).** Two separate ceilings, not one:
+      - 30 fps: Leanback probes `isTypeSupported` with Cobalt's extra MIME parameters
+        (`framerate`, `width`, `eotf`). Stock Chromium ignores them and answers "supported", so
+        Leanback assumes no HFR.
+      - 720p: plausibly the missing `getVideoContainerSizeOverride`.
+
+      **720p60 is the valuable half**; 1080p on an 800p panel costs battery for nothing. The fix is
+      a page script in the AV1-steering class: reject absurd values. **Probe:**
+      `MediaSource.isTypeSupported('video/webm; codecs="vp9"; framerate=9999')` → `true` means we
+      are affected. Then confirm a known 60 fps video offers no `720p60`. After the fix, re-run
+      `just power` and the decoder-identity check.
+- [ ] **P12.16 — Long-press A → Leanback's context menu** (Watch later / Not interested — unreachable
+      today). Leanback's long-press is Enter held ~500 ms. Ours fires on the press edge and sends
+      keyDown+keyUp together. **Probe:** `rawKeyDown Enter`, hold 600 ms, `keyUp` on a tile — does
+      the menu open? The press-edge auto-repeat must not cancel Leanback's timer.
+- [ ] **P12.17 — Resume after a crash.** A watchdog restart lands on Home and the place is lost. The
+      suspend checkpoint is only logged, and the deep link emits only `v=`. **Probe:** does
+      `#/watch?v=<id>&t=120` land at `currentTime ≈ 120`?
+- [ ] **P12.18 — `window.h5vcc` shim** (M).
+      - First `runtime.initialDeepLink`/`onDeepLink`: hand a second launch to the running app
+        without a reload.
+      - Later `dial.DialServer` (L): a LAN cast target "Steam Deck (Deckback)". The friendly name
+        must not contain "YouTube"; the DIAL app id `YouTube` is protocol, not branding.
+
+      **Probe first:** inject `h5vcc={}` and re-run P11/P12 probes. Leanback may assume Cobalt
+      platform services once `h5vcc` exists (input-ux §13.2). SSDP must work under
+      `--share=network` (no new permission [I]).
+- [ ] **P12.19 — Pause on headphone unplug.** Jack: evdev `SW_HEADPHONE_INSERT` (`--device=input` is
+      already granted). Bluetooth: needs PipeWire events, BlueZ (a permission — see the
+      cross-cutting note), or the host helper. **Probe:** `evtest` on the jack device.
+- [ ] **P12.20 — SABR/attestation canary + an honest error.** Since Jun–Sep 2026, sibling Leanback
+      clients report playback dying at ~45–60 s for some accounts. It is server-side, per-account,
+      and reproduces in a plain browser. Guests sometimes get "Sign in to prove you're not a bot".
+      Our smoke canary only loads the UI as a guest and never plays past ~60 s, so it misses both.
+      Add a signed-in, >90 s playback leg, and a toast + SUPPORT.md entry so users do not blame us.
+- [ ] **P12.21 — Channel/playlist Steam tiles** (S–M): one-tap favourites via
+      `#/browse?c=UC…` / `#/watch?list=…` deep links in the Steam library. Verify that both routes
+      land.
+- [ ] **P12.22 — Remaining time / "ends at"** (S): page script, or a row in the P12.11 stats tab.
+
+*New evidence for items above (2026-10-20):*
+- **P12.0a/P12.3:** YouTube dropped the shared-Wi-Fi requirement for phone↔TV control; the same
+  account suffices (secondary source). Add one case to the pairing probe: does the Deck appear in a
+  signed-in phone's device picker with no code?
+- **P12.1:** a native audio-only path exists (`playerConfig.audioConfig.playAudioOnly`, zero video
+  decode), but it rewrites the player response. That makes it an **A3 decision**, not an
+  engineering one; dropping to `small` quality stays within policy. Leanback's "Continue
+  watching?" prompt will end long screen-off sessions; defeating it is also A3, so treat it as a
+  known limit.
+- **P12.5:** one report says speed ≥ 1.25× forces 480p and re-picking quality resets speed. Re-check
+  quality after each rate change, and offer a remembered default speed.
+- **P12.6 / P12.9:** demand signals exist: a sleep timer in a sibling Decky plugin, and a
+  remembered max quality requested in a sibling client's tracker. **P12.9's premise is
+  contradicted:** `hd720` may be a ceiling we impose, not our surface (see P12.15).
+- **P12.13:** two Decky plugins consume MPRIS (~76k and ~38k downloads), so a consumer exists. The
+  new-`--own-name` cost could be avoided by letting the host-side helper own the MPRIS name and
+  drive the app over loopback CDP [I]. No evidence that SteamOS 3.7/3.8's QAM reads MPRIS [U].
 
 *Policy-blocked, not tech-blocked:*
 

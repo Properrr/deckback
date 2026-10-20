@@ -15,7 +15,9 @@ Approaches that stay valid across Cobalt versions. The *implementation* of each 
   to report AV1 unsupported and VP9/H.264 supported (and `powerEfficient=true` if a working
   hw-decode path ever lands — see below) so YouTube's ABR picks hw-friendly streams. This is
   independent of whether hw decode is done yet.
-- **We ship software decode.** VA-API hardware decode was tried and engaged on-Deck but **renders
+- **Superseded on M138 (2026-07-10): we ship hardware decode** — the same flags are pixel-clean on
+  M138's ANGLE (OLED, dual gate, 5.6 W; `milestones/m138.md`). The m114 history follows.
+- **(m114) We shipped software decode.** VA-API hardware decode was tried and engaged on-Deck but **renders
   green-band corruption on every frame** — reverted 2026-07-10; any re-enable is gated on a
   pixel-clean result, never a decoder-name check. See `hardware.md` and `milestones/m114.md`
   §"VA-API decode is VISUALLY CORRUPT". Do **not** assert "no AV1 hardware on either Deck" as fact:
