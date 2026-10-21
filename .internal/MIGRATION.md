@@ -29,8 +29,12 @@ When `DEPS.pin` changes, every `findings/milestones/<old>.md` fact is presumed s
 5. **Toolchain / image.** Re-diff `docker/Dockerfile`'s mirrored package lists against
    `cobalt/docker/{linux,unittest}` at the new commit, and update the `BASE`
    `marketplace.gcr.io/google/debian12@sha256:…` digest. Rebuild: `just bootstrap`.
-6. **Rebase patches.** `just sync` re-applies `patches/series`. For each patch that fails:
-   `just patch-refresh` after fixing in `cobalt/`. Record per-patch status in `mNEW.md`.
+6. **Rebase patches.** `just sync` applies `patches/series` as one commit per patch on top of the pin
+   (`git am`) and stops at the first that fails, leaving the earlier ones applied. Rebase that one
+   by hand (`git -C cobalt/src am -3 ../../patches/000N-…patch`, resolve, `git am --continue`), apply
+   the rest the same way, then `just patch-refresh` exports pin..HEAD. Record per-patch status in
+   `mNEW.md`. Sync refuses to move a checkout carrying commits the series does not hold, so nothing
+   unexported is lost to the next sync.
 7. **UA / config.** Re-verify `config/app.json:user_agent` still yields full Leanback (S0.2). Push
    a config hotfix independently if only the UA moved (no rebuild needed).
 8. **Green the gates.** `just launcher test` → `just build dev` → `just smoke` (both presets) →
