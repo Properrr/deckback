@@ -9,12 +9,16 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <thread>
 #include <vector>
 
 #include "config.hpp"
+#include "fake_cdp_server.hpp"
 #include "harness.hpp"
+#include "onboarding.hpp"
+#include "osdmenu.hpp"
 #include "scripts.hpp"
 #include "util.hpp"
 
@@ -777,6 +781,144 @@ void test_shipped_app_json_keymap_is_current() {
 
 }  // namespace
 
+// ---- axis bookkeeping, press resolution, axis ranges
+// ---------------------------------------------
+
+void test_track_axes() {
+  AxisState s;
+  assert(track_axes(s, ABS_HAT0X, 1) == AxisEvent::Direction && s.hat_x == 1);
+  assert(track_axes(s, ABS_HAT0X, 0) == AxisEvent::Direction && s.hat_x == 0);
+  assert(track_axes(s, ABS_HAT0Y, -1) == AxisEvent::Direction && s.hat_y == -1);
+  // The left stick is quantized at the deadzone; the right stick stays raw.
+  assert(track_axes(s, ABS_X, 13000) == AxisEvent::Direction && s.stick_x == 0);
+  assert(track_axes(s, ABS_X, 13001) == AxisEvent::Direction && s.stick_x == 1);
+  assert(track_axes(s, ABS_Y, -32768) == AxisEvent::Direction && s.stick_y == -1);
+  assert(track_axes(s, ABS_RY, 20000) == AxisEvent::RightStick && s.rstick_y == 20000);
+  // A trigger reports its press edge once, with hysteresis, then plain Trigger until released.
+  assert(track_axes(s, ABS_Z, 191) == AxisEvent::Trigger && !s.lt);
+  assert(track_axes(s, ABS_Z, 192) == AxisEvent::LtPressed && s.lt);
+  assert(track_axes(s, ABS_Z, 255) == AxisEvent::Trigger && s.lt);
+  assert(track_axes(s, ABS_Z, 64) == AxisEvent::Trigger && !s.lt);  // released below 64...
+  assert(track_axes(s, ABS_Z, 200) == AxisEvent::LtPressed);        // ...so this is a new press
+  assert(track_axes(s, ABS_RZ, 255) == AxisEvent::RtPressed && s.rt);
+  assert(track_axes(s, ABS_MISC, 5) == AxisEvent::Ignored);
+}
+
+void test_normalize_axis() {
+  // Game Mode's virtual Xbox pad, and an unknown range, pass through bit-identical.
+  for (int v : {-32768, -13001, 0, 13001, 32767}) {
+    assert(normalize_axis(ABS_X, v, {-32768, 32767}) == v);
+    assert(normalize_axis(ABS_RY, v, {}) == v);
+  }
+  for (int v : {0, 64, 191, 192, 255}) assert(normalize_axis(ABS_Z, v, {0, 255}) == v);
+  assert(normalize_axis(ABS_HAT0X, -1, {-1, 1}) == -1);  // the hat is read by sign alone
+
+  // hid-steam (desktop mode, no Steam Input): triggers 0..32767. A light touch used to read as a
+  // full press (>= 192); it is now a light touch, and only a deep press crosses the threshold.
+  assert(normalize_axis(ABS_Z, 1000, {0, 32767}) < 64);
+  assert(normalize_axis(ABS_RZ, 32767, {0, 32767}) == 255);
+  assert(normalize_axis(ABS_RZ, 0, {0, 32767}) == 0);
+  // A 0..255 stick centred on 128 (common on generic pads): centre near 0, ends at the ends.
+  assert(std::abs(normalize_axis(ABS_X, 128, {0, 255})) < 300);
+  assert(normalize_axis(ABS_X, 0, {0, 255}) == -32768);
+  assert(normalize_axis(ABS_X, 255, {0, 255}) == 32767);
+  assert(normalize_axis(ABS_Y, 999, {0, 255}) == 32767);  // out of range is clamped
+}
+
+void test_resolve_press_respects_a_held_modifier_layer() {
+  KeymapConfig cfg;
+  cfg.base = {{"a", "select"}, {"select", "toggle_captions"}, {"y", "toggle_gestures"}};
+  cfg.lt_mod = {{"a", "MediaTrackNext"}};
+  const Keymaps maps = build_keymaps(cfg, nullptr);
+  const int view = control_code("select"), y = control_code("y"), a = control_code("a");
+
+  assert(resolve_press(maps, view, Layer::Browse, false, false, view, y).kind ==
+         Press::Kind::Captions);
+  assert(resolve_press(maps, y, Layer::Browse, false, false, view, y).kind ==
+         Press::Kind::Gestures);
+  const Press sel = resolve_press(maps, a, Layer::Browse, false, false, view, y);
+  assert(sel.kind == Press::Kind::Key && sel.key == "Enter");
+
+  // LT held, with an LT layer: it owns every button. View is not in it, so it is absorbed -- it
+  // used to toggle captions straight past the layer.
+  assert(resolve_press(maps, view, Layer::Browse, true, false, view, y).kind == Press::Kind::None);
+  assert(resolve_press(maps, y, Layer::Browse, true, false, view, y).kind == Press::Kind::None);
+  const Press next = resolve_press(maps, a, Layer::Browse, true, false, view, y);
+  assert(next.kind == Press::Kind::Key && next.key == "MediaTrackNext");
+  // RT has no layer, so it is not a modifier and View keeps its meaning.
+  assert(resolve_press(maps, view, Layer::Browse, false, true, view, y).kind ==
+         Press::Kind::Captions);
+}
+
+int count_containing(const std::vector<std::string>& reqs, const std::string& needle) {
+  int n = 0;
+  for (const std::string& r : reqs)
+    if (r.find(needle) != std::string::npos) ++n;
+  return n;
+}
+
+// OSD commands sent, by name. Matched on the escaped {"cmd": ...} parameter: the osd.js body rides
+// along in every frame and mentions every command name.
+int osd_cmds(const std::vector<std::string>& reqs, const std::string& cmd) {
+  return count_containing(reqs, "\\\"cmd\\\":\\\"" + cmd + "\\\"");
+}
+
+// The Exit hold belongs to a press the kernel may lose. A SYN_DROPPED (queue overflow while the
+// thread sat on CDP) can swallow the Y release, and the deadline must not then complete and quit.
+void test_exit_hold_is_cancelled_by_a_dropped_queue_and_by_release() {
+  testing::FakeServer srv;
+  OsdMenuConfig oc;
+  oc.cdp_port = srv.port();
+  oc.on_exit = [] {};
+  OsdMenuController osd(oc);
+  GamepadOptions go;
+  go.osd = &osd;
+  GamepadInput in("127.0.0.1", srv.port(), go);
+  assert(osd.open_menu());
+  srv.set_osd_cmd_reply("hold");  // A/Y on the Exit row arms the hold
+
+  const int y = control_code("y");
+  in.process_event(EV_KEY, y, 1);
+  assert(in.exit_hold_armed());
+  srv.take_requests();
+  in.process_event(EV_SYN, SYN_DROPPED, 0);
+  assert(!in.exit_hold_armed());
+  assert(osd_cmds(srv.take_requests(), "hold_cancel") == 1);
+
+  // Let go before the deadline: cancelled, and Y still reads as a tap.
+  in.process_event(EV_KEY, y, 1);
+  assert(in.exit_hold_armed());
+  srv.take_requests();
+  in.process_event(EV_KEY, y, 0);
+  assert(!in.exit_hold_armed());
+  const std::vector<std::string> reqs = srv.take_requests();
+  assert(osd_cmds(reqs, "hold_cancel") == 1 && osd_cmds(reqs, "ignore") == 1);
+}
+
+// The first-run card is modal and swallows the D-pad, but it must still see a release: a direction
+// let go under the card stayed "held" and came back as a phantom afterwards. Here the stale
+// D-pad-right outranked the stick, so pushing the stick left resolved to Right.
+void test_a_release_under_the_card_is_not_a_phantom_direction() {
+  testing::FakeServer srv;
+  const std::string marker = (deckback_test_tmpdir() / "input-card" / "first_run").string();
+  OnboardingController card("127.0.0.1", srv.port(), OverlayContext{}, marker);
+  GamepadOptions go;
+  go.onboarding = &card;
+  GamepadInput in("127.0.0.1", srv.port(), go);
+
+  in.process_event(EV_ABS, ABS_HAT0X, 1);  // D-pad right: dispatched
+  assert(card.show(/*first_run_only=*/false));
+  in.process_event(EV_ABS, ABS_HAT0X, 0);          // released under the card: swallowed
+  in.process_event(EV_KEY, control_code("a"), 1);  // dismisses the card
+  assert(!card.visible());
+  srv.take_requests();
+
+  in.process_event(EV_ABS, ABS_X, -20000);  // left stick, pushed left
+  const std::vector<std::string> reqs = srv.take_requests();
+  assert(count_containing(reqs, "\"key\":\"ArrowLeft\"") >= 1);
+  assert(count_containing(reqs, "\"key\":\"ArrowRight\"") == 0);
+}
+
 DECKBACK_TEST_MAIN(input) {
   test_binding_accepts_dom_keys_verbatim();
   test_binding_translates_semantic_actions();
@@ -835,6 +977,11 @@ DECKBACK_TEST_MAIN(input) {
   test_shipped_app_json_keymap_is_current();
 
   test_idle_without_a_gamepad_does_not_spin();
+  test_track_axes();
+  test_normalize_axis();
+  test_resolve_press_respects_a_held_modifier_layer();
+  test_exit_hold_is_cancelled_by_a_dropped_queue_and_by_release();
+  test_a_release_under_the_card_is_not_a_phantom_direction();
 
   std::puts("input_test: all assertions passed");
   return 0;

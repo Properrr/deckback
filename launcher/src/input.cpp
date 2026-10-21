@@ -34,8 +34,6 @@ constexpr uint16_t kExitRumbleWeak = 0x6000;
 constexpr uint16_t kExitRumbleMs = 220;
 constexpr long kRepeatMs = 130;    // base repeat interval
 constexpr long kMinRepeatMs = 55;  // fastest interval after acceleration
-constexpr int kStickDeadzone =
-    13000;  // |axis| beyond this counts as a direction (Xbox range ~32767)
 
 // How often to look for newly-attached pads while others are already open (hotplug).
 constexpr long kHotplugScanMs = 2000;
@@ -51,6 +49,23 @@ std::string device_name(int fd) {
   char name[256] = {};
   if (ioctl(fd, EVIOCGNAME(sizeof(name) - 1), name) < 0) return "?";
   return name;
+}
+
+// The analog axes whose range matters, in GamepadInput::ranges_ order. -1 = read by sign or unused.
+constexpr int kRangedAxes[] = {ABS_X, ABS_Y, ABS_RX, ABS_RY, ABS_Z, ABS_RZ};
+int axis_slot(int code) {
+  for (int i = 0; i < 6; ++i)
+    if (kRangedAxes[i] == code) return i;
+  return -1;
+}
+
+std::array<AxisRange, 6> axis_ranges(int fd) {
+  std::array<AxisRange, 6> out{};
+  for (int i = 0; i < 6; ++i) {
+    input_absinfo ai{};
+    if (ioctl(fd, EVIOCGABS(kRangedAxes[i]), &ai) == 0) out[i] = {ai.minimum, ai.maximum};
+  }
+  return out;
 }
 
 }  // namespace
@@ -182,6 +197,7 @@ void GamepadInput::close_devices() {
     if (fd >= 0) close(fd);
   fds_.clear();
   paths_.clear();
+  ranges_.clear();
 }
 
 void GamepadInput::discover_new_devices() {
@@ -197,9 +213,12 @@ void GamepadInput::discover_new_devices() {
     int fd = open(path.c_str(), O_RDONLY | O_NONBLOCK | O_CLOEXEC);
     if (fd < 0) continue;
     if (is_gamepad(fd)) {
-      info(std::format("input: gamepad {} ({})", path, device_name(fd)));
+      const std::array<AxisRange, 6> r = axis_ranges(fd);
+      info(std::format("input: gamepad {} ({}; stick {}..{}, trigger {}..{})", path,
+                       device_name(fd), r[0].min, r[0].max, r[4].min, r[4].max));
       fds_.push_back(fd);
       paths_.push_back(std::move(path));
+      ranges_.push_back(r);
     } else {
       close(fd);
     }
@@ -232,7 +251,7 @@ void GamepadInput::dispatch_key(const char* base_arrow) {
   }
   // Resolved per dispatch, not once per press: releasing a modifier or opening the player mid-hold
   // takes effect on the next repeat without the user re-pressing the stick.
-  const std::string key = resolve_direction_key(maps_, base_arrow, layer(), lt_down_, rt_down_);
+  const std::string key = resolve_direction_key(maps_, base_arrow, layer(), axes_.lt, axes_.rt);
   if (key.empty()) return;  // absorbed by a held modifier layer that does not bind this direction
   client_.dispatch_key(key);
 }
@@ -258,9 +277,7 @@ void GamepadInput::dispatch_direction() {
 // Forget every held control, for when a release cannot be trusted to arrive: the pad went away, or
 // the kernel dropped queued events. A still-held control resumes on its next press.
 void GamepadInput::drop_held_state() {
-  hat_x_ = hat_y_ = stick_x_ = stick_y_ = 0;
-  rstick_x_ = rstick_y_ = 0;
-  lt_down_ = rt_down_ = false;
+  axes_ = AxisState{};
   if (exit_hold_deadline_ != 0) {  // a lost Y release must not complete the hold and exit
     exit_hold_deadline_ = 0;
     if (osd_ && osd_->open()) osd_->exec("hold_cancel");
@@ -290,7 +307,7 @@ void GamepadInput::update_fast_scroll() {
   // blocked here: while it is open the right stick scrolls the menu (dispatch_scroll routes it).
   const bool blocked = dir_key_ || (onboarding_ && onboarding_->visible());
   const FastScrollTick t =
-      blocked ? FastScrollTick{nullptr, 0} : fast_scroll(rstick_x_, rstick_y_, fast_cfg_);
+      blocked ? FastScrollTick{nullptr, 0} : fast_scroll(axes_.rstick_x, axes_.rstick_y, fast_cfg_);
   if (t.key == fast_key_) return;  // pointer identity: same direction, only the rate moved
   fast_key_ = t.key;
   if (!fast_key_) return;
@@ -411,40 +428,20 @@ void GamepadInput::osd_event(int type, int code, int value) {
     return;  // swallow every button while the menu is up
   }
   if (type != EV_ABS) return;
-  switch (code) {
-    case ABS_HAT0X:
-      hat_x_ = (value < 0) ? -1 : (value > 0 ? 1 : 0);
-      break;
-    case ABS_HAT0Y:
-      hat_y_ = (value < 0) ? -1 : (value > 0 ? 1 : 0);
-      break;
-    case ABS_X:
-      stick_x_ = (value < -kStickDeadzone) ? -1 : (value > kStickDeadzone ? 1 : 0);
-      break;
-    case ABS_Y:
-      stick_y_ = (value < -kStickDeadzone) ? -1 : (value > kStickDeadzone ? 1 : 0);
-      break;
-    case ABS_RX:
-      rstick_x_ = value;
+  // Triggers only update their latch here: a seek must not fire under the modal menu, but a release
+  // it swallowed would leave the next press dead or a modifier layer stuck.
+  switch (track_axes(axes_, code, value)) {
+    case AxisEvent::Direction:
+      // dispatch_key / dispatch_scroll are OSD-aware, so this drives menu focus + scroll with the
+      // same auto-repeat machinery Leanback navigation uses.
+      set_direction(resolve_direction(axes_.hat_x, axes_.hat_y, axes_.stick_x, axes_.stick_y));
+      return;
+    case AxisEvent::RightStick:
       update_fast_scroll();
-      return;
-    case ABS_RY:
-      rstick_y_ = value;
-      update_fast_scroll();
-      return;
-    case ABS_Z:
-      // Keep the physical trigger latch honest without firing a seek under the modal menu.
-      lt_down_ = trigger_pressed(value, lt_down_);
-      return;
-    case ABS_RZ:
-      rt_down_ = trigger_pressed(value, rt_down_);
       return;
     default:
-      return;  // triggers etc. do nothing while the menu is open
+      return;
   }
-  // dispatch_key / dispatch_scroll are OSD-aware, so this drives menu focus + scroll with the same
-  // auto-repeat machinery Leanback navigation uses.
-  set_direction(resolve_direction(hat_x_, hat_y_, stick_x_, stick_y_));
 }
 
 bool GamepadInput::osd_open_edge(int type, int code, int value) {
@@ -461,11 +458,13 @@ bool GamepadInput::osd_open_edge(int type, int code, int value) {
   return false;
 }
 
-bool GamepadInput::handle_onboarding(int type, int /*code*/, int value) {
+bool GamepadInput::handle_onboarding(int type, int code, int value) {
   if (!onboarding_ || !onboarding_->visible()) return false;
   // Modal first-run card: any button press dismisses it; sticks/D-pad are swallowed (a resting
-  // thumb must not dismiss it, and the D-pad must not move focus behind it).
+  // thumb must not dismiss it, and the D-pad must not move focus behind it). Axes are still
+  // tracked, so a direction released under the card is not still "held" once it goes.
   if (type == EV_KEY && value == 1) onboarding_->hide();
+  if (type == EV_ABS) track_axes(axes_, code, value);
   return true;
 }
 
@@ -478,78 +477,66 @@ void GamepadInput::handle_event(int type, int code, int value) {
   if (osd_open_edge(type, code, value)) return;
   if (type == EV_KEY) {
     if (value != 1) return;  // press edge only (ignore release=0 and kernel autorepeat=2)
-    if (code == captions_code_ && captions_code_ >= 0) {
-      toggle_captions();
-      return;
+    const Press p =
+        resolve_press(maps_, code, layer(), axes_.lt, axes_.rt, captions_code_, gestures_code_);
+    switch (p.kind) {
+      case Press::Kind::Captions:
+        toggle_captions();
+        return;
+      case Press::Kind::Gestures:
+        toggle_gestures();
+        return;
+      case Press::Kind::Key:
+        info(std::format("input: btn {} -> {} [{}]", code, p.key, layer_name(layer())));
+        client_.dispatch_key(p.key);
+        return;
+      case Press::Kind::None:
+        return;  // unbound, or absorbed by a held modifier layer
     }
-    if (code == gestures_code_ && gestures_code_ >= 0) {
-      toggle_gestures();
-      return;
-    }
-    const std::string key = resolve_button(maps_, code, layer(), lt_down_, rt_down_);
-    if (key.empty()) return;  // unbound, or absorbed by a held modifier layer
-    info(std::format("input: btn {} -> {} [{}]", code, key, layer_name(layer())));
-    client_.dispatch_key(key);
     return;
   }
   if (type != EV_ABS) return;
-  switch (code) {
-    case ABS_HAT0X:
-      hat_x_ = (value < 0) ? -1 : (value > 0 ? 1 : 0);
-      break;
-    case ABS_HAT0Y:
-      hat_y_ = (value < 0) ? -1 : (value > 0 ? 1 : 0);
-      break;
-    case ABS_X:
-      stick_x_ = (value < -kStickDeadzone) ? -1 : (value > kStickDeadzone ? 1 : 0);
-      break;
-    case ABS_Y:
-      stick_y_ = (value < -kStickDeadzone) ? -1 : (value > kStickDeadzone ? 1 : 0);
-      break;
-    // Right stick: kept raw. The deflection is the repeat rate (input-ux §7).
-    case ABS_RX:
-      rstick_x_ = value;
+  // Analog triggers: when a modifier layer is configured the trigger dispatches nothing itself —
+  // holding it only changes what the *other* controls mean (lt_key_/rt_key_ stay empty in that
+  // case, so the press-edge dispatch below is naturally skipped).
+  switch (track_axes(axes_, code, value)) {
+    case AxisEvent::Direction:
+      set_direction(resolve_direction(axes_.hat_x, axes_.hat_y, axes_.stick_x, axes_.stick_y));
+      return;
+    case AxisEvent::RightStick:
       update_fast_scroll();
       return;
-    case ABS_RY:
-      rstick_y_ = value;
-      update_fast_scroll();
-      return;
-    // Analog triggers. When a modifier layer is configured the trigger dispatches nothing itself —
-    // holding it only changes what the *other* controls mean (lt_key_/rt_key_ stay empty in that
-    // case, so the press-edge dispatch below is naturally skipped).
-    case ABS_Z: {
-      const bool now = trigger_pressed(value, lt_down_);
-      if (now && !lt_down_) {
-        if (!lt_skip_js_.empty()) {
-          info("input: lt -> skip");
-          client_.eval_void(lt_skip_js_);
-        } else if (!lt_key_.empty()) {
-          info(std::format("input: lt -> {}", lt_key_));
-          client_.dispatch_key(lt_key_);
-        }
+    case AxisEvent::LtPressed:
+      if (!lt_skip_js_.empty()) {
+        info("input: lt -> skip");
+        client_.eval_void(lt_skip_js_);
+      } else if (!lt_key_.empty()) {
+        info(std::format("input: lt -> {}", lt_key_));
+        client_.dispatch_key(lt_key_);
       }
-      lt_down_ = now;
       return;
-    }
-    case ABS_RZ: {
-      const bool now = trigger_pressed(value, rt_down_);
-      if (now && !rt_down_) {
-        if (!rt_skip_js_.empty()) {
-          info("input: rt -> skip");
-          client_.eval_void(rt_skip_js_);
-        } else if (!rt_key_.empty()) {
-          info(std::format("input: rt -> {}", rt_key_));
-          client_.dispatch_key(rt_key_);
-        }
+    case AxisEvent::RtPressed:
+      if (!rt_skip_js_.empty()) {
+        info("input: rt -> skip");
+        client_.eval_void(rt_skip_js_);
+      } else if (!rt_key_.empty()) {
+        info(std::format("input: rt -> {}", rt_key_));
+        client_.dispatch_key(rt_key_);
       }
-      rt_down_ = now;
       return;
-    }
-    default:
+    case AxisEvent::Trigger:
+    case AxisEvent::Ignored:
       return;
   }
-  set_direction(resolve_direction(hat_x_, hat_y_, stick_x_, stick_y_));
+}
+
+void GamepadInput::process_event(int type, int code, int value) {
+  // The kernel overflowed this device's queue (the thread was blocked on CDP) and discarded events,
+  // releases included: nothing held can be trusted until it is pressed again.
+  if (type == EV_SYN && code == SYN_DROPPED)
+    drop_held_state();
+  else
+    handle_event(type, code, value);
 }
 
 void GamepadInput::loop() {
@@ -594,12 +581,11 @@ void GamepadInput::loop() {
       }
       const size_t count = static_cast<size_t>(r) / sizeof(input_event);
       for (size_t k = 0; k < count; ++k) {
-        // The kernel overflowed this device's queue (the thread was blocked on CDP) and discarded
-        // events, releases included: nothing held can be trusted until it is pressed again.
-        if (evs[k].type == EV_SYN && evs[k].code == SYN_DROPPED)
-          drop_held_state();
-        else
-          handle_event(evs[k].type, evs[k].code, evs[k].value);
+        int value = evs[k].value;
+        if (evs[k].type == EV_ABS)
+          if (const int slot = axis_slot(evs[k].code); slot >= 0)
+            value = normalize_axis(evs[k].code, value, ranges_[i][slot]);
+        process_event(evs[k].type, evs[k].code, value);
       }
     }
 
@@ -644,7 +630,7 @@ void GamepadInput::loop() {
     // Right-stick repeat. The interval is re-read from the *current* deflection every step, so
     // easing off the stick slows the scroll on the next arrow rather than at the next event.
     if (fast_key_ && mono_ms() >= fast_next_ms_) {
-      const FastScrollTick t = fast_scroll(rstick_x_, rstick_y_, fast_cfg_);
+      const FastScrollTick t = fast_scroll(axes_.rstick_x, axes_.rstick_y, fast_cfg_);
       if (t.key != fast_key_) {
         update_fast_scroll();  // the stick crossed into another direction between polls
       } else {

@@ -1,4 +1,5 @@
 #pragma once
+#include <array>
 #include <string>
 #include <vector>
 
@@ -60,6 +61,13 @@ class GamepadInput {
   void start();  // launch the input thread
   void stop();   // signal + join (idempotent; also called by the destructor)
 
+  // One evdev event exactly as the input thread handles it, SYN_DROPPED included, with any EV_ABS
+  // value already normalized (normalize_axis). The input thread is the only production caller;
+  // tests drive the state machine through here, since there is no device to read.
+  void process_event(int type, int code, int value);
+  // A hold on the OSD's Exit row is under way (its deadline is armed).
+  bool exit_hold_armed() const { return exit_hold_deadline_ != 0; }
+
  private:
   void loop();
   void rescan_devices();  // close everything and (re)open gamepad evdev fds
@@ -101,6 +109,9 @@ class GamepadInput {
   DevToolsClient client_;
   std::vector<int> fds_;
   std::vector<std::string> paths_;  // parallel to fds_; lets discover_new_devices() skip open nodes
+  // Parallel to fds_: each pad's reported ranges for the six analog axes (EVIOCGABS), in
+  // axis_slot() order, so every value reaches the thresholds in the Xbox range.
+  std::vector<std::array<AxisRange, 6>> ranges_;
 
   void ensure_haptic();  // lazy-attach on first pulse; no pad exists at construction
   // Rumble needs its own O_RDWR fd on the pad; the input fds are O_RDONLY. Attached lazily on the
@@ -118,7 +129,6 @@ class GamepadInput {
   // chapter_seek.js for chapter-boundary navigation. Non-empty takes precedence over
   // lt_key_/rt_key_ on the press edge.
   std::string lt_skip_js_, rt_skip_js_;
-  bool lt_down_ = false, rt_down_ = false;
 
   // Caption toggle (View). The bound control is intercepted by its evdev code (<0 = unbound); the
   // launcher renders toggle_captions.js from the live CaptionSettings and evaluates it over CDP,
@@ -163,17 +173,13 @@ class GamepadInput {
   const char* dir_key_ = nullptr;  // currently-held base arrow, or nullptr
   long next_repeat_ms_ = 0;
   int repeat_count_ = 0;
-  // Axis state feeding the resolved direction.
-  int hat_x_ = 0, hat_y_ = 0;      // D-pad (-1/0/1)
-  int stick_x_ = 0, stick_y_ = 0;  // left stick, quantized to -1/0/1 via deadzone
+  // Every axis and trigger latch (keymap.hpp AxisState). The right stick is kept RAW in it: its
+  // deflection is the fast-scroll rate (input-ux §7), suppressed while the D-pad/left stick hold a
+  // direction so one physical intent never emits two key streams.
+  AxisState axes_;
 
-  // Right stick: fast list traversal (input-ux §7). Kept RAW, unlike the left stick — the
-  // deflection *is* the repeat rate, so quantizing it to -1/0/1 would throw away the whole feature.
-  // Suppressed while the D-pad/left stick hold a direction, so one physical intent never emits two
-  // key streams.
   FastScrollConfig fast_cfg_;
-  int rstick_x_ = 0, rstick_y_ = 0;  // raw axis values
-  const char* fast_key_ = nullptr;   // currently-scrolling base arrow, or nullptr
+  const char* fast_key_ = nullptr;  // currently-scrolling base arrow, or nullptr
   long fast_next_ms_ = 0;
 
   WorkerThread worker_;

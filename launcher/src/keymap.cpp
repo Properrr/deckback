@@ -188,6 +188,70 @@ bool trigger_pressed(int value, bool was_pressed) {
   return value >= kTriggerPress;
 }
 
+namespace {
+constexpr int kStickDeadzone = 13000;  // |axis| beyond this counts as a direction (Xbox range)
+
+int quantize(int value) { return value < -kStickDeadzone ? -1 : (value > kStickDeadzone ? 1 : 0); }
+int sign(int value) { return value < 0 ? -1 : (value > 0 ? 1 : 0); }
+}  // namespace
+
+AxisEvent track_axes(AxisState& s, int code, int value) {
+  switch (code) {
+    case ABS_HAT0X:
+      s.hat_x = sign(value);
+      return AxisEvent::Direction;
+    case ABS_HAT0Y:
+      s.hat_y = sign(value);
+      return AxisEvent::Direction;
+    case ABS_X:
+      s.stick_x = quantize(value);
+      return AxisEvent::Direction;
+    case ABS_Y:
+      s.stick_y = quantize(value);
+      return AxisEvent::Direction;
+    case ABS_RX:
+      s.rstick_x = value;
+      return AxisEvent::RightStick;
+    case ABS_RY:
+      s.rstick_y = value;
+      return AxisEvent::RightStick;
+    case ABS_Z:
+    case ABS_RZ: {
+      bool& latch = code == ABS_Z ? s.lt : s.rt;
+      const bool now = trigger_pressed(value, latch);
+      const bool edge = now && !latch;
+      latch = now;
+      if (!edge) return AxisEvent::Trigger;
+      return code == ABS_Z ? AxisEvent::LtPressed : AxisEvent::RtPressed;
+    }
+    default:
+      return AxisEvent::Ignored;
+  }
+}
+
+int normalize_axis(int code, int value, AxisRange r) {
+  long lo, hi;
+  switch (code) {
+    case ABS_X:
+    case ABS_Y:
+    case ABS_RX:
+    case ABS_RY:
+      lo = -32768;
+      hi = 32767;
+      break;
+    case ABS_Z:
+    case ABS_RZ:
+      lo = 0;
+      hi = 255;
+      break;
+    default:
+      return value;  // the hat is read by sign alone
+  }
+  if (r.max <= r.min || (r.min == lo && r.max == hi)) return value;
+  const long v = value < r.min ? r.min : (value > r.max ? r.max : value);
+  return static_cast<int>(lo + (v - r.min) * (hi - lo) / (static_cast<long>(r.max) - r.min));
+}
+
 int skip_action_sign(std::string_view value) {
   if (value == "skip_fwd" || value == "skip_forward") return 1;
   if (value == "skip_back" || value == "skip_backward") return -1;
@@ -329,6 +393,17 @@ std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arr
   }
   std::string k = find_direction(maps.base, base_arrow);
   return k.empty() ? std::string(base_arrow) : k;  // unbound: a D-pad press is just its arrow
+}
+
+Press resolve_press(const Keymaps& maps, int code, Layer layer, bool lt_held, bool rt_held,
+                    int captions_code, int gestures_code) {
+  if (!active_modifier(maps, lt_held, rt_held)) {
+    if (code == captions_code && captions_code >= 0) return {Press::Kind::Captions, {}};
+    if (code == gestures_code && gestures_code >= 0) return {Press::Kind::Gestures, {}};
+  }
+  std::string key = resolve_button(maps, code, layer, lt_held, rt_held);
+  if (key.empty()) return {};
+  return {Press::Kind::Key, std::move(key)};
 }
 
 int find_control_for(const std::vector<std::pair<std::string, std::string>>& keymap,

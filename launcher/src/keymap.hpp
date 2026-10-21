@@ -66,6 +66,39 @@ std::vector<ButtonBinding> build_button_map(
 // chatter. Xbox-pad triggers report 0..255. Press at >=192, release only below 64.
 bool trigger_pressed(int value, bool was_pressed);
 
+// ---- evdev axis bookkeeping ---------------------------------------------------------------------
+
+// Every axis the input layer reads, in its digital form: the D-pad and left stick quantized to
+// -1/0/1, the right stick raw (its deflection is the scroll rate, input-ux §7), and the two trigger
+// latches. One copy for every input path, so a modal surface (the OSD, the first-run card) keeps it
+// honest by tracking releases without acting on them. The card used to swallow axis events whole,
+// so a D-pad released under it stayed "held" and came back as a phantom direction afterwards.
+struct AxisState {
+  int hat_x = 0, hat_y = 0;
+  int stick_x = 0, stick_y = 0;
+  int rstick_x = 0, rstick_y = 0;
+  bool lt = false, rt = false;
+};
+
+// What one EV_ABS event changed. A trigger reports its press edge separately, because that edge is
+// the only moment a trigger binding fires.
+enum class AxisEvent { Ignored, Direction, RightStick, Trigger, LtPressed, RtPressed };
+
+// Apply one EV_ABS event (value already in the Xbox range, see normalize_axis) to `s`.
+AxisEvent track_axes(AxisState& s, int code, int value);
+
+// The range one device reports for one axis (EVIOCGABS). max <= min means unknown.
+struct AxisRange {
+  int min = 0;
+  int max = 0;
+};
+
+// Map a raw axis value from its device's range into the Xbox 360 pad's, which every threshold here
+// was written for: sticks -32768..32767, triggers 0..255. Steam Input's virtual pad (Game Mode)
+// already reports exactly that and passes through unchanged, as does an unknown range. Other pads
+// do not: hid-steam's triggers report 0..32767, so a feather touch read as a full press.
+int normalize_axis(int code, int value, AxisRange range);
+
 // ---- trigger seek (findings input-ux §18) -------------------------------------------------------
 
 // A skip binding performs a fixed-interval jump through the Leanback player over CDP, NOT a DOM
@@ -163,6 +196,16 @@ std::string resolve_button(const Keymaps& maps, int code, Layer layer, bool lt_h
 // to `base_arrow` itself when nothing rebinds it — a plain D-pad press stays a plain arrow key.
 std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arrow, Layer layer,
                                   bool lt_held, bool rt_held);
+
+// What a button press does. The launcher actions (captions, the touch-gesture toggle) are taken by
+// evdev code, but only when no modifier layer is held: a held LT/RT layer owns every button,
+// binding or absorbing it (resolve_button), and LT+View used to toggle captions straight past it.
+struct Press {
+  enum class Kind { None, Key, Captions, Gestures } kind = Kind::None;
+  std::string key;  // for Key
+};
+Press resolve_press(const Keymaps& maps, int code, Layer layer, bool lt_held, bool rt_held,
+                    int captions_code, int gestures_code);
 
 // The evdev EV_KEY code of the control bound to `action`, or -1 when nothing is. `voice_search` has
 // no DOM key by design and is intercepted by the launcher. `show_controls` remains supported here
