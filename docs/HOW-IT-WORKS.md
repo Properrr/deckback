@@ -110,8 +110,11 @@ Two facts about the stock `content_shell` shaped the design, both discovered on-
 **`launcher/src/devtools.cpp`** is the keystone: a **dependency-free CDP client** — raw sockets
 plus a hand-rolled RFC 6455 WebSocket — that discovers the page target and runs `Runtime.evaluate`,
 `Page.navigate`, `Input.dispatch*`, `Network.setUserAgentOverride`, and friends. It re-arms sticky
-state (UA override, injected scripts) across Leanback's periodic target teardown, and supports
-several concurrent CDP clients (the Navigator and the PlayerController each hold their own).
+state (UA override, injected scripts) across Leanback's periodic target teardown, and holds every
+other caller back until that re-arm finishes, so no navigation reaches a fresh target without the TV
+UA. Every handle (the Navigator, the PlayerController, the input layer, …) shares one WebSocket. It
+never sends `Network.enable`: the UA override does not need it, and it would stream an event for
+every media segment.
 
 ---
 
@@ -204,11 +207,13 @@ requires a Mesa/ANGLE-layer fix and is gated on a **pixel** check, never a decod
 is VISUALLY CORRUPT".
 
 ### Sleep / resume + idle-inhibit ✅ Verified (core) / 🟡 (two clauses)
-`platform.cpp` talks to **logind over sd-bus**. On `PrepareForSleep` it holds a delay inhibitor
-while `player.cpp` pauses the `<video>` and logs its position; on resume it waits for the network
-via `netprobe.cpp` (non-blocking TCP-connect with exponential backoff to `youtube.com:443`), then
-nudges playback, reloading only if the sleep exceeded `resume_reload_after_ms` (0 = never, the
-default). While a video plays it holds a logind **block inhibitor** so the screen doesn't dim,
+`platform.cpp` talks to **logind over sd-bus**, and reconnects with backoff if the system bus drops
+(`busloop.cpp`, shared with the updater). On `PrepareForSleep` it holds a delay inhibitor while
+`player.cpp` pauses the `<video>` and logs its position. On resume the player's own thread, not the
+bus thread, waits for the network via `netprobe.cpp` (non-blocking TCP-connect with exponential
+backoff to `youtube.com:443`), then nudges playback, reloading only if the sleep exceeded
+`resume_reload_after_ms` (0 = never, the default). A suspend that arrives during that wait cancels
+the nudge. While a video plays it holds a logind **block inhibitor** so the screen doesn't dim,
 driven by a real play-state poll. *Verified 2026-07-10:* `just soak` ran 10 `rtcwake` suspend/resume
 cycles and on **every** resume the app was alive with `currentTime` advanced. 🟡 The "audio
 restored" and "no screen dim" clauses are not yet separately gated.

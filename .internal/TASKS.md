@@ -963,42 +963,54 @@ before the grab test passes: it is built entirely on the assumption that grabbin
 (all L0-tested, TSan-clean, CI-replayed; none run on a Deck). These were found but deliberately not
 changed, because each touches an on-Deck-verified path or needs a seam first:
 
-- [ ] **Input state-machine test seam.** Extract `track_axes(code, value)`: the HAT/stick/trigger
+- [x] **Input state-machine test seam.** *(L0, 2026-10-21, `b90650f`: `track_axes`/`AxisState`,
+      `resolve_press`, `GamepadInput::process_event`; the card tracks releases; exit-hold and
+      SYN_DROPPED tests; re-verify on-Deck, TEST-PLAN §2.B.)* Extract `track_axes(code, value)`: the HAT/stick/trigger
       bookkeeping duplicated between the normal and OSD paths. Then the first-run card can let axis
       releases through: it currently swallows them, so a D-pad held across the card resolves to a
       stale direction afterwards. The same seam makes the exit-hold and SYN_DROPPED fixes
       unit-testable; today `handle_event` is private.
-- [ ] **Resume hook on the logind bus thread.** `player->on_resume()` → `wait_online()` blocks the
+- [x] **Resume hook on the logind bus thread.** *(L0, 2026-10-21, `2483f8c`: `request_resume`
+      hands it to the poll thread; a suspend during the wait cancels the nudge; `stop()` no longer
+      waits out the probe. Re-run `just soak`.)* `player->on_resume()` → `wait_online()` blocks the
       platform loop for up to `resume_online_timeout_ms` (8 s) inside `PrepareForSleep(false)`. A
       quick re-suspend in that window would sleep without the pause/checkpoint [PLAUSIBLE]. Hand the
       callbacks to the player's worker. P6 soak passed on-Deck, so re-run `just soak` after.
-- [ ] **Platform bus has no reconnect.** After a system-bus drop it warns once a second forever, with
+- [x] **Platform bus has no reconnect.** *(L1, 2026-10-21, `6bbc0e8`: `busloop.{hpp,cpp}` shared
+      with the updater; `platform_test` drops and restores a private dbus-daemon and sees
+      PrepareForSleep again; `just sim reconnect` still green for the updater.)* After a system-bus drop it warns once a second forever, with
       power integration dead. Give it the updater's reconnect via one shared sd-bus loop helper:
       wake pipe, nudge, drain, timeout and pump are duplicated ~50 lines between `platform.cpp` and
       `updater.cpp`.
-- [ ] **CDP re-arm race.** The UA/scripts/grant are re-armed *after* the new session is published,
+- [x] **CDP re-arm race.** *(L0, 2026-10-21, `0cb7b22`: `armed_` gate + arming-thread pass-through,
+      which also removed a self-deadlock when the socket died mid-arm.)* The UA/scripts/grant are re-armed *after* the new session is published,
       so another thread's `Page.navigate` can beat `setUserAgentOverride` (an extra desktop-redirect
       cycle). Gate callers until the re-arm finishes.
-- [ ] **`Network.enable` cost during playback** [PLAUSIBLE]. It is sent only for the UA override, and
+- [x] **`Network.enable` cost during playback** [PLAUSIBLE]. *(Dropped 2026-10-21, `0cb7b22`, after
+      checking on the shipped M138 `content_shell` that the override applies without it; `Page.enable`
+      is once per connection. The watt figure is still unmeasured: `just power` on-Deck.)* It is sent only for the UA override, and
       enables network events for every MSE segment. Measure it against the 9 W gate (`just power`);
       drop it if `setUserAgentOverride` works without it. `Page.enable` is likewise re-sent before
       every navigate; once per session suffices.
-- [ ] **OSD `exec()` timeout reads as "gone"** and releases capture while the menu is still painted.
+- [x] **OSD `exec()` timeout reads as "gone"** *(L0, 2026-10-21, `0cb7b22`: `Kind::Unreachable`.)* and releases capture while the menu is still painted.
       Return a distinct verdict on `nullopt` and let the reconcile tick decide, as `reconcile_open`
       already does.
-- [ ] **CDM install is not atomic.** `cdm_fetcher` keeps a private `write_file` that checks `good()`
+- [x] **CDM install is not atomic.** *(L0, 2026-10-21, `0cb7b22`: `write_file_atomic`, startup
+      re-hash, a failed re-fetch keeps the old file.)* `cdm_fetcher` keeps a private `write_file` that checks `good()`
       before close, writes in place, and never re-hashes an existing file. A truncated `.so` reads as
       installed forever. Use `fileio` + `.part` + rename, and re-verify `cdm_sha256` at startup.
-- [ ] Small:
+- [x] Small *(all L0, 2026-10-21)*:
       - `gestures_action` accepts `"touch_gestures"`, but the lookup only checks two other names: a
-        silently dead binding.
-      - LT+View toggles captions past the LT layer.
-      - Axis ranges assume the Xbox virtual pad; there is no `EVIOCGABS`.
-      - Tests use fixed `/tmp` names and are flaky under concurrent runs; add a `mkdtemp` helper.
-      - Two JSON string escapers exist (`util.hpp`/`json.cpp`).
-      - `netprobe` duplicates `connect_tcp`/`mono_ms`.
+        silently dead binding. → `find_control_for(keymap, predicate)`.
+      - LT+View toggles captions past the LT layer. → `resolve_press`.
+      - Axis ranges assume the Xbox virtual pad; there is no `EVIOCGABS`. → `normalize_axis`.
+      - Tests use fixed `/tmp` names and are flaky under concurrent runs; add a `mkdtemp` helper. →
+        `deckback_test_tmpdir()` in `tests/harness.hpp`.
+      - Two JSON string escapers exist (`util.hpp`/`json.cpp`). → one, which also escapes control
+        characters (the CDP copy did not).
+      - `netprobe` duplicates `connect_tcp`/`mono_ms`. → `connect_tcp` lives in netprobe.
       - `kOverlayable` and `ConfigStore::apply` should come from one table; `touch_hide_cursor` was
-        exactly that drift.
+        exactly that drift. → one `OverlayKey` table.
 
 ## Phase 10 — Flathub submission & maintenance  (3–4 ED + ongoing)
 

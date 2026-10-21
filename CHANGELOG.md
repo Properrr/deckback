@@ -34,6 +34,20 @@ minor versions may include breaking changes.
 - If the launcher was killed, the engine kept running and blocked the next launch.
 - A rare crash when the connection to the engine was re-established from two places at once, and a
   page that took more than a few seconds to load being restarted over and over.
+- When the engine was slow to answer while the settings menu was open, the menu stayed on screen
+  but your buttons went to YouTube behind it.
+- A D-pad direction let go while the first-run controls card was up came back as a phantom move once
+  the card closed.
+- Waking from sleep no longer holds up other system events while Deckback waits for the network,
+  and quitting during that wait is no longer delayed by up to 8 seconds.
+- If the system's message bus restarted, sleep handling and keep-awake stopped working until the
+  next launch; Deckback now reconnects.
+- A Widevine CDM cut short by a crash or a full disk was treated as installed forever; it is now
+  re-checked at launch and fetched again.
+- `"touch_gestures"` in the keymap now binds the gesture toggle, like its two other names.
+- In Desktop Mode without Steam Input, a light touch on a trigger no longer counts as a full press.
+- Less engine chatter during playback: Deckback no longer turns on network event reporting, which it
+  never used.
 
 ## [0.0.9] - 2026-07-31
 

@@ -2,6 +2,24 @@
 
 ## Status: IMPLEMENTED (2026-07-15) — L0 unit-tested (backoff/give-up), `just preflight` green, two independent reviews (design + implementation) incorporated. **On-Deck integration drive PENDING** (Deck was asleep): rebuild + `just deck-install-dev`, run the app, then `systemctl --user restart flatpak-portal` (case B) and a bus drop (case A) while watching `journalctl --user` for `flatpak-portal restarted — re-creating the update monitor` / `reconnected to the Flatpak portal`.
 
+## ★ 2026-10-21: the platform (logind, system bus) loop reconnects too
+
+`launcher/src/busloop.{hpp,cpp}` now holds the backoff policy (`reconnect_delay_ms`,
+`reconnect_should_give_up`, `kReconnectStableMs`), the wake pipe and the pump/wait primitives, and
+both loops use them. The updater's case A/B loop body is unchanged. The platform loop previously
+had no reconnect: after a system-bus drop it warned once a second forever with power integration
+dead. It now reconnects with the same policy, re-subscribes `PrepareForSleep`, and re-takes only an
+inhibitor lock that is not held (the lock fds are logind FIFOs that outlive the bus connection).
+
+- **L1, off-device:** `launcher/tests/platform_test.cpp` stands up a private `dbus-daemon` as the
+  system bus, kills and restarts it under the live connection, and asserts a second
+  `PrepareForSleep` arrives. The daemon's policy must spell out `allow user="*"`,
+  `send_destination="*"`, `receive_sender="*"` and `own="*"`: with any one missing, it accepts the
+  socket and then drops the client at Hello (sd-bus then reports `ENOTCONN` on the first call).
+- `just sim reconnect` (the updater's drive) is green on the shared code.
+- **On-Deck:** there is no safe way to drop the system bus (restarting dbus or logind ends the Game
+  Mode session), so only "suspend still works" (`just soak`) is checkable there.
+
 ## Review incorporated (2026-07-15)
 
 An independent review found two real hang/flake risks and one API bug; the design below is the
