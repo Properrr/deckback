@@ -60,3 +60,44 @@ added_permissions() {
   LC_ALL=C comm -13 <(printf '%s\n' "$1" | LC_ALL=C sort -u) \
     <(printf '%s\n' "$2" | LC_ALL=C sort -u) | grep -v '^$' || true
 }
+
+# metadata_permissions <metadata-text> — the same comparison input, read from a BUILT commit's
+# `metadata` keyfile instead of the manifest: one token per granted permission, sorted, so
+# added_permissions works on it unchanged. publish-repo.sh uses it to compare the bundle about to be
+# published with the commit users actually have (the live repo's head), which also catches a bundle
+# built from the wrong tree — the tag-based gate above only ever sees manifests.
+#   [Context]              key=a;b;     -> context:key=a  context:key=b   (unset-environment skipped)
+#   [Session Bus Policy]   name=talk    -> session-bus:name=talk
+#   [System Bus Policy]    name=talk    -> system-bus:name=talk
+#   [Policy subsystem]     key=a;b;     -> policy:subsystem.key=a ...
+# [Application], [Environment] and extension sections carry no permission and are ignored. Like
+# permission_args this over-reports (a talk -> own -> talk round trip reads as an add); a false
+# alarm costs a look, an omission costs every installed user their updates.
+metadata_permissions() {
+  printf '%s\n' "$1" | awk '
+    { sub(/\r$/, "") }
+    /^\[/ { sec = $0; next }
+    /^[[:space:]]*(#|$)/ { next }
+    {
+      eq = index($0, "=")
+      if (!eq) next
+      key = substr($0, 1, eq - 1)
+      val = substr($0, eq + 1)
+      if (sec == "[Context]") {
+        if (key == "unset-environment") next
+        prefix = "context:" key "="
+      } else if (sec == "[Session Bus Policy]") {
+        print "session-bus:" key "=" val
+        next
+      } else if (sec == "[System Bus Policy]") {
+        print "system-bus:" key "=" val
+        next
+      } else if (sec ~ /^\[Policy [^]]+\]$/) {
+        prefix = "policy:" substr(sec, 9, length(sec) - 9) "." key "="
+      } else {
+        next
+      }
+      n = split(val, parts, ";")
+      for (i = 1; i <= n; i++) if (parts[i] != "") print prefix parts[i]
+    }' | LC_ALL=C sort -u
+}

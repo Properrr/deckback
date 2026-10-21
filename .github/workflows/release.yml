@@ -9,8 +9,12 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Release tag to publish (e.g. v0.0.1)
+        description: Release tag to publish (e.g. v0.0.1). An OLDER tag is a recall (RELEASING.md).
         required: true
+      fresh_history:
+        description: Start a new repo history instead of continuing the live one (key rotation, disaster recovery). Existing users lose the delta for one update.
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -59,9 +63,13 @@ jobs:
           keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
           echo "keyid=$keyid" >> "$GITHUB_OUTPUT"
 
+      # Continues the live repo's history (parent = what users run, from-parent delta, the previous
+      # releases kept) and refuses a bundle that adds a sandbox permission against the live head.
+      # A live repo it cannot reach fails the job rather than silently starting over.
       - name: Build repo + stage site
         env:
           DECKBACK_GPG_KEY: ${{ steps.gpg.outputs.keyid }}
+          DECKBACK_REPO_FRESH: ${{ inputs.fresh_history && '1' || '' }}
         run: ./scripts/publish-repo.sh "$(ls ./*.flatpak | head -1)" _site
 
       - uses: actions/upload-pages-artifact@v3

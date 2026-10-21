@@ -73,9 +73,53 @@ leaves the release as a **draft**.
 
 Review the draft on GitHub and click **Publish**. That fires
 [`.github/workflows/release-pages`](.github/workflows/release.yml): it downloads the `.flatpak`,
-imports it into an ostree repo, and deploys the site to GitHub Pages — so
+continues the live repo's history with it, and deploys the site to GitHub Pages — so
 `https://properrr.github.io/deckback/` now serves the new version and every user's `flatpak update`
 picks it up.
+
+What `scripts/publish-repo.sh` does there, and why:
+
+- **Mirrors the live repo** (head + 2 previous releases) and commits the new bundle **on top of the
+  live head**. Each release's parent is the commit users actually run, so their update is the
+  from-parent **static delta**: the real 0.0.8 → 0.0.9 update measured **4.2 MB instead of 77 MB**
+  (the engine binary is bsdiffed rather than shipped whole). The previous releases stay
+  downloadable, so a client mid-update during a deploy still finds its objects.
+- **Refuses a bundle that adds a sandbox permission** compared with the live head (exit 2). The
+  portal would refuse that update for every installed user. `scripts/check-permissions.sh` makes the
+  same check against tagged manifests at release-prep time; this one compares the commits that
+  actually ship.
+- **Fails if it cannot read the live repo** instead of starting a new history. The
+  `fresh_history` workflow input (= `DECKBACK_REPO_FRESH=1`) starts one on purpose, e.g. after a key
+  rotation.
+- Re-publishing the current tag is a no-op for users (same tree, no new commit), so re-running a
+  failed deploy is safe.
+
+**Wait 10 minutes between two publishes.** Pages serves `summary` with `max-age=600`; a publish
+inside that window can read a cached summary and chain onto the previous head instead of the newest.
+
+## Recall a bad release
+
+flatpak never installs an *older* commit as an update, so "re-publish the old version" only works
+because publishing commits the old tree as a **new** commit (fresh timestamp) on top of the bad one.
+
+1. **Hide the bad release from the in-app changelog:** on GitHub, turn the bad release back into a
+   **draft** (drafts are not in the public releases API that the Updates tab reads; a pre-release
+   still is). Do not delete its tag.
+2. **Re-publish the last good tag:** Actions → *release-pages* → *Run workflow*, `tag` = the last good
+   tag (e.g. `v0.1.0`). Every user on the bad version is offered the good tree as an ordinary update;
+   users who never took the bad one land on the same commit.
+3. If the job fails with *"adds permissions the live release lacks"*, the bad release had dropped a
+   permission the good one needs. Publishing anyway (add `ALLOW_PERMISSION_ADD: "1"` to the *Build
+   repo + stage site* step's `env` for that one run) strands everyone who took the bad release until
+   they re-run the one-line installer — say so in the announcement, or fix forward instead.
+4. Fix forward as usual; the next release chains on top of the recall.
+
+What a user can do without us:
+
+- **Hold the current version:** `flatpak mask io.github.properrr.deckback` (undo with
+  `flatpak mask --remove …`).
+- **Go back one release:** `flatpak remote-info --log deckback io.github.properrr.deckback` lists the
+  kept commits; `flatpak update --commit=<commit> io.github.properrr.deckback` installs one.
 
 ## One-time setup
 
@@ -95,8 +139,9 @@ Needs `flatpak` and the `ostree` CLI (`sudo apt install flatpak ostree` on Debia
 alone pulls only the library, not the `ostree` binary the repo init needs).
 
 ```sh
-just publish-repo                       # imports ./io.github.properrr.deckback.flatpak into
-                                        #   flatpak/pages-site/ (repo + index.html + refs)
+DECKBACK_REPO_FRESH=1 just publish-repo # imports ./io.github.properrr.deckback.flatpak into
+                                        #   flatpak/pages-site/ (repo + index.html + refs); without
+                                        #   FRESH it continues the production repo's history
 (cd flatpak/pages-site && python3 -m http.server 8000)
 flatpak remote-add --user --from deckback-test http://localhost:8000/deckback.flatpakrepo
 flatpak install --user deckback-test io.github.properrr.deckback

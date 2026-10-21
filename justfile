@@ -198,6 +198,8 @@ release tag:
     ./scripts/release.sh "{{tag}}"
 
 # Build the hostable ostree repo from the .flatpak bundle + stage the GitHub-Pages site locally.
+# Continues the LIVE repo's history by default (needs network); DECKBACK_REPO_FRESH=1 for an
+# offline/local test site. See scripts/publish-repo.sh for the environment knobs.
 publish-repo bundle="io.github.properrr.deckback.flatpak" site="flatpak/pages-site":
     ./scripts/publish-repo.sh "{{bundle}}" "{{site}}"
 
