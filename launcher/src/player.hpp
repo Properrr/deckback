@@ -103,11 +103,19 @@ class PlayerController {
 
   // logind hooks. on_suspend returns the checkpointed position (nullopt if unavailable); on_resume
   // returns whether the play nudge was accepted. Return values are for tests/logging.
+  //
+  // on_suspend stays synchronous: it must finish while logind's delay lock is held. The resume is
+  // different: on_resume() waits up to resume_probe.timeout_ms for the network, and on the logind
+  // thread that blocked every other bus callback for as long, including the PrepareForSleep(true)
+  // of a quick re-suspend. request_resume() is the logind-thread entry: it hands the resume to the
+  // poll thread and returns at once. A suspend that lands during the wait cancels the nudge.
   std::optional<double> on_suspend();
   bool on_resume();
+  void request_resume();
 
  private:
   void poll_loop();
+  bool resume(unsigned suspend_gen);  // on_resume() against the suspend count it was asked under
 
   Platform& platform_;
   DevToolsClient client_;
@@ -118,7 +126,12 @@ class PlayerController {
   // tokens are refreshed instead of nudging a dead <video>. Duration is measured with
   // CLOCK_BOOTTIME.
   long reload_after_suspend_ms_ = 0;
-  long suspend_boottime_ms_ = 0;  // CLOCK_BOOTTIME at the last on_suspend (0 = none seen)
+  // CLOCK_BOOTTIME at the last on_suspend (0 = none seen). Written on the logind thread, read on
+  // the poll thread.
+  std::atomic<long> suspend_boottime_ms_{0};
+  std::atomic<unsigned> suspend_gen_{0};  // bumped by every on_suspend
+  std::atomic<bool> resume_pending_{false};
+  std::atomic<unsigned> resume_gen_{0};  // suspend_gen_ when the pending resume was requested
   bool warned_synthetic_ = false;
   std::function<UnitState()> keep_awake_probe_;
   bool warned_keep_awake_ = false;

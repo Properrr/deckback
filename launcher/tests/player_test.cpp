@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -15,6 +16,7 @@
 #include "harness.hpp"
 #include "netprobe.hpp"
 #include "platform.hpp"
+#include "util.hpp"
 
 using namespace deckback;
 
@@ -188,6 +190,76 @@ void test_netprobe() {
   assert(wait_online("127.0.0.1", 8, 0));  // timeout 0 disables the wait -> immediate true
 }
 
+// ---- resume off the logind thread ---------------------------------------------------------------
+
+int nudges(testing::FakeServer& server) {
+  int n = 0;
+  for (const std::string& r : server.take_requests())
+    if (r.find("v.play()") != std::string::npos) ++n;
+  return n;
+}
+
+bool wait_for(const std::function<bool()>& cond, long ms) {
+  const long deadline = mono_ms() + ms;
+  while (mono_ms() < deadline) {
+    if (cond()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  return cond();
+}
+
+// The logind thread hands the resume over and returns at once; the poll thread does the waiting.
+// It used to run the whole network probe (up to resume_online_timeout_ms, 8 s) inside the
+// PrepareForSleep(false) callback, blocking every other bus callback for as long.
+void test_resume_request_returns_at_once_and_nudges_on_the_poll_thread() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, false,
+                      ResumeProbe{"127.0.0.1", 8, 600});  // never reachable: the full 600 ms wait
+  pc.start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(200));  // into its 5 s poll wait
+  server.take_requests();
+  const long t0 = mono_ms();
+  pc.request_resume();
+  assert(mono_ms() - t0 < 50);
+  int seen = 0;
+  // "Nudging anyway" once the budget is spent -- and not a 5 s poll interval later: request_resume
+  // wakes the poll thread.
+  assert(wait_for([&] { return (seen += nudges(server)) > 0; }, 2000));
+  pc.stop();
+}
+
+// Shutdown no longer waits out the probe: the waits between attempts end on stop().
+void test_stop_does_not_wait_out_the_resume_probe() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, false,
+                      ResumeProbe{"127.0.0.1", 8, 8000});  // nothing listens on port 8
+  pc.start();
+  pc.request_resume();
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));  // inside the probe's wait
+  const long t0 = mono_ms();
+  pc.stop();
+  assert(mono_ms() - t0 < 1000);
+  assert(nudges(server) == 0);
+}
+
+// A suspend that lands while the resume is still waiting for the network cancels its nudge: playing
+// the video just paused for the new suspend would be exactly backwards.
+void test_a_suspend_during_the_resume_wait_cancels_the_nudge() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, false,
+                      ResumeProbe{"127.0.0.1", 8, 1200});
+  pc.start();
+  pc.request_resume();
+  std::this_thread::sleep_for(std::chrono::milliseconds(150));
+  pc.on_suspend();
+  std::this_thread::sleep_for(std::chrono::milliseconds(1500));  // past the probe budget
+  assert(nudges(server) == 0);
+  pc.stop();
+}
+
 // Resume with a network probe pointed at a live port still nudges playback.
 void test_resume_with_probe() {
   testing::FakeServer server;
@@ -341,6 +413,9 @@ DECKBACK_TEST_MAIN(player) {
   test_thread_lifecycle();
   test_netprobe();
   test_resume_with_probe();
+  test_resume_request_returns_at_once_and_nudges_on_the_poll_thread();
+  test_stop_does_not_wait_out_the_resume_probe();
+  test_a_suspend_during_the_resume_wait_cancels_the_nudge();
   test_resume_reloads_after_long_suspend();
   test_resume_no_reload_when_disabled();
   test_keep_awake_warns_once_when_helper_inactive();

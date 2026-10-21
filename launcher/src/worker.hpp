@@ -53,10 +53,22 @@ class WorkerThread {
     return stop_;
   }
 
-  // Sleep up to `ms`, waking early on stop(). Returns true when asked to stop.
+  // Sleep up to `ms`, waking early on stop() or wake(). Returns true when asked to stop.
   bool wait_or_stop(int ms) {
     std::unique_lock lk(mu_);
-    return cv_.wait_for(lk, std::chrono::milliseconds(ms), [this] { return stop_; });
+    cv_.wait_for(lk, std::chrono::milliseconds(ms), [this] { return stop_ || woken_; });
+    woken_ = false;
+    return stop_;
+  }
+
+  // End the current (or next) wait_or_stop() early without stopping, so the loop looks at whatever
+  // flag the caller just set instead of sleeping out its interval.
+  void wake() {
+    {
+      std::lock_guard lk(mu_);
+      woken_ = true;
+    }
+    cv_.notify_all();
   }
 
  private:
@@ -64,6 +76,7 @@ class WorkerThread {
   std::mutex mu_;
   std::condition_variable cv_;
   bool stop_ = false;
+  bool woken_ = false;
   bool started_ = false;
 };
 

@@ -341,7 +341,7 @@ int main(int argc, char** argv) {
     player->set_layer_sink(&layers);
     if (cfg->keep_awake_warn) player->set_keep_awake_probe(&keep_awake_state);
     platform->on_suspend([&] { player->on_suspend(); });
-    platform->on_resume([&] { player->on_resume(); });
+    platform->on_resume([&] { player->request_resume(); });
     player->start();
   } else {
     warn("startup: remote_debugging_port unset — Phase 6 player hooks disabled");

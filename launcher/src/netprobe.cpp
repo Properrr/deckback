@@ -59,7 +59,8 @@ bool tcp_reachable(const std::string& host, int port, int timeout_ms) {
   return true;
 }
 
-bool wait_online(const std::string& host, int port, int max_ms) {
+bool wait_online(const std::string& host, int port, int max_ms,
+                 const std::function<bool(int)>& nap_fn) {
   if (max_ms <= 0) return true;
   const long deadline = mono_ms() + max_ms;
   int backoff = 200;
@@ -69,8 +70,12 @@ bool wait_online(const std::string& host, int port, int max_ms) {
     if (tcp_reachable(host, port, remaining < 1000 ? remaining : 1000)) return true;
     int nap = backoff < remaining ? backoff : remaining;
     if (nap > 0) {
-      timespec ts{nap / 1000, (nap % 1000) * 1'000'000L};
-      nanosleep(&ts, nullptr);
+      if (nap_fn) {
+        if (nap_fn(nap)) return false;
+      } else {
+        timespec ts{nap / 1000, (nap % 1000) * 1'000'000L};
+        nanosleep(&ts, nullptr);
+      }
     }
     backoff = backoff < 1600 ? backoff * 2 : 1600;
   }
