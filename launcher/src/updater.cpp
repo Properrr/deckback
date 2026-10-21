@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "fileio.hpp"
 #include "log.hpp"
 
 // Gate sd-bus on the header so this compiles without libsystemd (stub backend).
@@ -22,7 +23,6 @@
 #include <thread>
 
 #include "devtools.hpp"
-#include "fileio.hpp"
 #include "overlay.hpp"
 #include "util.hpp"
 #else
@@ -37,8 +37,7 @@ constexpr const char* kPermYes = "yes";
 constexpr const char* kPermAsk = "ask";
 constexpr const char* kPermNo = "no";
 constexpr const char* kPermUnsetName = "unset";
-constexpr std::string_view kFlatpakInfoAppSection = "[Application]";
-constexpr std::string_view kFlatpakInfoNameKey = "name=";
+constexpr const char* kFlatpakInfoPath = "/.flatpak-info";
 
 // What flatpak-portal reports when it refuses a permission-widening self-update: the encoded
 // G_DBUS_ERROR_NOT_SUPPORTED it raises in transaction_ready(), plus a substring of the untranslated
@@ -119,21 +118,34 @@ std::string UpdateState::commit() const {
   return commit_;
 }
 
-std::string parse_flatpak_app_id(const std::string& text) {
-  bool in_application = false;
+std::string parse_flatpak_info_value(const std::string& text, std::string_view section,
+                                     std::string_view key) {
+  bool in_section = false;
   size_t pos = 0;
   while (pos <= text.size()) {
     const size_t eol = text.find('\n', pos);
     std::string_view line(text.data() + pos, (eol == std::string::npos ? text.size() : eol) - pos);
     if (!line.empty() && line.back() == '\r') line.remove_suffix(1);
-    if (!line.empty() && line.front() == '[')
-      in_application = (line == kFlatpakInfoAppSection);
-    else if (in_application && line.starts_with(kFlatpakInfoNameKey))
-      return std::string(line.substr(kFlatpakInfoNameKey.size()));
+    if (!line.empty() && line.front() == '[') {
+      in_section = line.size() == section.size() + 2 && line.back() == ']' &&
+                   line.substr(1, section.size()) == section;
+    } else if (in_section && line.size() > key.size() && line.starts_with(key) &&
+               line[key.size()] == '=') {
+      return std::string(line.substr(key.size() + 1));
+    }
     if (eol == std::string::npos) break;
     pos = eol + 1;
   }
   return {};
+}
+
+std::string parse_flatpak_app_id(const std::string& text) {
+  return parse_flatpak_info_value(text, "Application", "name");
+}
+
+std::string read_running_commit() {
+  const auto text = read_file(kFlatpakInfoPath);
+  return text ? parse_flatpak_info_value(*text, "Instance", "app-commit") : std::string();
 }
 
 namespace {
@@ -168,7 +180,6 @@ constexpr const char* kPermStore = "org.freedesktop.impl.portal.PermissionStore"
 constexpr const char* kPermStorePath = "/org/freedesktop/impl/portal/PermissionStore";
 constexpr const char* kPermTable = "flatpak";
 constexpr const char* kPermUpdatesId = "updates";
-constexpr const char* kFlatpakInfoPath = "/.flatpak-info";
 
 // Bound the synchronous portal calls so a missing/slow portal fails fast instead of hanging on
 // sd-bus's 25 s default. These return an ack; deploy progress arrives via signals.
@@ -182,7 +193,6 @@ constexpr long kReconnectStableMs = 30'000;
 constexpr uint64_t kUsecPerSec = 1'000'000;
 constexpr uint64_t kUsecPerMs = 1000;
 constexpr uint64_t kNsecPerUsec = 1000;
-constexpr std::string::size_type kShortCommitLen = 12;
 constexpr size_t kWakeDrainBytes = 64;
 
 // `--selftest-deploy` waits this long for a terminal Progress, polling at this cadence.
@@ -199,8 +209,8 @@ std::string read_flatpak_app_id() {
 //   UpdateAvailable: {running-commit:s, local-commit:s, remote-commit:s}
 //
 // A signal is read once, so every field a caller needs must be collected in this single pass —
-// hence the list of string targets rather than one.
-void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u,
+// hence the lists of targets rather than one.
+void scan_dict(sd_bus_message* m, std::initializer_list<std::pair<const char*, uint32_t*>> uints,
                std::initializer_list<std::pair<const char*, std::string*>> strs) {
   if (sd_bus_message_enter_container(m, 'a', "{sv}") < 0) return;
   while (sd_bus_message_enter_container(m, 'e', "sv") > 0) {
@@ -212,10 +222,13 @@ void scan_dict(sd_bus_message* m, const char* want_u, uint32_t* out_u,
     std::string* want_str = nullptr;
     for (const auto& [name, target] : strs)
       if (std::strcmp(key, name) == 0) want_str = target;
+    uint32_t* want_u = nullptr;
+    for (const auto& [name, target] : uints)
+      if (std::strcmp(key, name) == 0) want_u = target;
 
-    if (want_u && std::strcmp(key, want_u) == 0) {
+    if (want_u) {
       if (sd_bus_message_enter_container(m, 'v', "u") > 0) {
-        sd_bus_message_read(m, "u", out_u);
+        sd_bus_message_read(m, "u", want_u);
         sd_bus_message_exit_container(m);
       } else {
         sd_bus_message_skip(m, "v");
@@ -759,16 +772,16 @@ class PortalUpdater final : public Updater {
   static int on_update_available(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<PortalUpdater*>(userdata);
     std::string remote;
-    scan_dict(m, nullptr, nullptr, {{"remote-commit", &remote}});
-    const std::string short_commit = remote.substr(0, kShortCommitLen);
+    scan_dict(m, {}, {{"remote-commit", &remote}});
+    const std::string short_remote = short_commit(remote);
     info("updater: an update is available" +
-         (remote.empty() ? std::string() : " (remote " + short_commit + ")"));
+         (remote.empty() ? std::string() : " (remote " + short_remote + ")"));
     if (self->cfg_.auto_deploy) {
       if (!self->updating_) self->want_update_ = true;  // deploy now (auto mode)
     } else {
       // notify mode: publish availability for the UI threads; the deploy waits for
       // request_update().
-      if (self->cfg_.state) self->cfg_.state->set_available(true, short_commit);
+      if (self->cfg_.state) self->cfg_.state->set_available(true, short_remote);
       info("updater: notify mode — awaiting user confirmation in Settings ▸ Updates");
     }
     return 0;
@@ -776,11 +789,16 @@ class PortalUpdater final : public Updater {
 
   static int on_progress(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<PortalUpdater*>(userdata);
-    uint32_t status = 0;
+    uint32_t status = 0, op = 0, n_ops = 0, percent = 0;
     std::string errname, errmsg;
-    scan_dict(m, "status", &status, {{"error", &errname}, {"error_message", &errmsg}});
+    scan_dict(m, {{"status", &status}, {"op", &op}, {"n_ops", &n_ops}, {"progress", &percent}},
+              {{"error", &errname}, {"error_message", &errmsg}});
     const UpdateProgress p = decode_progress_status(status);
-    if (p == UpdateProgress::Running || p == UpdateProgress::Unknown) return 0;
+    if (p == UpdateProgress::Running) {
+      if (self->cfg_.on_running) self->cfg_.on_running(op, n_ops, percent);
+      return 0;
+    }
+    if (p == UpdateProgress::Unknown) return 0;
 
     const bool was_updating = self->updating_;
     self->updating_ = false;

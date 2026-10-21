@@ -30,8 +30,11 @@ constexpr std::string_view kOffStatus = "Updates are off.";
 // Deploy-phase copy. Every one of these is only ever shown after the portal actually said so — the
 // bug this replaces was announcing success at the moment the button was pressed, which is before
 // anything is known.
+constexpr std::string_view kCheckingStatus = "Checking for updates\xE2\x80\xA6";
 constexpr std::string_view kRequestedStatus = "Updating\xE2\x80\xA6 this can take a minute.";
-constexpr std::string_view kDoneStatus = "Update installed. Restart Deckback to start using it.";
+constexpr std::string_view kDoneStatus =
+    "Update installed. Restart Deckback to start using it: choose Close now, then open it again "
+    "from your Library.";
 constexpr std::string_view kEmptyStatus = "You are on the latest version.";
 // The refusal a user cannot retry their way out of, so the text is the workaround rather than an
 // apology. The command is the same one-liner the README documents for installing; run from the host
@@ -46,6 +49,7 @@ constexpr std::string_view kPermissionBlockedToast =
 constexpr std::string_view kNoAnswerError = "the update service did not answer";
 constexpr std::string_view kFailedToast =
     "Update failed \xE2\x80\x94 see Settings \xE2\x96\xB8 Updates";
+constexpr std::size_t kOstreeChecksumLen = 64;
 
 // Split "v0.0.10" into {0,0,10}. `valid` is false if any field is empty or non-numeric — a
 // malformed string (e.g. a "-rc1" pre-release suffix) must never read as newer than a real release.
@@ -251,18 +255,50 @@ std::string release_notes_for(const std::vector<ReleaseNote>& notes, std::string
   return {};
 }
 
+std::string parse_ref_commit(std::string_view ref_body) {
+  const auto ws = [](char c) { return c == ' ' || c == '\n' || c == '\r' || c == '\t'; };
+  while (!ref_body.empty() && ws(ref_body.front())) ref_body.remove_prefix(1);
+  while (!ref_body.empty() && ws(ref_body.back())) ref_body.remove_suffix(1);
+  if (ref_body.size() != kOstreeChecksumLen) return {};
+  for (char c : ref_body)
+    if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) return {};
+  return std::string(ref_body);
+}
+
+RefCheck decide_ref_check(std::string_view ref_body, std::string_view running_commit) {
+  const std::string remote = parse_ref_commit(ref_body);
+  if (remote.empty() || parse_ref_commit(running_commit).empty()) return RefCheck::Unknown;
+  return remote == running_commit ? RefCheck::UpToDate : RefCheck::UpdateAvailable;
+}
+
+std::string deploy_progress_status(std::uint32_t op, std::uint32_t n_ops, std::uint32_t percent) {
+  percent = std::min<std::uint32_t>(percent, 100);
+  if (n_ops > 1)
+    return std::format("Updating\xE2\x80\xA6 step {} of {} ({}%)", std::min(op + 1, n_ops), n_ops,
+                       percent);
+  return std::format("Updating\xE2\x80\xA6 {}%", percent);
+}
+
 UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool update_available,
                          std::string_view available_version, std::string_view local_version,
-                         std::string_view idle_status, bool updater_present) {
+                         std::string_view idle_status, bool updater_present,
+                         std::string_view progress_status) {
   UpdatesView v;
   switch (phase) {
+    case DeployPhase::Checking:
+      // A read of the published ref, a second or two; nothing to press until it answers.
+      v.status = std::string(kCheckingStatus);
+      return v;
     case DeployPhase::Requested:
       // No buttons: the portal is mid-transaction and a second Update() would be ignored anyway.
-      v.status = std::string(kRequestedStatus);
+      v.status =
+          progress_status.empty() ? std::string(kRequestedStatus) : std::string(progress_status);
       return v;
     case DeployPhase::Done:
-      // Nothing more to do here — the new commit binds on the next launch, not on another press.
+      // The new commit binds on the next launch, not on another press, so the one useful action is
+      // leaving. Deckback cannot start itself again from Game Mode; the Library tile does that.
       v.status = std::string(kDoneStatus);
+      v.can_quit = true;
       return v;
     case DeployPhase::Empty:
       // The portal really did compare against the remote, so this is the one place we may say
@@ -314,6 +350,7 @@ std::string deploy_toast(DeployPhase phase) {
     case DeployPhase::Empty:
       return std::string(kEmptyStatus);
     // Never terminal, nothing to announce.
+    case DeployPhase::Checking:
     case DeployPhase::Requested:
     case DeployPhase::Idle:
       return {};
@@ -352,6 +389,7 @@ UpdatePromptController::UpdatePromptController(UpdatePromptConfig cfg)
 
 UpdatePromptController::~UpdatePromptController() {
   if (fetch_thread_.joinable()) fetch_thread_.join();
+  if (probe_thread_.joinable()) probe_thread_.join();
 }
 
 bool UpdatePromptController::update_available() const {
@@ -364,14 +402,23 @@ void UpdatePromptController::tick(bool on_watch) {
   // Unconditional: the changelog is now "what's new", not just "what you'd be getting", so it must
   // be there whether or not an update is pending. One fetch per process (kick_changelog CASes).
   kick_changelog();
+  // One probe per launch, so a release published since the last session is announced now rather
+  // than whenever the portal's shared timer next fires (0–30 min, never on a metered network).
+  if (!launch_probed_ && probe_configured()) {
+    launch_probed_ = true;
+    kick_probe();
+  }
 
   DeployPhase phase = DeployPhase::Idle;
   std::string deploy_error;
+  std::string progress;
   bool fresh = false;
+  if (probe_state_.load(std::memory_order_acquire) == 2) consume_probe();
   {
     std::lock_guard lk(deploy_mu_);
     phase = deploy_phase_;
     deploy_error = deploy_error_;
+    progress = deploy_progress_;
     fresh = std::exchange(deploy_fresh_, false);
     if (phase == DeployPhase::Requested && mono_ms() - requested_at_ms_ >= cfg_.deploy_timeout_ms) {
       // No verdict ever came (see deploy_timeout_ms). Report it now, and toast it next tick.
@@ -388,6 +435,11 @@ void UpdatePromptController::tick(bool on_watch) {
     if (const std::string t = deploy_toast(phase); !t.empty())
       show_toast(client_, t, kDeployToastMs);
   }
+  // The portal found nothing to install for the commit the probe announced: stop announcing it, or
+  // every check would offer an update that cannot land.
+  if (fresh && phase == DeployPhase::Empty && !probe_announced_.empty() && cfg_.state &&
+      cfg_.state->commit() == probe_announced_)
+    probe_refused_ = probe_announced_;
 
   if (cfg_.state && cfg_.state->available()) {
     const std::string commit = cfg_.state->commit();
@@ -415,7 +467,7 @@ void UpdatePromptController::tick(bool on_watch) {
   const std::string idle =
       (!hidden_status_.empty() && phase == DeployPhase::Idle) ? hidden_status_ : cfg_.idle_status;
   const UpdatesView v = updates_view(phase, deploy_error, announce, cv.available_version,
-                                     cfg_.local_version, idle, cfg_.updater != nullptr);
+                                     cfg_.local_version, idle, cfg_.updater != nullptr, progress);
 
   // Prefer the pending release's notes; fall back to the running version's, so the tab is never
   // empty. Only link out when the fetch produced nothing at all. installed_notes_ is written by the
@@ -423,20 +475,21 @@ void UpdatePromptController::tick(bool on_watch) {
   std::string notes = cv.notes;
   if (notes.empty() && fetch_done()) notes = installed_notes_;
   if (notes.empty() && fetch_done()) notes = std::string(kReleaseNotesFallback);
-  feed(v.has_update, v.can_check, v.status, notes);
+  feed(v, notes);
 }
 
-void UpdatePromptController::feed(bool has_update, bool can_check, const std::string& status,
-                                  const std::string& notes) {
-  if (fed_valid_ && has_update == fed_has_ && can_check == fed_check_ && status == fed_status_ &&
-      notes == fed_notes_)
+void UpdatePromptController::feed(const UpdatesView& view, const std::string& notes) {
+  if (fed_valid_ && view.has_update == fed_has_ && view.can_check == fed_check_ &&
+      view.can_quit == fed_quit_ && view.status == fed_status_ && notes == fed_notes_)
     return;
   fed_valid_ = true;
-  fed_has_ = has_update;
-  fed_check_ = can_check;
-  fed_status_ = status;
+  fed_has_ = view.has_update;
+  fed_check_ = view.can_check;
+  fed_quit_ = view.can_quit;
+  fed_status_ = view.status;
   fed_notes_ = notes;
-  if (cfg_.osd) cfg_.osd->set_update_model(has_update, can_check, status, notes);
+  if (cfg_.osd)
+    cfg_.osd->set_update_model(view.has_update, view.can_check, view.can_quit, view.status, notes);
 }
 
 void UpdatePromptController::kick_changelog() {
@@ -476,9 +529,10 @@ void UpdatePromptController::request_deploy(const char* why) {
     std::lock_guard lk(deploy_mu_);
     deploy_phase_ = DeployPhase::Requested;
     deploy_error_.clear();
+    deploy_progress_.clear();
     deploy_fresh_ = false;  // Requested never toasts; the tab shows it
+    requested_at_ms_ = mono_ms();
   }
-  requested_at_ms_ = mono_ms();
   notify_ = false;
   hidden_status_.clear();
   if (cfg_.updater) cfg_.updater->request_update();
@@ -490,7 +544,92 @@ void UpdatePromptController::request_deploy(const char* why) {
 // deploy the portal had already refused. The verdict arrives via on_deploy_result.
 void UpdatePromptController::confirm_update() { request_deploy("user confirmed"); }
 
-void UpdatePromptController::check_now() { request_deploy("user asked to check"); }
+void UpdatePromptController::check_now() {
+  if (!probe_configured()) {
+    request_deploy("user asked to check");
+    return;
+  }
+  {
+    std::lock_guard lk(deploy_mu_);
+    // A deploy in flight or staged already answers the question; the tab offers no Check there.
+    if (deploy_phase_ == DeployPhase::Requested || deploy_phase_ == DeployPhase::Done) return;
+    deploy_phase_ = DeployPhase::Checking;
+    deploy_error_.clear();
+    deploy_fresh_ = false;
+  }
+  // A launch probe still in flight answers this press too: it reads the same file.
+  probe_for_user_ = true;
+  kick_probe();
+  info("update: user asked to check — reading the published ref");
+}
+
+bool UpdatePromptController::probe_configured() const {
+  return !cfg_.running_commit.empty() && static_cast<bool>(cfg_.fetch_remote_ref);
+}
+
+void UpdatePromptController::kick_probe() {
+  int expected = 0;
+  if (!probe_state_.compare_exchange_strong(expected, 1)) return;  // already running or unconsumed
+  if (probe_thread_.joinable()) probe_thread_.join();
+  probe_thread_ = std::thread([this] {
+    const std::optional<std::string> body = cfg_.fetch_remote_ref();
+    probe_result_ = body ? decide_ref_check(*body, cfg_.running_commit) : RefCheck::Unknown;
+    probe_commit_ = body ? short_commit(parse_ref_commit(*body)) : std::string();
+    probe_state_.store(2, std::memory_order_release);
+  });
+}
+
+// Input thread, once the probe has published. The probe only ever ADDS availability: the ref is
+// cached by the CDN for up to 10 min, so the portal can know about a release before the probe does,
+// and an "up to date" read must never hide what the portal announced.
+void UpdatePromptController::consume_probe() {
+  if (probe_thread_.joinable()) probe_thread_.join();
+  RefCheck result = probe_result_;
+  const std::string commit = probe_commit_;
+  probe_state_.store(0, std::memory_order_relaxed);
+  const bool for_user = std::exchange(probe_for_user_, false);
+  if (result == RefCheck::UpdateAvailable && commit == probe_refused_) result = RefCheck::UpToDate;
+  if (result == RefCheck::UpdateAvailable) {
+    info("update: the published repo has a newer commit (" + commit + ")");
+    probe_announced_ = commit;
+    if (cfg_.state) cfg_.state->set_available(true, commit);
+  }
+  // An announcement of the commit the portal refused does not count: nothing can install it.
+  const bool announced = cfg_.state && cfg_.state->available() &&
+                         (probe_refused_.empty() || cfg_.state->commit() != probe_refused_);
+
+  bool fall_back = false;
+  {
+    std::lock_guard lk(deploy_mu_);
+    const bool checking = deploy_phase_ == DeployPhase::Checking;
+    if (result == RefCheck::UpdateAvailable) {
+      if (checking) deploy_phase_ = DeployPhase::Idle;  // the announcement is the answer
+    } else if (result == RefCheck::UpToDate) {
+      // "Latest" is earned only when nothing else has announced an update.
+      if (checking || (deploy_phase_ == DeployPhase::Idle && !for_user)) {
+        deploy_phase_ = announced ? DeployPhase::Idle : DeployPhase::Empty;
+        deploy_fresh_ = checking && !announced;  // a press gets an answer; a launch stays quiet
+      }
+    } else {
+      fall_back = checking;
+    }
+  }
+  // The portal path is the one verified on hardware: when the ref cannot be read, let the portal
+  // check by deploying, exactly as a check did before the probe existed.
+  if (fall_back)
+    request_deploy(
+        "user asked to check; the published repo was unreadable, falling back to the portal");
+  else if (result == RefCheck::Unknown)
+    warn("update: could not read the published repo — the portal's own check still runs");
+}
+
+void UpdatePromptController::on_deploy_progress(std::uint32_t op, std::uint32_t n_ops,
+                                                std::uint32_t percent) {
+  std::lock_guard lk(deploy_mu_);
+  if (deploy_phase_ != DeployPhase::Requested) return;
+  deploy_progress_ = deploy_progress_status(op, n_ops, percent);
+  requested_at_ms_ = mono_ms();  // still moving: restart the no-answer timeout
+}
 
 void UpdatePromptController::on_deploy_result(UpdateProgress progress,
                                               const std::string& error_name,

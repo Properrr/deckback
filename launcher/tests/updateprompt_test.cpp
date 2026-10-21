@@ -6,11 +6,14 @@
 // state files (round-trip + read-only tolerance).
 #include "updateprompt.hpp"
 
+#include <atomic>
 #include <cassert>
 #include <chrono>
 #include <cstdio>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 
@@ -359,6 +362,263 @@ void test_a_deploy_that_never_answers_times_out() {
   fs::remove_all(dir);
 }
 
+// ---- the published-ref probe (U4)
+// ----------------------------------------------------------------
+
+const std::string kRunning(64, 'a');
+const std::string kNewer(64, 'b');
+
+void test_ref_check() {
+  // The ref file is 64 lowercase hex and a newline; anything else is not a commit.
+  assert(parse_ref_commit(kNewer + "\n") == kNewer);
+  assert(parse_ref_commit("  " + kNewer + "\r\n") == kNewer);
+  assert(parse_ref_commit(std::string(64, 'B')).empty());  // ostree never writes uppercase
+  assert(parse_ref_commit(std::string(63, 'b')).empty());
+  assert(parse_ref_commit(kNewer + "0").empty());
+  assert(parse_ref_commit("<html><body>404</body></html>").empty());
+  assert(parse_ref_commit("").empty());
+
+  assert(decide_ref_check(kRunning + "\n", kRunning) == RefCheck::UpToDate);
+  // "Differs" is the update: the ref is what flatpak would move to, and a recall is a new commit.
+  assert(decide_ref_check(kNewer + "\n", kRunning) == RefCheck::UpdateAvailable);
+  // An unreadable body must not read as "latest" — that is exactly the claim it cannot support.
+  assert(decide_ref_check("Not Found", kRunning) == RefCheck::Unknown);
+  assert(decide_ref_check(kNewer, "") == RefCheck::Unknown);
+  assert(decide_ref_check(kNewer, "not-a-commit") == RefCheck::Unknown);
+}
+
+void test_deploy_progress_status() {
+  // flatpak-portal's op is 0-based; a user counts from 1.
+  assert(deploy_progress_status(1, 3, 45) == "Updating\xE2\x80\xA6 step 2 of 3 (45%)");
+  assert(deploy_progress_status(0, 1, 7) == "Updating\xE2\x80\xA6 7%");
+  assert(deploy_progress_status(0, 0, 7) == "Updating\xE2\x80\xA6 7%");
+  // Out-of-range input is clamped, never "step 4 of 3" or "250%".
+  assert(deploy_progress_status(5, 3, 250) == "Updating\xE2\x80\xA6 step 3 of 3 (100%)");
+}
+
+void test_updates_view_for_the_new_phases() {
+  const std::string_view idle = "No update announced yet.";
+  // Checking: a read of the ref, nothing to press until it answers.
+  UpdatesView v = updates_view(DeployPhase::Checking, "", false, "", "0.0.9", idle, true);
+  assert(v.status.find("Checking") != std::string::npos);
+  assert(!v.has_update && !v.can_check && !v.can_quit);
+  // Progress replaces the generic in-flight text, still with no buttons.
+  v = updates_view(DeployPhase::Requested, "", false, "", "0.0.9", idle, true,
+                   deploy_progress_status(0, 2, 30));
+  assert(v.status.find("step 1 of 2") != std::string::npos && !v.can_check);
+  // A staged update offers the one action that moves it forward.
+  v = updates_view(DeployPhase::Done, "", false, "", "0.0.9", idle, true);
+  assert(v.can_quit && !v.can_check && !v.has_update);
+}
+
+// Records portal deploys instead of making them, so "a check installs nothing" is an assertion.
+class FakeUpdater final : public Updater {
+ public:
+  void start() override {}
+  void stop() override {}
+  void request_update() override { ++deploys; }
+  bool backend_live() const override { return true; }
+  int selftest() override { return 0; }
+  int selftest_deploy(bool) override { return 0; }
+  std::atomic<int> deploys{0};
+};
+
+OsdMenuConfig closed_osd() {
+  OsdMenuConfig c;
+  c.cdp_port = 1;  // nothing listens: the menu stays closed, only its update model is observed
+  return c;
+}
+
+// One controller's world: a closed OSD, the shared state, a counting updater and a "repo" whose ref
+// body the test sets (nullopt = unreachable).
+struct ProbeRig {
+  explicit ProbeRig(const char* name)
+      : dir(std::filesystem::temp_directory_path() / name), osd(closed_osd()) {
+    std::filesystem::remove_all(dir);
+    std::filesystem::create_directories(dir);
+  }
+  ~ProbeRig() { std::filesystem::remove_all(dir); }
+
+  void serve(std::optional<std::string> body) {
+    std::lock_guard lk(mu);
+    ref = std::move(body);
+  }
+
+  UpdatePromptConfig config() {
+    UpdatePromptConfig cfg;
+    cfg.cdp_port = 1;
+    cfg.state_dir = dir.string();
+    cfg.local_version = "0.0.9";
+    cfg.releases_url = "http://127.0.0.1:1/releases";  // refused at once: no network here
+    cfg.state = &state;
+    cfg.updater = &updater;
+    cfg.osd = &osd;
+    cfg.running_commit = kRunning;
+    cfg.fetch_remote_ref = [this]() -> std::optional<std::string> {
+      ++fetches;
+      std::lock_guard lk(mu);
+      return ref;
+    };
+    return cfg;
+  }
+
+  std::filesystem::path dir;
+  OsdMenuController osd;
+  UpdateState state;
+  FakeUpdater updater;
+  std::atomic<int> fetches{0};
+  std::mutex mu;
+  std::optional<std::string> ref;
+};
+
+template <class Done>
+bool tick_until(UpdatePromptController& ctl, Done done) {
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  while (std::chrono::steady_clock::now() < end) {
+    ctl.tick(false);
+    if (done()) return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  return false;
+}
+
+// The launch probe announces a release published since the last session, without the portal and
+// without installing anything.
+void test_launch_probe_announces_a_newer_commit() {
+  ProbeRig rig("deckback_probe_launch");
+  rig.serve(kNewer + "\n");
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  // Keyed exactly like the portal's announcement, or the ignore/card markers would treat the same
+  // release as two.
+  assert(rig.state.commit() == short_commit(kNewer));
+  assert(rig.updater.deploys == 0);
+  assert(rig.fetches == 1);
+}
+
+// Up to date at launch: the tab may say "latest", quietly, because the repo was really read.
+void test_launch_probe_up_to_date_says_latest() {
+  ProbeRig rig("deckback_probe_latest");
+  rig.serve(kRunning + "\n");
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Empty; }));
+  assert(!rig.osd.update_available() && rig.updater.deploys == 0);
+}
+
+// The CDN caches the ref for 10 min, so the portal can know about a release first. A probe that
+// still reads "up to date" must not hide it.
+void test_probe_never_clears_a_portal_announcement() {
+  ProbeRig rig("deckback_probe_noclear");
+  rig.serve(kRunning + "\n");
+  rig.state.set_available(true, short_commit(kNewer));
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return rig.fetches == 1; }));
+  for (int i = 0; i < 20; ++i) {
+    ctl.tick(false);
+    std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  }
+  assert(ctl.deploy_phase() == DeployPhase::Idle);
+  assert(rig.osd.update_available());
+}
+
+// "Check for updates" asks and answers; it no longer installs behind notify mode's consent step.
+void test_check_reads_the_ref_and_installs_nothing() {
+  ProbeRig rig("deckback_probe_check");
+  rig.serve(kRunning + "\n");
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Empty; }));
+
+  rig.serve(kNewer + "\n");  // a release lands mid-session
+  ctl.check_now();
+  assert(ctl.deploy_phase() == DeployPhase::Checking);
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  assert(ctl.deploy_phase() == DeployPhase::Idle);  // the announcement is the answer
+  assert(rig.updater.deploys == 0);
+
+  ctl.confirm_update();  // consent is what deploys
+  assert(rig.updater.deploys == 1);
+}
+
+// An unreadable repo falls back to the portal's check-by-deploying, the path verified on hardware.
+void test_check_with_an_unreachable_repo_falls_back_to_the_portal() {
+  ProbeRig rig("deckback_probe_fallback");
+  rig.serve(std::nullopt);
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return rig.fetches == 1; }));
+  ctl.tick(false);
+  assert(ctl.deploy_phase() == DeployPhase::Idle);  // a failed LAUNCH probe changes nothing
+
+  ctl.check_now();
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Requested; }));
+  assert(rig.updater.deploys == 1);
+}
+
+// Without a running commit (outside the sandbox) there is nothing to compare: the old behaviour.
+void test_no_running_commit_keeps_the_portal_check() {
+  ProbeRig rig("deckback_probe_unsandboxed");
+  rig.serve(kNewer + "\n");
+  UpdatePromptConfig cfg = rig.config();
+  cfg.running_commit.clear();
+  UpdatePromptController ctl(cfg);
+  ctl.tick(false);
+  ctl.check_now();
+  assert(ctl.deploy_phase() == DeployPhase::Requested);
+  assert(rig.updater.deploys == 1 && rig.fetches == 0);
+}
+
+// A staged update already answers "is there something newer": no probe may re-offer it.
+void test_a_staged_update_is_not_re_announced() {
+  ProbeRig rig("deckback_probe_staged");
+  rig.serve(kNewer + "\n");
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  ctl.confirm_update();
+  ctl.on_deploy_result(UpdateProgress::Done, "", "");
+  ctl.tick(false);
+  assert(ctl.deploy_phase() == DeployPhase::Done);
+  ctl.check_now();  // the tab offers no Check here; a stray call must not change anything
+  ctl.tick(false);
+  assert(ctl.deploy_phase() == DeployPhase::Done && rig.fetches == 1);
+  assert(!rig.osd.update_available());
+}
+
+// The portal found nothing to install for the commit the probe announced (a ref ahead of the
+// portal's summary, or an install from another remote): later checks must not keep offering it.
+void test_a_commit_the_portal_refused_is_not_re_announced() {
+  ProbeRig rig("deckback_probe_refused");
+  rig.serve(kNewer + "\n");
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  ctl.confirm_update();
+  ctl.on_deploy_result(UpdateProgress::Empty, "", "");
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Empty; }));
+
+  ctl.check_now();
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Empty; }));
+  assert(!rig.osd.update_available());
+  assert(rig.updater.deploys == 1 && rig.fetches == 2);
+}
+
+// A slow deploy that keeps reporting progress is alive: the no-answer timeout restarts on each
+// report instead of calling it failed mid-download.
+void test_progress_keeps_a_slow_deploy_alive() {
+  ProbeRig rig("deckback_probe_progress");
+  rig.serve(kNewer + "\n");
+  UpdatePromptConfig cfg = rig.config();
+  cfg.deploy_timeout_ms = 150;
+  UpdatePromptController ctl(cfg);
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  ctl.confirm_update();
+  for (int i = 0; i < 6; ++i) {  // 6 x 50 ms = twice the timeout, with progress throughout
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    ctl.on_deploy_progress(0, 1, static_cast<std::uint32_t>(i * 15));
+    ctl.tick(false);
+    assert(ctl.deploy_phase() == DeployPhase::Requested);
+  }
+  // ...and silence still times out.
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Failed; }));
+}
+
 DECKBACK_TEST_MAIN(updateprompt) {
   test_version_compare();
   test_parse_and_summarize();
@@ -371,6 +631,18 @@ DECKBACK_TEST_MAIN(updateprompt) {
   test_deploy_toast();
   test_new_commit_after_an_empty_check_is_announced();
   test_a_deploy_that_never_answers_times_out();
+  test_ref_check();
+  test_deploy_progress_status();
+  test_updates_view_for_the_new_phases();
+  test_launch_probe_announces_a_newer_commit();
+  test_launch_probe_up_to_date_says_latest();
+  test_probe_never_clears_a_portal_announcement();
+  test_check_reads_the_ref_and_installs_nothing();
+  test_check_with_an_unreachable_repo_falls_back_to_the_portal();
+  test_no_running_commit_keeps_the_portal_check();
+  test_a_staged_update_is_not_re_announced();
+  test_a_commit_the_portal_refused_is_not_re_announced();
+  test_progress_keeps_a_slow_deploy_alive();
   std::puts("updateprompt: ok");
   return 0;
 }

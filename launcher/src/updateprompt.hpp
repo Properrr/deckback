@@ -1,7 +1,10 @@
 #pragma once
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
+#include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -66,11 +69,34 @@ ChangelogView summarize_releases(const std::vector<ReleaseNote>& notes,
 std::string release_notes_for(const std::vector<ReleaseNote>& notes, std::string_view version,
                               std::size_t max_len);
 
-// Where a requested deploy has got to. Requested covers both "Update now" and "Check for updates":
-// they issue the identical portal call, and the portal answers Empty when there was nothing to do.
-// PermissionBlocked is split out from Failed because it is the one failure the user cannot retry
-// their way out of — see is_permission_change_failure.
-enum class DeployPhase { Idle, Requested, Done, Empty, Failed, PermissionBlocked };
+// ---- the published-ref probe (TASKS U4)
+// ----------------------------------------------------------
+//
+// "Check for updates" used to call the portal's Update(), which checks by INSTALLING: it skipped
+// notify mode's consent step, and the portal's own detection is a shared 0–30 min timer that never
+// runs on a metered network. Instead the launcher reads the 65-byte ref file the published repo
+// serves for this app (refs/heads/app/<id>/x86_64/master) and compares it with the commit it is
+// running. The portal stays the only installer and the only signature verifier: a forged or stale
+// ref can at worst announce an update the portal then answers Empty for.
+
+// The commit a ref body names: exactly 64 lowercase hex digits once surrounding whitespace is
+// trimmed, or "" for anything else (an HTML error page, a truncated body). Pure.
+std::string parse_ref_commit(std::string_view ref_body);
+
+// UpdateAvailable means "differs", not "newer": the ref is what flatpak would move to, and a recall
+// is a different commit too. Unknown covers an unreadable body or an unknown running commit. Pure.
+enum class RefCheck { UpdateAvailable, UpToDate, Unknown };
+RefCheck decide_ref_check(std::string_view ref_body, std::string_view running_commit);
+
+// Where a requested deploy has got to. Checking is the ref probe a "Check for updates" started:
+// nothing is installed by it. Requested is a portal Update() — "Update now", or a check whose probe
+// could not read the repo and fell back to the portal, which then answers Empty when there was
+// nothing to do. PermissionBlocked is split out from Failed because it is the one failure the user
+// cannot retry their way out of — see is_permission_change_failure.
+enum class DeployPhase { Idle, Checking, Requested, Done, Empty, Failed, PermissionBlocked };
+
+// "Updating… step 2 of 3 (45%)" from a portal Progress (op is 0-based). Pure.
+std::string deploy_progress_status(std::uint32_t op, std::uint32_t n_ops, std::uint32_t percent);
 
 // Everything the Updates tab shows, derived in one place so the status text and the buttons can
 // never disagree — the v0.0.7 report was exactly that disagreement: a "will apply after restart"
@@ -79,13 +105,16 @@ struct UpdatesView {
   std::string status;
   bool has_update = false;  // offer Update now + Ignore this version
   bool can_check = false;   // offer Check for updates
+  bool can_quit = false;    // offer Close now (a staged update binds on the next launch)
 };
 // A deploy verdict outranks availability: it is the more recent, more specific thing that happened.
 // `updater_present` is false when self-update is off, which is the one case with nothing to offer.
-// Pure.
+// `progress_status` (deploy_progress_status) replaces the generic Requested text once the portal
+// reports progress. Pure.
 UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool update_available,
                          std::string_view available_version, std::string_view local_version,
-                         std::string_view idle_status, bool updater_present);
+                         std::string_view idle_status, bool updater_present,
+                         std::string_view progress_status = {});
 
 // The toast for a terminal deploy phase, or "" for the non-terminal ones. Only used when the OSD is
 // closed — an open Updates panel already shows the same thing, patched in place. Pure.
@@ -129,14 +158,21 @@ struct UpdatePromptConfig {
   OsdMenuController* osd = nullptr;  // the Updates-tab UI + button badge. Not owned.
   // How long "Updating…" may wait for the portal's verdict before reading as a failure. A real
   // deploy of the ~77 MB engine finishes in seconds to minutes; silence past this means a hung
-  // transaction or an updater that is not running, and the tab would otherwise never move on.
+  // transaction or an updater that is not running, and the tab would otherwise never move on. Every
+  // progress report restarts it, so a slow runtime pull is not cut off while it is still moving.
   long deploy_timeout_ms = 10L * 60 * 1000;
+  // The published-ref probe (U4). Both set: the launch probes once and "Check for updates" asks the
+  // repo directly, installing nothing. Either missing (outside the sandbox there is no running
+  // commit; a build without libcurl cannot fetch): Check falls back to the portal's Update().
+  // `fetch_remote_ref` returns the ref body or nullopt, and runs on the probe thread.
+  std::string running_commit{};
+  std::function<std::optional<std::string>()> fetch_remote_ref{};
 };
 
 class UpdatePromptController {
  public:
   explicit UpdatePromptController(UpdatePromptConfig cfg);
-  ~UpdatePromptController();  // joins the changelog-fetch thread
+  ~UpdatePromptController();  // joins the changelog-fetch and probe threads
 
   // Each input-thread tick: feed the OSD the current update state (status + changelog), kicking the
   // async changelog fetch on the first tick a newer un-ignored commit appears. Never blocks on the
@@ -148,15 +184,17 @@ class UpdatePromptController {
   // OSD action callbacks (input thread).
   void confirm_update();  // consent to deploy; clears the badge until a newer commit
   void ignore_version();  // hide the badge until a newer commit (persisted marker)
-  // Ask the portal to update right now. The same call a confirm makes: the portal checks the remote
-  // itself and answers Empty when there is nothing newer, so this is a real check the user can run
-  // at any moment instead of waiting out UpdateMonitor's ~30 min poll.
+  // Read the published ref and say what it found: "latest", or an update to confirm. Installs
+  // nothing (U4). Without a configured probe it falls back to the portal's Update(), which checks
+  // by deploying and answers Empty when there is nothing newer.
   void check_now();
 
   // Terminal deploy verdict, called on the UPDATER's thread. Only records it; the input thread
   // renders it on the next tick.
   void on_deploy_result(UpdateProgress progress, const std::string& error_name,
                         const std::string& error_message);
+  // A Running deploy Progress, called on the UPDATER's thread (UpdaterConfig::on_running).
+  void on_deploy_progress(std::uint32_t op, std::uint32_t n_ops, std::uint32_t percent);
 
   DeployPhase deploy_phase() const;  // for diagnostics and tests
 
@@ -164,8 +202,11 @@ class UpdatePromptController {
   void kick_changelog();
   bool fetch_done() const;
   ChangelogView current_changelog() const;
-  void feed(bool has_update, bool can_check, const std::string& status, const std::string& notes);
+  void feed(const UpdatesView& view, const std::string& notes);
   void request_deploy(const char* why);
+  bool probe_configured() const;
+  void kick_probe();
+  void consume_probe();
 
   UpdatePromptConfig cfg_;
   DevToolsClient client_;      // input-thread only (the confirm toast)
@@ -176,6 +217,7 @@ class UpdatePromptController {
   // Last values fed to the OSD, so tick() only calls set_update_model on a change.
   bool fed_has_ = false;
   bool fed_check_ = false;
+  bool fed_quit_ = false;
   bool fed_valid_ = false;
   std::string fed_status_, fed_notes_;
 
@@ -185,7 +227,8 @@ class UpdatePromptController {
   DeployPhase deploy_phase_ = DeployPhase::Idle;
   std::string deploy_error_;
   bool deploy_fresh_ = false;
-  long requested_at_ms_ = 0;  // input thread: when the pending deploy was requested
+  long requested_at_ms_ = 0;     // when the pending deploy was requested or last reported progress
+  std::string deploy_progress_;  // deploy_progress_status of the latest Running report
 
   // Changelog fetch: 0 idle, 1 fetching, 2 done. cached_ is published by the release-store of
   // fetch_state_ = 2; the input thread reads it only after an acquire-load sees 2.
@@ -193,6 +236,21 @@ class UpdatePromptController {
   ChangelogView cached_;
   std::string installed_notes_;  // release notes for the RUNNING version ("what's new"), same guard
   std::thread fetch_thread_;
+
+  // Ref probe: 0 idle, 1 running, 2 done. probe_result_/probe_commit_ are published by the
+  // release-store of 2 and read by the input thread after an acquire-load sees it, exactly like
+  // cached_. Everything else here is input-thread only.
+  std::atomic<int> probe_state_{0};
+  RefCheck probe_result_ = RefCheck::Unknown;
+  std::string probe_commit_;  // short remote commit from the probe
+  std::thread probe_thread_;
+  bool launch_probed_ = false;   // the one probe a launch makes has been started
+  bool probe_for_user_ = false;  // the running probe answers a "Check for updates" press
+  // The probe's last announcement, and a commit the portal then answered Empty for. Only the probe
+  // is filtered by it: a ref the portal cannot install from (a stale CDN copy of the summary, an
+  // install from another remote) must not be re-announced on every check.
+  std::string probe_announced_;
+  std::string probe_refused_;
 };
 
 }  // namespace deckback

@@ -19,6 +19,7 @@
 #include "config.hpp"
 #include "config_store.hpp"
 #include "gestures.hpp"
+#include "http.hpp"
 #include "input.hpp"
 #include "keymap.hpp"
 #include "log.hpp"
@@ -58,17 +59,24 @@ std::string update_policy_status(SelfUpdateMode mode) {
     case SelfUpdateMode::Off:
       return "Updates are off. Update Deckback in Discover or run flatpak update.";
     case SelfUpdateMode::Notify:
-      // NOT "no update is available" — that was a claim the app had never earned. Nothing checks at
-      // launch; the portal announces availability on its own ~30 min poll and never announces the
-      // absence of one, so for the first half hour of every session silence means only that. A
-      // user who restarted expecting the update they had just approved read that line as proof the
-      // update had landed.
-      return "No update announced yet. Deckback checks about every half hour — or check now.";
+      // NOT "no update is available" — that was a claim the app had never earned. This is what the
+      // tab says until the launch probe answers (it then says "latest" itself) or when the probe
+      // could not read the repo; the portal never announces the absence of an update. A user who
+      // restarted expecting the update they had just approved read "no update" as proof it landed.
+      return "No update announced yet. Deckback checks at launch and about every half hour — or "
+             "check now.";
     case SelfUpdateMode::Auto:
       return "Automatic updates are enabled. New versions install when they are available.";
   }
   return "Update status is not available.";
 }
+
+// The published ref the update probe reads (TASKS U4): the commit `flatpak update` would move to on
+// the official remote. DECKBACK_UPDATE_REF_URL points a staging test at another repo.
+constexpr std::string_view kUpdateRefUrl =
+    "https://properrr.github.io/deckback/repo/refs/heads/app/io.github.properrr.deckback/x86_64/"
+    "master";
+constexpr long kUpdateRefTimeoutSec = 6;
 
 // Single-instance lock: flock a file in the runtime dir. Held for the process lifetime.
 bool acquire_single_instance_lock(const std::string& runtime_dir) {
@@ -428,39 +436,42 @@ int main(int argc, char** argv) {
   // playback. Constructed whenever CDP is up, independent of self-update. The update callbacks
   // route to update_prompt, which is emplaced below and feeds the OSD Updates tab.
   if (cdp_nav) {
-    osd.emplace(
-        OsdMenuConfig{.cdp_host = "127.0.0.1",
-                      .cdp_port = cfg->remote_debugging_port,
-                      .local_version = kDeckbackVersion,
-                      .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll, gestures_on},
-                      .about = parse_metainfo(load_metainfo().value_or("")),
-                      .captions = &captions,
-                      .on_update_confirm =
-                          [&update_prompt] {
-                            if (update_prompt) update_prompt->confirm_update();
-                          },
-                      .on_update_ignore =
-                          [&update_prompt] {
-                            if (update_prompt) update_prompt->ignore_version();
-                          },
-                      .on_update_check =
-                          [&update_prompt] {
-                            if (update_prompt) update_prompt->check_now();
-                          },
-                      // Ordered: checkpoint BEFORE the shutdown request, or "your place is saved"
-                      // is a lie. request_shutdown() is the only path the watchdog scores as
-                      // success rather than a crash to restart, so this must never just kill the
-                      // child. Runs on the input thread; DevToolsClient is internally synchronized
-                      // and request_shutdown() is async-signal-safe.
-                      .on_exit =
-                          [&player] {
-                            if (player) player->on_suspend();
-                            info("exit: user confirmed — shutting down");
-                            Watchdog::request_shutdown();
-                          }});
+    // Ordered: checkpoint BEFORE the shutdown request, or "your place is saved" is a lie.
+    // request_shutdown() is the only path the watchdog scores as success rather than a crash to
+    // restart, so this must never just kill the child. Runs on the input thread; DevToolsClient is
+    // internally synchronized and request_shutdown() is async-signal-safe.
+    const auto graceful_exit = [&player](const char* why) {
+      if (player) player->on_suspend();
+      info(why);
+      Watchdog::request_shutdown();
+    };
+    osd.emplace(OsdMenuConfig{
+        .cdp_host = "127.0.0.1",
+        .cdp_port = cfg->remote_debugging_port,
+        .local_version = kDeckbackVersion,
+        .overlay = OverlayContext{cfg->keymap, cfg->right_stick_scroll, gestures_on},
+        .about = parse_metainfo(load_metainfo().value_or("")),
+        .captions = &captions,
+        .on_update_confirm =
+            [&update_prompt] {
+              if (update_prompt) update_prompt->confirm_update();
+            },
+        .on_update_ignore =
+            [&update_prompt] {
+              if (update_prompt) update_prompt->ignore_version();
+            },
+        .on_update_check =
+            [&update_prompt] {
+              if (update_prompt) update_prompt->check_now();
+            },
+        .on_update_quit =
+            [graceful_exit] {
+              graceful_exit("exit: closing so the staged update applies on relaunch");
+            },
+        .on_exit = [graceful_exit] { graceful_exit("exit: user confirmed — shutting down"); }});
     // "Check for updates" is wired through the notify-mode prompt, so offer it only there: in auto
     // mode the button had no handler behind it.
-    osd->set_update_model(false, cfg->self_update_mode == SelfUpdateMode::Notify,
+    osd->set_update_model(false, cfg->self_update_mode == SelfUpdateMode::Notify, false,
                           update_policy_status(cfg->self_update_mode), "");
   }
 
@@ -477,22 +488,34 @@ int main(int argc, char** argv) {
     // Runs on the updater's loop thread. update_prompt is emplaced below and updater->start() is
     // called after it, and shutdown stops the updater first, so the reference is live for every
     // call.
-    if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav)
+    if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav) {
       uc.on_terminal = [&update_prompt](UpdateProgress p, std::string name, std::string msg) {
         if (update_prompt) update_prompt->on_deploy_result(p, name, msg);
       };
+      uc.on_running = [&update_prompt](std::uint32_t op, std::uint32_t n_ops, std::uint32_t pct) {
+        if (update_prompt) update_prompt->on_deploy_progress(op, n_ops, pct);
+      };
+    }
     updater = Updater::create(std::move(uc));
     info(std::format("startup: self-update mode = {}",
                      self_update_mode_name(cfg->self_update_mode)));
     if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav) {
-      update_prompt.emplace(
-          UpdatePromptConfig{.cdp_port = cfg->remote_debugging_port,
-                             .state_dir = resolve_state_dir(runtime_dir),
-                             .local_version = kDeckbackVersion,
-                             .idle_status = update_policy_status(cfg->self_update_mode),
-                             .state = &update_state,
-                             .updater = updater.get(),
-                             .osd = osd ? &*osd : nullptr});
+      UpdatePromptConfig pc{.cdp_port = cfg->remote_debugging_port,
+                            .state_dir = resolve_state_dir(runtime_dir),
+                            .local_version = kDeckbackVersion,
+                            .idle_status = update_policy_status(cfg->self_update_mode),
+                            .state = &update_state,
+                            .updater = updater.get(),
+                            .osd = osd ? &*osd : nullptr};
+      // The ref probe (U4). Outside the sandbox there is no running commit, so a workstation run
+      // keeps the portal-only behaviour.
+      pc.running_commit = read_running_commit();
+      if (pc.running_commit.empty())
+        info("update: no running commit (not sandboxed) — Check for updates uses the portal");
+      pc.fetch_remote_ref = [url = env_or("DECKBACK_UPDATE_REF_URL", std::string(kUpdateRefUrl))] {
+        return http_get(url, kUpdateRefTimeoutSec, "deckback-updater/1");
+      };
+      update_prompt.emplace(std::move(pc));
       // Test aid: force the notify UI (dot + one-time card + changelog) without waiting for the
       // portal's ~30-min poll. DECKBACK_FAKE_UPDATE=<any-commit-string> publishes availability at
       // launch. Confirming the update still routes through the real portal deploy.

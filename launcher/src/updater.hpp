@@ -1,5 +1,6 @@
 #pragma once
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -56,8 +57,24 @@ enum class UpdatePermission { Unset, Ask, Yes, No };
 UpdatePermission decode_update_permission(const std::vector<std::string>& perms);
 const char* update_permission_name(UpdatePermission p);
 
+// The value of `key` inside `[section]` of /.flatpak-info text (keyfile format); empty when absent.
+// `section` is given without brackets. Pure.
+std::string parse_flatpak_info_value(const std::string& text, std::string_view section,
+                                     std::string_view key);
 // App id from /.flatpak-info text (`[Application]` section, `name=` key); empty when not sandboxed.
 std::string parse_flatpak_app_id(const std::string& text);
+// The ostree commit this process was started from (`[Instance] app-commit` in /.flatpak-info), or
+// "" outside the sandbox. It is the RUNNING commit: a deploy staged during this session does not
+// change it until the next launch.
+std::string read_running_commit();
+
+// Commits are keyed by their first 12 hex digits everywhere the UI sees them: the dedup markers
+// (update_card_shown_v1 / update_dot_dismissed_v1) store this form, so every source of "commit X is
+// available" must shorten the same way or one commit would read as two.
+inline constexpr std::size_t kShortCommitLen = 12;
+inline std::string short_commit(std::string_view commit) {
+  return std::string(commit.substr(0, kShortCommitLen));
+}
 
 // Session-bus reconnect backoff (durable/dbus-reconnect.md). When the updater's session-bus
 // connection drops mid-session, or flatpak-portal restarts and orphans the monitor, the loop
@@ -107,6 +124,11 @@ struct UpdaterConfig {
   // user got an unconditional success toast either way.
   std::function<void(UpdateProgress, std::string error_name, std::string error_message)>
       on_terminal;
+  // Every Running Progress of a deploy: operation `op` (0-based) of `n_ops`, at `percent` (0–100)
+  // of that operation (flatpak-portal: 0–99 while running, 100 once the operation is done). Same
+  // thread rules as on_terminal. A runtime or GL-driver bump can be hundreds of MB, so this is what
+  // tells the user the deploy is alive.
+  std::function<void(std::uint32_t op, std::uint32_t n_ops, std::uint32_t percent)> on_running{};
 };
 
 class Updater {

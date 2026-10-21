@@ -60,6 +60,18 @@ DECKBACK_TEST_MAIN(updater) {
   assert(parse_flatpak_app_id("name=orphan-before-any-section\n").empty());
   assert(parse_flatpak_app_id("").empty());
 
+  // The generic keyfile read behind it: [Instance] app-commit is the RUNNING commit (U4).
+  const std::string info =
+      "[Application]\nname=io.github.properrr.deckback\n"
+      "[Instance]\ninstance-id=123\napp-commit-extra=nope\napp-commit=abc123\n";
+  assert(parse_flatpak_info_value(info, "Instance", "app-commit") == "abc123");  // not the prefix
+  assert(parse_flatpak_info_value(info, "Application", "app-commit").empty());
+  assert(
+      parse_flatpak_info_value("[Instancex]\napp-commit=no\n", "Instance", "app-commit").empty());
+  assert(parse_flatpak_info_value(info, "Instance", "missing").empty());
+  assert(short_commit("0123456789abcdef") == "0123456789ab");
+  assert(short_commit("abc") == "abc");
+
   // Reconnect backoff (durable/dbus-reconnect.md): exponential from 1s, doubling, capped at 60s.
   // The shift is clamped so a large attempt index is defined, not UB (review N9).
   assert(reconnect_delay_ms(0) == 1000);

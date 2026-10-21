@@ -43,9 +43,9 @@ void test_button_is_redrawn_when_a_same_url_reload_wipes_it() {
 
 void test_update_buttons() {
   // Self-update off: nothing to offer, and an enabled control that cannot work is worse than none.
-  assert(osd_update_buttons(false, false).empty());
+  assert(osd_update_buttons(false, false, false).empty());
 
-  const auto b = osd_update_buttons(true, false);
+  const auto b = osd_update_buttons(true, false, false);
   assert(b.size() == 2);
   assert(b[0].first == "update.confirm");
   assert(b[1].first == "update.ignore");
@@ -53,14 +53,20 @@ void test_update_buttons() {
   // No announced update but a live updater: the manual check. Without it the tab is inert for the
   // first ~30 min of every session, because UpdateMonitor only announces on its own poll — which is
   // exactly what a user read as "it says there are no updates" right after restarting.
-  const auto c = osd_update_buttons(false, true);
+  const auto c = osd_update_buttons(false, true, false);
   assert(c.size() == 1);
   assert(c[0].first == "update.check");
 
   // An announced update wins: offering "check" alongside "update now" would be noise.
-  const auto d = osd_update_buttons(true, true);
+  const auto d = osd_update_buttons(true, true, false);
   assert(d.size() == 2);
   assert(d[0].first == "update.confirm");
+
+  // A staged update: leaving is the only thing that moves it forward, and it outranks the rest
+  // (the portal re-announces the staged commit until the restart, so has_update may still be set).
+  const auto e = osd_update_buttons(true, true, true);
+  assert(e.size() == 1);
+  assert(e[0].first == "update.quit");
 }
 
 void test_parse_verdict() {

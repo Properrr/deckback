@@ -32,9 +32,10 @@ std::string osd_status_line(std::string_view local_version, std::string_view ava
 
 // Updates-tab actions. `has_update` offers the deploy pair; `can_check` offers a manual check —
 // UpdateMonitor only announces availability on its own ~30 min poll, so without this the tab is
-// inert for the first half hour of every session and a user has no way to ask.
-std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update,
-                                                                    bool can_check);
+// inert for the first half hour of every session and a user has no way to ask. `can_quit` offers
+// Close now once an update is staged: it binds on the next launch.
+std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update, bool can_check,
+                                                                    bool can_quit);
 
 struct OsdVerdict {
   // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
@@ -60,6 +61,9 @@ struct OsdMenuConfig {
   std::function<void()> on_update_confirm;
   std::function<void()> on_update_ignore;
   std::function<void()> on_update_check;
+  // Close now (a staged update). Null hides nothing but leaves the button inert, so wire it with
+  // the same graceful exit as on_exit.
+  std::function<void()> on_update_quit;
   // Fired when the Exit row's hold completes. Null leaves the row inert.
   std::function<void()> on_exit;
   // How long A must be held on the Exit row. Also drives the fill animation, so the bar and the
@@ -97,7 +101,7 @@ class OsdMenuController {
   // Thread-safe: feed the Updates tab + button badge. `status` is supplied by the update-policy
   // owner rather than inferred from `has_update`: false means either "no update" or "not checked",
   // and the OSD must never turn that ambiguity into a false "latest" claim.
-  void set_update_model(bool has_update, bool can_check, std::string_view status,
+  void set_update_model(bool has_update, bool can_check, bool can_quit, std::string_view status,
                         std::string_view notes);
   bool update_available() const;
 
@@ -137,6 +141,7 @@ class OsdMenuController {
   mutable std::mutex model_mu_;
   bool has_update_ = false;
   bool can_check_ = false;
+  bool can_quit_ = false;
   std::string status_;
   std::string notes_;
 };

@@ -40,7 +40,8 @@ A small **Settings** button sits in the top-right corner (except while a video i
 Navigate with the **D-pad** (the **right stick** scrolls a long list), **A** to select, **B** to go
 back or close, and **L1 / R1** to switch tabs. When an update is available a small amber dot appears
 on the Settings button; on the **Updates** tab, **A** on *Update now* installs it (it applies the
-next time you open Deckback) and **Y** ignores that version. Nothing installs on its own in the
+next time you open Deckback, so *Close now* appears once it is installed) and **Y** ignores that
+version. Nothing installs on its own in the
 default `notify` mode — see [Updates](#updates).
 
 > **Note on seeking.** L1/R1 send the player's arrow keys, which *scrub* the progress bar — the same
@@ -63,11 +64,15 @@ nothing.
 By default (`self_update_mode: "notify"` in `app.json`) Deckback **tells you** when a new version is
 out but never installs it behind your back. A new release shows up as an amber dot on the Settings
 button and, on the **Updates** tab, the changelog with **Update now** / **Ignore this version**.
-Choosing *Update now* downloads only Deckback, from its own repo — no root, no password — and it
-applies the next time you open the app. **Check for updates** asks the repo right away instead of
-waiting for the periodic check (up to ~30 min, and skipped on a metered connection) — and installs
-the update if there is one. Keeping the runtime and your other Flatpaks current is always a separate
-`flatpak update --user` in Desktop Mode.
+Deckback looks for a new release each time it starts, and the Flatpak portal also checks about every
+half hour. **Check for updates** asks the repo right away; it only tells you what it found and never
+installs anything by itself. If the repo cannot be reached, it falls back to asking the portal, which
+checks by installing — the same as *Update now*.
+
+Choosing *Update now* downloads only Deckback, from its own repo — no root, no password — and shows
+its progress. The new version applies the next time you open the app: choose **Close now**, then start
+Deckback again from your Library. Keeping the runtime and your other Flatpaks current is always a
+separate `flatpak update --user` in Desktop Mode.
 
 If the Updates tab says a version **needs new system permissions**, Deckback cannot install it by
 itself (Flatpak forbids that for a self-update). In Desktop Mode, run the install one-liner again —
