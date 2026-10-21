@@ -282,7 +282,7 @@ void test_config_parses_keymap_object() {
     },
     "remote_debugging_port": 9222
   })";
-  const std::string path = "/tmp/deckback_input_test_cfg.json";
+  const std::string path = (deckback_test_tmpdir() / "deckback_input_test_cfg.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
   assert(f);
   std::fputs(json, f);
@@ -301,7 +301,7 @@ void test_config_parses_keymap_object() {
 
 void test_config_missing_keymap_is_empty_not_fatal() {
   const char* json = R"({"url":"https://x","remote_debugging_port":1})";
-  const std::string path = "/tmp/deckback_input_test_cfg2.json";
+  const std::string path = (deckback_test_tmpdir() / "deckback_input_test_cfg2.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
   assert(f);
   std::fputs(json, f);
@@ -327,7 +327,7 @@ void test_config_accepts_the_retired_touch_lock_keys() {
     "touch_lock_toast": false,
     "touch_lock_haptic": false
   })";
-  const std::string path = "/tmp/deckback_input_test_cfg3.json";
+  const std::string path = (deckback_test_tmpdir() / "deckback_input_test_cfg3.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
   assert(f);
   std::fputs(json, f);
@@ -341,7 +341,7 @@ void test_config_accepts_the_retired_touch_lock_keys() {
 // Defaults when the keys are absent: touch is inert via disable_touch (Options A+B).
 void test_config_touch_defaults() {
   const char* json = R"({"url":"https://x"})";
-  const std::string path = "/tmp/deckback_input_test_cfg4.json";
+  const std::string path = (deckback_test_tmpdir() / "deckback_input_test_cfg4.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
   assert(f);
   std::fputs(json, f);
@@ -368,7 +368,7 @@ void test_config_parses_right_stick() {
     "right_stick_slow_ms": 300,
     "right_stick_fast_ms": 60
   })";
-  const std::string path = "/tmp/deckback_input_test_cfg5.json";
+  const std::string path = (deckback_test_tmpdir() / "deckback_input_test_cfg5.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
   assert(f);
   std::fputs(json, f);
@@ -385,7 +385,7 @@ void test_config_parses_right_stick() {
 void test_config_skip_seconds() {
   // Present: parsed. Absent: the default 10 s stands (a hot-swapped app.json need not carry it).
   const char* json = R"({ "url": "https://x", "skip_seconds": 30 })";
-  const std::string path = "/tmp/deckback_input_test_skip.json";
+  const std::string path = (deckback_test_tmpdir() / "deckback_input_test_skip.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
   assert(f);
   std::fputs(json, f);
@@ -396,7 +396,7 @@ void test_config_skip_seconds() {
   std::remove(path.c_str());
 
   const char* json2 = R"({ "url": "https://x" })";
-  const std::string path2 = "/tmp/deckback_input_test_skip2.json";
+  const std::string path2 = (deckback_test_tmpdir() / "deckback_input_test_skip2.json").string();
   FILE* g = std::fopen(path2.c_str(), "w");
   assert(g);
   std::fputs(json2, g);
@@ -652,6 +652,15 @@ void test_find_control_for_action() {
                                  "toggle_captions") == BTN_SELECT);
   assert(find_control_for_action({{"x", "toggle_captions"}}, "toggle_captions") == BTN_X);
   assert(find_control_for_action({{"a", "select"}}, "toggle_captions") == -1);
+
+  // Aliased launcher actions resolve through their predicate, so every name the predicate accepts
+  // binds. "touch_gestures" was accepted by gestures_action and bound to nothing.
+  for (const char* alias : {"toggle_gestures", "touch_gestures", "toggle_touch"})
+    assert(find_control_for({{"a", "select"}, {"y", alias}}, gestures_action) == BTN_Y);
+  for (const char* alias : {"toggle_captions", "captions"})
+    assert(find_control_for({{"select", alias}}, captions_action) == BTN_SELECT);
+  assert(find_control_for({{"a", "select"}}, gestures_action) == -1);
+  assert(find_control_for({{"nosuch", "touch_gestures"}}, gestures_action) == -1);
 }
 
 void test_without_action() {

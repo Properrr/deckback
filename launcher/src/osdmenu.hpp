@@ -2,6 +2,7 @@
 #include <atomic>
 #include <functional>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -19,7 +20,8 @@ class CaptionSettings;
 
 // In-app OSD Settings menu (findings osd-menu-plan.md). Focus/tab/scroll state lives in
 // config/scripts/osd.js; this owns open/close, the top-right Settings button, playback gating, and
-// the C++<->JS command bridge. Invariant: capture <=> paint — exec() returning "gone" clears open_.
+// the C++<->JS command bridge. Invariant: capture <=> paint — exec() returning "gone" clears open_;
+// an unanswered command (kOsdUnreachable) does not, because it proves nothing about the paint.
 
 // The DOM id config/scripts/osd_button.js assigns. Shared with PageOverlay's presence probe, so the
 // drawn node and the node we look for cannot drift apart.
@@ -37,11 +39,15 @@ std::string osd_status_line(std::string_view local_version, std::string_view ava
 std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update, bool can_check,
                                                                     bool can_quit);
 
+// What exec() returns when the engine did not answer. Not a string osd.js ever produces.
+inline constexpr std::string_view kOsdUnreachable = "unreachable";
+
 struct OsdVerdict {
   // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
   // a one-shot that closes (the Updates buttons); Hold = A landed on a hold-to-confirm control (the
-  // Exit row), which acts only once the caller's hold deadline elapses.
-  enum class Kind { Consumed, Close, Action, Apply, Hold, Gone } kind = Kind::Consumed;
+  // Exit row), which acts only once the caller's hold deadline elapses. Unreachable = no answer:
+  // the menu's state is unknown, so capture is kept and the reconcile tick decides.
+  enum class Kind { Consumed, Close, Action, Apply, Hold, Gone, Unreachable } kind = Kind::Consumed;
   std::string action;
 };
 OsdVerdict parse_verdict(std::string_view verdict);
@@ -109,7 +115,8 @@ class OsdMenuController {
   void on_page_reloaded();
 
  private:
-  std::string eval_op(DevToolsClient& client, const ScriptParams& params);
+  // The osd.js reply, or nullopt when the engine did not answer.
+  std::optional<std::string> eval_op(DevToolsClient& client, const ScriptParams& params);
   bool inject_open(DevToolsClient& client);
   void reconcile_open();  // capture <=> paint: release capture if the page reloaded the menu away
   void draw_button();

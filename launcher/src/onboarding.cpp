@@ -32,7 +32,10 @@ constexpr Label kActionLabels[] = {
     {"back", "Back"},
     {"playpause", "Play / pause"},
     {"toggle_captions", "Captions"},
-    {"toggle_gestures", "Touch gestures on / off"},
+    {"captions", "Captions"},  // every alias captions_action/gestures_action accepts binds, so each
+    {"toggle_gestures", "Touch gestures on / off"},  // needs a label rather than printing raw
+    {"touch_gestures", "Touch gestures on / off"},
+    {"toggle_touch", "Touch gestures on / off"},
     {"scrub_back", "Scrub back"},
     {"scrub_fwd", "Scrub forward"},
     {"seek_back_10", "Scrub back"},  // deprecated aliases still resolve, so they still print

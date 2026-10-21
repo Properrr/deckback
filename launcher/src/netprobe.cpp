@@ -9,47 +9,54 @@
 
 #include <cerrno>
 
+#include "util.hpp"  // mono_ms
+
 namespace deckback {
-namespace {
 
-long mono_ms() {
-  timespec ts{};
-  clock_gettime(CLOCK_MONOTONIC, &ts);
-  return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
-}
-
-}  // namespace
-
-bool tcp_reachable(const std::string& host, int port, int timeout_ms) {
+int connect_tcp(const std::string& host, int port, int timeout_ms) {
   addrinfo hints{};
   hints.ai_family = AF_UNSPEC;
   hints.ai_socktype = SOCK_STREAM;
   addrinfo* res = nullptr;
   const std::string port_s = std::to_string(port);
-  if (getaddrinfo(host.c_str(), port_s.c_str(), &hints, &res) != 0 || !res) return false;
+  if (getaddrinfo(host.c_str(), port_s.c_str(), &hints, &res) != 0 || !res) return -1;
 
-  bool ok = false;
-  for (addrinfo* ai = res; ai && !ok; ai = ai->ai_next) {
-    int fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
+  int fd = -1;
+  for (addrinfo* ai = res; ai; ai = ai->ai_next) {
+    fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
     if (fd < 0) continue;
+
     int flags = fcntl(fd, F_GETFL, 0);
     fcntl(fd, F_SETFL, flags | O_NONBLOCK);
     int rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
     if (rc == 0) {
-      ok = true;
-    } else if (errno == EINPROGRESS) {
+      fcntl(fd, F_SETFL, flags);
+      break;
+    }
+    if (errno == EINPROGRESS) {
       pollfd pfd{fd, POLLOUT, 0};
       if (poll(&pfd, 1, timeout_ms) > 0 && (pfd.revents & POLLOUT)) {
         int err = 0;
         socklen_t l = sizeof err;
         getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l);
-        ok = (err == 0);
+        if (err == 0) {
+          fcntl(fd, F_SETFL, flags);
+          break;
+        }
       }
     }
     close(fd);
+    fd = -1;
   }
   freeaddrinfo(res);
-  return ok;
+  return fd;
+}
+
+bool tcp_reachable(const std::string& host, int port, int timeout_ms) {
+  const int fd = connect_tcp(host, port, timeout_ms);
+  if (fd < 0) return false;
+  close(fd);
+  return true;
 }
 
 bool wait_online(const std::string& host, int port, int max_ms) {

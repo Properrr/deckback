@@ -24,7 +24,7 @@ bool has(const std::string& hay, const std::string& needle) {
   return hay.find(needle) != std::string::npos;
 }
 
-std::string tmp_path(const char* name) { return (fs::temp_directory_path() / name).string(); }
+std::string tmp_path(const char* name) { return (deckback_test_tmpdir() / name).string(); }
 
 const CaptionRow* row(const std::vector<CaptionRow>& rows, std::string_view key) {
   for (const CaptionRow& r : rows)

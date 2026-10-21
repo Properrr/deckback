@@ -214,6 +214,40 @@ void test_hold_ms_is_shared_with_the_page() {
   assert(saw);
 }
 
+// A command the page answers with "gone" (its JS context was wiped) releases capture at once.
+void test_gone_command_releases_capture() {
+  testing::FakeServer srv;
+  OsdMenuConfig cfg;
+  cfg.cdp_port = srv.port();
+  OsdMenuController osd(cfg);
+  assert(osd.open_menu());
+  srv.set_osd_cmd_reply("gone");
+  assert(parse_verdict(osd.exec("down")).kind == OsdVerdict::Kind::Gone);
+  assert(!osd.open());
+}
+
+// ...but a command nobody answered proves nothing about the menu. Treating it as "gone" released
+// capture while the menu was still painted, so the next presses drove Leanback behind it. Capture
+// holds, and the reconcile tick asks the page instead.
+void test_unanswered_command_keeps_capture() {
+  testing::FakeServer srv;
+  OsdMenuConfig cfg;
+  cfg.cdp_port = srv.port();
+  OsdMenuController osd(cfg);
+  assert(osd.open_menu());
+  srv.set_osd_cmd_reply("gone");  // would release capture, had the frame been answered
+  srv.close_after_frames(static_cast<int>(srv.take_requests().size()));  // drop the next frame
+  const std::string v = osd.exec("down");
+  assert(v == kOsdUnreachable);
+  assert(parse_verdict(v).kind == OsdVerdict::Kind::Unreachable);
+  assert(osd.open());
+
+  srv.close_after_frames(0);
+  srv.set_osd_state("gone");  // the page now says the menu really is gone
+  osd.tick(false);
+  assert(!osd.open());
+}
+
 DECKBACK_TEST_MAIN(osdmenu) {
   test_status_line();
   test_button_is_redrawn_when_a_same_url_reload_wipes_it();
@@ -227,6 +261,8 @@ DECKBACK_TEST_MAIN(osdmenu) {
   test_hold_verdict_is_not_an_action();
   test_exit_row_is_disabled_without_a_handler();
   test_hold_ms_is_shared_with_the_page();
+  test_gone_command_releases_capture();
+  test_unanswered_command_keeps_capture();
   std::puts("osdmenu_test: all passed");
   return 0;
 }

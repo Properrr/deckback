@@ -41,6 +41,7 @@ OsdVerdict parse_verdict(std::string_view v) {
   if (v.substr(0, kApply.size()) == kApply)
     return {OsdVerdict::Kind::Apply, std::string(v.substr(kApply.size()))};
   if (v == "hold") return {OsdVerdict::Kind::Hold, {}};
+  if (v == kOsdUnreachable) return {OsdVerdict::Kind::Unreachable, {}};
   return {OsdVerdict::Kind::Consumed, {}};
 }
 
@@ -49,10 +50,11 @@ OsdMenuController::OsdMenuController(OsdMenuConfig cfg)
       client_(cfg_.cdp_host, cfg_.cdp_port),
       button_(client_, kOsdButtonElementId) {}
 
-std::string OsdMenuController::eval_op(DevToolsClient& client, const ScriptParams& params) {
+std::optional<std::string> OsdMenuController::eval_op(DevToolsClient& client,
+                                                      const ScriptParams& params) {
   std::string js = ScriptLibrary::instance().render("osd", params);
-  if (js.empty()) return "gone";
-  return client.eval_string(js).value_or("gone");
+  if (js.empty()) return "gone";  // no osd script: no menu can be on screen
+  return client.eval_string(js);
 }
 
 bool OsdMenuController::inject_open(DevToolsClient& client) {
@@ -96,7 +98,7 @@ bool OsdMenuController::inject_open(DevToolsClient& client) {
       .set("about_links", links)
       .set("exit_enabled", cfg_.exit_enabled && static_cast<bool>(cfg_.on_exit))
       .set("hold_ms", cfg_.exit_hold_ms);
-  return eval_op(client, pm) == "ok";
+  return eval_op(client, pm).value_or("") == "ok";
 }
 
 void OsdMenuController::fire_exit() {
@@ -121,8 +123,14 @@ void OsdMenuController::close_menu() {
 }
 
 std::string OsdMenuController::exec(std::string_view cmd) {
-  const std::string v =
+  const std::optional<std::string> reply =
       eval_op(client_, ScriptParams().set("op", std::string_view("cmd")).set("cmd", cmd));
+  // No answer (a CDP timeout, a dropped socket) says nothing about the menu, which is most likely
+  // still painted. Reading it as "gone" released capture under a visible menu, so the next keys
+  // drove Leanback behind it. Keep capture and let reconcile_open() ask the page on its next tick:
+  // a reload that really took the menu away answers "gone" there.
+  if (!reply) return std::string(kOsdUnreachable);
+  const std::string& v = *reply;
   const OsdVerdict pv = parse_verdict(v);
   switch (pv.kind) {
     case OsdVerdict::Kind::Gone:
@@ -153,6 +161,7 @@ std::string OsdMenuController::exec(std::string_view cmd) {
     case OsdVerdict::Kind::Hold:
       // The input layer owns the hold deadline (it sees the release edge); nothing to do here.
       break;
+    case OsdVerdict::Kind::Unreachable:  // a page string cannot spell it; only the !reply path
     case OsdVerdict::Kind::Consumed:
       break;
   }
@@ -252,7 +261,11 @@ void OsdMenuController::push_update_model() {
       .set("upd_has", has_update)
       .set("upd_status", status)
       .set("upd_buttons", osd_update_buttons(has_update, can_check, can_quit));
-  if (eval_op(client_, pm) == "gone") open_.store(false, std::memory_order_release);
+  const std::optional<std::string> r = eval_op(client_, pm);
+  if (!r)
+    model_dirty_.store(true, std::memory_order_release);  // unanswered: push it again next tick
+  else if (*r == "gone")
+    open_.store(false, std::memory_order_release);
 }
 
 bool OsdMenuController::update_available() const {

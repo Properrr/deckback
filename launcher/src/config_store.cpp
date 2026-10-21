@@ -1,12 +1,6 @@
 #include "config_store.hpp"
 
-#include <fcntl.h>
-#include <unistd.h>
-
-#include <cerrno>
-#include <filesystem>
-#include <fstream>
-#include <sstream>
+#include <variant>
 
 #include "config.hpp"
 #include "fileio.hpp"
@@ -14,7 +8,6 @@
 
 namespace deckback {
 namespace {
-namespace fs = std::filesystem;
 
 // `disable_touch` is here for a testability reason, not a settings one: the flag is baked into the
 // read-only /app/share/deckback/app.json, so on an installed Flatpak there was no way to turn it
@@ -24,10 +17,43 @@ namespace fs = std::filesystem;
 // after a Cobalt bump. One overlay key retires that.
 // `touch_hide_cursor` is the other half of the same bisect (touch-gestures.md §7.0): apply()
 // honoured it, but a key missing here is dropped by load() first, so the knob silently did nothing.
-constexpr std::string_view kOverlayable[] = {
-    "captions_toast",  "caption_remember", "caption_type",  "caption_language", "caption_languages",
-    "caption_control", "caption_on",       "disable_touch", "touch_gestures",   "touch_hide_cursor",
+//
+// ONE table drives both the allowlist (load/put) and apply(). They were two lists, and a key in one
+// but not the other is a knob that silently does nothing — `touch_hide_cursor` was exactly that.
+using OverlayMember =
+    std::variant<bool Config::*, std::string Config::*, std::vector<std::string> Config::*>;
+struct OverlayKey {
+  std::string_view key;
+  OverlayMember member;
 };
+const OverlayKey kOverlayable[] = {
+    {"captions_toast", &Config::captions_toast},
+    {"caption_remember", &Config::caption_remember},
+    {"caption_type", &Config::caption_type},
+    {"caption_language", &Config::caption_language},
+    {"caption_languages", &Config::caption_languages},
+    {"caption_control", &Config::caption_control},
+    {"caption_on", &Config::caption_on},
+    {"disable_touch", &Config::disable_touch},
+    {"touch_gestures", &Config::touch_gestures},
+    {"touch_hide_cursor", &Config::touch_hide_cursor},
+};
+
+// A value of the wrong JSON type leaves the field at its app.json value.
+void assign(Config& c, bool Config::*m, const json::Value& v) {
+  if (auto b = v.as_bool()) c.*m = *b;
+}
+void assign(Config& c, std::string Config::*m, const json::Value& v) {
+  if (const std::string* s = v.as_string()) c.*m = *s;
+}
+void assign(Config& c, std::vector<std::string> Config::*m, const json::Value& v) {
+  const std::vector<json::Value>* a = v.as_array();
+  if (!a) return;
+  std::vector<std::string> out;
+  for (const json::Value& e : *a)
+    if (const std::string* s = e.as_string()) out.push_back(*s);
+  c.*m = std::move(out);
+}
 
 const json::Value* find_member(const std::vector<json::Member>& members, std::string_view key) {
   for (const json::Member& kv : members)
@@ -38,8 +64,8 @@ const json::Value* find_member(const std::vector<json::Member>& members, std::st
 }  // namespace
 
 bool is_overlayable(std::string_view key) {
-  for (std::string_view k : kOverlayable)
-    if (k == key) return true;
+  for (const OverlayKey& k : kOverlayable)
+    if (k.key == key) return true;
   return false;
 }
 
@@ -70,31 +96,9 @@ void ConfigStore::load() {
 }
 
 void ConfigStore::apply(Config& c) const {
-  if (const json::Value* v = find_member(overlay_, "captions_toast"))
-    if (auto b = v->as_bool()) c.captions_toast = *b;
-  if (const json::Value* v = find_member(overlay_, "caption_remember"))
-    if (auto b = v->as_bool()) c.caption_remember = *b;
-  if (const json::Value* v = find_member(overlay_, "caption_type"))
-    if (auto s = v->as_string()) c.caption_type = *s;
-  if (const json::Value* v = find_member(overlay_, "caption_control"))
-    if (auto s = v->as_string()) c.caption_control = *s;
-  if (const json::Value* v = find_member(overlay_, "caption_on"))
-    if (auto b = v->as_bool()) c.caption_on = *b;
-  if (const json::Value* v = find_member(overlay_, "caption_language"))
-    if (auto s = v->as_string()) c.caption_language = *s;
-  if (const json::Value* v = find_member(overlay_, "disable_touch"))
-    if (auto b = v->as_bool()) c.disable_touch = *b;
-  if (const json::Value* v = find_member(overlay_, "touch_gestures"))
-    if (auto b = v->as_bool()) c.touch_gestures = *b;
-  if (const json::Value* v = find_member(overlay_, "touch_hide_cursor"))
-    if (auto b = v->as_bool()) c.touch_hide_cursor = *b;
-  if (const json::Value* v = find_member(overlay_, "caption_languages"))
-    if (const std::vector<json::Value>* a = v->as_array()) {
-      std::vector<std::string> langs;
-      for (const json::Value& e : *a)
-        if (const std::string* s = e.as_string()) langs.push_back(*s);
-      c.caption_languages = std::move(langs);
-    }
+  for (const OverlayKey& k : kOverlayable)
+    if (const json::Value* v = find_member(overlay_, k.key))
+      std::visit([&](auto m) { assign(c, m, *v); }, k.member);
 }
 
 bool ConfigStore::has(std::string_view key) const { return find_member(overlay_, key) != nullptr; }
@@ -140,51 +144,11 @@ bool ConfigStore::remove(std::string_view key) {
 }
 
 bool ConfigStore::save() const {
-  fs::path p(path_);
-  std::error_code ec;
-  if (p.has_parent_path()) {
-    fs::create_directories(p.parent_path(), ec);
-    if (ec) {
-      warn("config: cannot create " + p.parent_path().string());
-      return false;
-    }
-  }
-
-  const std::string text = json::dump(json::Value::object(overlay_));
-  const std::string tmp = path_ + ".tmp";
-  const int fd = ::open(tmp.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
-  if (fd < 0) {
-    warn("config: cannot open " + tmp + " for write");
-    return false;
-  }
-  const char* data = text.data();
-  size_t left = text.size();
-  while (left > 0) {
-    const ssize_t n = ::write(fd, data, left);
-    if (n < 0 && errno == EINTR) continue;
-    if (n <= 0) {
-      ::close(fd);
-      ::unlink(tmp.c_str());
-      warn("config: write failed on " + tmp);
-      return false;
-    }
-    data += n;
-    left -= static_cast<size_t>(n);
-  }
-  const bool synced = ::fsync(fd) == 0;
-  const bool closed = ::close(fd) == 0;
-  if (!synced || !closed) {
-    ::unlink(tmp.c_str());
-    warn("config: sync failed on " + tmp);
-    return false;
-  }
-  fs::rename(tmp, p, ec);
-  if (ec) {
-    fs::remove(tmp, ec);
-    warn("config: rename failed for " + path_);
-    return false;
-  }
-  return true;
+  // Atomic (fileio write_file_atomic): a crash mid-save must leave the previous user.json, never a
+  // truncated one that load() would then reject wholesale.
+  if (write_file_atomic(path_, json::dump(json::Value::object(overlay_)))) return true;
+  warn("config: could not save " + path_);
+  return false;
 }
 
 }  // namespace deckback

@@ -10,7 +10,7 @@
 namespace fs = std::filesystem;
 
 DECKBACK_TEST_MAIN(profile) {
-  const fs::path root = fs::temp_directory_path() / "deckback-profile-test";
+  const fs::path root = deckback_test_tmpdir() / "deckback-profile-test";
   fs::remove_all(root);
   fs::create_directories(root / "runtime" / "deckback-profile/Local Storage");
   std::ofstream(root / "runtime/deckback-profile/Cookies") << "legacy";

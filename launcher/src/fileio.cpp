@@ -1,8 +1,11 @@
 #include "fileio.hpp"
 
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <unistd.h>
 
+#include <cerrno>
 #include <filesystem>
 #include <format>
 #include <fstream>
@@ -29,6 +32,36 @@ bool write_file(const std::string& path, std::string_view bytes) {
   f.write(bytes.data(), static_cast<std::streamsize>(bytes.size()));
   f.close();  // flush before judging: a full disk fails here, not at write()
   return f.good();
+}
+
+bool write_file_atomic(const std::string& path, std::string_view bytes) {
+  std::error_code ec;
+  const std::filesystem::path p(path);
+  if (p.has_parent_path()) std::filesystem::create_directories(p.parent_path(), ec);
+  const std::string part = path + ".part";
+  const int fd = ::open(part.c_str(), O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0644);
+  if (fd < 0) return false;
+  const char* data = bytes.data();
+  size_t left = bytes.size();
+  bool ok = true;
+  while (left > 0) {
+    const ssize_t n = ::write(fd, data, left);
+    if (n < 0 && errno == EINTR) continue;
+    if (n <= 0) {
+      ok = false;
+      break;
+    }
+    data += n;
+    left -= static_cast<size_t>(n);
+  }
+  ok = ::fsync(fd) == 0 && ok;
+  ok = ::close(fd) == 0 && ok;
+  if (ok) std::filesystem::rename(part, p, ec);
+  if (!ok || ec) {
+    std::filesystem::remove(part, ec);
+    return false;
+  }
+  return true;
 }
 
 bool file_exists(const std::string& path) {

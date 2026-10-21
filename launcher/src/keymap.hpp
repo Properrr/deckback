@@ -170,6 +170,12 @@ std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arr
 int find_control_for_action(const std::vector<std::pair<std::string, std::string>>& keymap,
                             std::string_view action);
 
+// The same lookup for an action with aliases, matched by its predicate (gestures_action,
+// captions_action). Looking up the alias names one by one is how `"y": "touch_gestures"` came to be
+// accepted by gestures_action yet bound to nothing: the lookup listed two of its three names.
+int find_control_for(const std::vector<std::pair<std::string, std::string>>& keymap,
+                     bool (*matches)(std::string_view));
+
 // The evdev EV_KEY code of a Deck control by name ("a", "b", "y", ...), or -1 if no such control.
 // Independent of the user's keymap, so a fixed-button UI (e.g. the update card's A/B/Y) resolves
 // the same physical buttons no matter how app.json is configured.

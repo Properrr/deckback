@@ -220,6 +220,15 @@ void test_control_characters_rejected_in_strings() {
 
 }  // namespace
 
+// dump() and the CDP client share one escaper (util.hpp js_string_escape). Every control byte has
+// to come back out of parse() unchanged, which parse() can only do if dump() escaped it.
+void test_dump_escapes_control_characters() {
+  const std::string raw("q\"\\\b\f\n\r\t\x01\x1f\0end", 14);
+  const std::string text = dump(Value(raw), -1);
+  assert(text.find('\x01') == std::string::npos && text.find('\0') == std::string::npos);
+  assert(*must_parse(text).as_string() == raw);
+}
+
 DECKBACK_TEST_MAIN(json) {
   test_scalars();
   test_regression_bool_is_not_prefix_matched();
@@ -238,6 +247,7 @@ DECKBACK_TEST_MAIN(json) {
   test_errors_carry_a_location();
   test_deep_nesting_is_bounded();
   test_control_characters_rejected_in_strings();
+  test_dump_escapes_control_characters();
   std::puts("json_test: ok");
   return 0;
 }

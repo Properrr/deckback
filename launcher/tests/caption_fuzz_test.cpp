@@ -28,7 +28,7 @@ namespace {
 namespace fs = std::filesystem;
 
 std::string tmp_path(int n) {
-  return (fs::temp_directory_path() / ("deckback_cc_fuzz_" + std::to_string(n) + ".json")).string();
+  return (deckback_test_tmpdir() / ("deckback_cc_fuzz_" + std::to_string(n) + ".json")).string();
 }
 
 bool has(const std::string& hay, std::string_view needle) {

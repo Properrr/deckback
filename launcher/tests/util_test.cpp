@@ -30,6 +30,12 @@ static void test_js_string_escape() {
   assert(js_string_escape("a\"b") == "a\\\"b");
   assert(js_string_escape("a\\b") == "a\\\\b");
   assert(js_string_escape("a\nb\rc\td") == "a\\nb\\rc\\td");
+  assert(js_string_escape("\b\f") == "\\b\\f");
+  // Every other control byte as \u00XX: raw, it makes the CDP message invalid JSON.
+  assert(js_string_escape(std::string_view("a\x01z\x1f", 4)) == "a\\u0001z\\u001f");
+  assert(js_string_escape(std::string_view("\0", 1)) == "\\u0000");
+  // UTF-8 above ASCII passes through: both JSON and JS take it raw.
+  assert(js_string_escape("\xC3\xA9") == "\xC3\xA9");
 }
 
 static void test_ascii_lower() {

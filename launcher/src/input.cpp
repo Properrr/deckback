@@ -116,8 +116,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       (name == "lt" ? lt_key_ : rt_key_) = std::move(key);
   }
 
-  gestures_code_ = find_control_for_action(keymap.base, "toggle_gestures");
-  if (gestures_code_ < 0) gestures_code_ = find_control_for_action(keymap.base, "toggle_touch");
+  gestures_code_ = find_control_for(keymap.base, gestures_action);
   if (gestures_code_ >= 0 && !gestures_) {
     // Bound but with no router: touch_gestures is off (the shipped default), or disable_touch won
     // the exclusion in main() — which warns loudly on its own. The binding ships bound so enabling
@@ -128,8 +127,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     info(std::format("input: bind touch gestures (code {}) -> router on/off", gestures_code_));
   }
 
-  captions_code_ = find_control_for_action(keymap.base, "toggle_captions");
-  if (captions_code_ < 0) captions_code_ = find_control_for_action(keymap.base, "captions");
+  captions_code_ = find_control_for(keymap.base, captions_action);
   if (captions_code_ >= 0 && !captions_) {
     warn("input: captions bound but no CaptionSettings — toggle disabled");
     captions_code_ = -1;

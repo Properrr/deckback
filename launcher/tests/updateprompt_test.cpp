@@ -168,7 +168,7 @@ static void test_decision() {
 
 static void test_markers() {
   namespace fs = std::filesystem;
-  const fs::path dir = fs::temp_directory_path() / "deckback_updateprompt_test";
+  const fs::path dir = deckback_test_tmpdir() / "deckback_updateprompt_test";
   fs::remove_all(dir);
   const std::string sdir = dir.string();
 
@@ -292,7 +292,7 @@ void test_deploy_toast() {
 // pin the phase for the rest of the session, so the panel kept saying "latest" over a real update.
 void test_new_commit_after_an_empty_check_is_announced() {
   namespace fs = std::filesystem;
-  const fs::path dir = fs::temp_directory_path() / "deckback_updateprompt_recheck";
+  const fs::path dir = deckback_test_tmpdir() / "deckback_updateprompt_recheck";
   fs::remove_all(dir);
   fs::create_directories(dir);
 
@@ -327,7 +327,7 @@ void test_new_commit_after_an_empty_check_is_announced() {
 // running -- must not leave the tab on "Updating…" with no buttons until the next launch.
 void test_a_deploy_that_never_answers_times_out() {
   namespace fs = std::filesystem;
-  const fs::path dir = fs::temp_directory_path() / "deckback_updateprompt_timeout";
+  const fs::path dir = deckback_test_tmpdir() / "deckback_updateprompt_timeout";
   fs::remove_all(dir);
   fs::create_directories(dir);
 
@@ -432,8 +432,7 @@ OsdMenuConfig closed_osd() {
 // One controller's world: a closed OSD, the shared state, a counting updater and a "repo" whose ref
 // body the test sets (nullopt = unreachable).
 struct ProbeRig {
-  explicit ProbeRig(const char* name)
-      : dir(std::filesystem::temp_directory_path() / name), osd(closed_osd()) {
+  explicit ProbeRig(const char* name) : dir(deckback_test_tmpdir() / name), osd(closed_osd()) {
     std::filesystem::remove_all(dir);
     std::filesystem::create_directories(dir);
   }

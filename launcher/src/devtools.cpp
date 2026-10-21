@@ -1,7 +1,5 @@
 #include "devtools.hpp"
 
-#include <fcntl.h>
-#include <netdb.h>
 #include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -23,6 +21,7 @@
 #include <vector>
 
 #include "log.hpp"
+#include "netprobe.hpp"  // connect_tcp
 #include "util.hpp"
 
 namespace deckback {
@@ -131,15 +130,11 @@ std::string base64(const unsigned char* data, size_t n) {
   return out;
 }
 
-// JSON-escape for embedding in a CDP expression literal: the JS and JSON string escape sets
-// coincide for everything we emit, so this is the shared helper.
-std::string json_escape(std::string_view s) { return js_string_escape(s); }
-
 // Decode one CDP frame. A REPLY carries a top-level `id`; an EVENT does not and is dropped.
 //
-// The `"id":` pre-check is not redundant with the parse: `Page.enable`/`Network.enable` turn on an
-// event firehose whose payloads are far larger than any reply we ask for, and every one of them
-// would otherwise be fully parsed only to be thrown away. This keeps the parse on the reply path.
+// The `"id":` pre-check is not redundant with the parse: `Page.enable` turns on an event stream
+// whose payloads can be far larger than any reply we ask for, and every one of them would otherwise
+// be fully parsed only to be thrown away. This keeps the parse on the reply path.
 struct Reply {
   uint64_t id = 0;
   json::Value body;
@@ -156,45 +151,6 @@ std::optional<Reply> decode_reply(const std::string& payload) {
   r.id = static_cast<uint64_t>(*n);
   r.body = std::move(*parsed.value);
   return r;
-}
-
-int connect_tcp(const std::string& host, int port, int timeout_ms) {
-  addrinfo hints{};
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  addrinfo* res = nullptr;
-  const std::string port_s = std::to_string(port);
-  if (getaddrinfo(host.c_str(), port_s.c_str(), &hints, &res) != 0 || !res) return -1;
-
-  int fd = -1;
-  for (addrinfo* ai = res; ai; ai = ai->ai_next) {
-    fd = socket(ai->ai_family, ai->ai_socktype | SOCK_CLOEXEC, ai->ai_protocol);
-    if (fd < 0) continue;
-
-    int flags = fcntl(fd, F_GETFL, 0);
-    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-    int rc = connect(fd, ai->ai_addr, ai->ai_addrlen);
-    if (rc == 0) {
-      fcntl(fd, F_SETFL, flags);
-      break;
-    }
-    if (errno == EINPROGRESS) {
-      pollfd pfd{fd, POLLOUT, 0};
-      if (poll(&pfd, 1, timeout_ms) > 0 && (pfd.revents & POLLOUT)) {
-        int err = 0;
-        socklen_t l = sizeof err;
-        getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &l);
-        if (err == 0) {
-          fcntl(fd, F_SETFL, flags);
-          break;
-        }
-      }
-    }
-    close(fd);
-    fd = -1;
-  }
-  freeaddrinfo(res);
-  return fd;
 }
 
 // Case-insensitive Content-Length lookup in a response header block. -1 when absent.
@@ -443,16 +399,25 @@ class CdpSession {
     {
       std::lock_guard lk(conn_mu_);
       if (stopping_) return false;
-      if (fd_ >= 0) return true;
+      // The re-arm below runs its own requests through here. Let them use the fresh socket, and
+      // never let them reconnect: this thread already holds reconnect_mu_, and a socket that dies
+      // mid-arm used to send it back into that lock (a self-deadlock).
+      if (arming_thread_ == std::this_thread::get_id()) return fd_ >= 0;
+      if (fd_ >= 0 && armed_) return true;
     }
     // One reconnect at a time. reader_ is joined and replaced only under reconnect_mu_: two callers
     // that both saw the socket die once raced here, joined the same thread (EINVAL ->
     // std::system_error) or assigned over a joinable one, and either way hit std::terminate.
+    //
+    // A socket that is up but not yet re-armed also waits here, because the arming thread holds
+    // this lock until the sticky state is back. Before, the socket was usable as soon as it was
+    // published, so another thread's Page.navigate could reach the fresh target ahead of the UA
+    // override and take a desktop-redirect round trip.
     std::lock_guard rk(reconnect_mu_);
     {
       std::lock_guard lk(conn_mu_);
       if (stopping_) return false;
-      if (fd_ >= 0) return true;  // another caller reconnected while this one waited
+      if (fd_ >= 0 && armed_) return true;  // another caller reconnected while this one waited
     }
     join_reader();  // the old reader's last act was fd_ = -1, so it has exited or is about to
 
@@ -480,6 +445,8 @@ class CdpSession {
         return false;
       }
       fd_ = fd;
+      armed_ = false;
+      arming_thread_ = std::this_thread::get_id();
     }
     warned_unreachable_ = false;
     info("devtools: WebSocket session established");
@@ -487,7 +454,10 @@ class CdpSession {
 
     // Re-arm the sticky state on the fresh target. Leanback tears the page target down on
     // navigation, and a new target reverts to content_shell defaults -- without this the app would
-    // fall back to the desktop redirect (UA) or lose codec steering / the mic grant.
+    // fall back to the desktop redirect (UA) or lose codec steering / the mic grant. Page.enable
+    // goes first and only here: once per connection is enough, and navigate/reload/install used
+    // to re-send it on every call.
+    request("Page.enable", "{}");
     apply_user_agent();
     {
       std::vector<std::string> scripts;
@@ -498,7 +468,11 @@ class CdpSession {
       for (const std::string& s : scripts) install_script(s);
     }
     apply_grant();
-    return true;
+    std::lock_guard lk(conn_mu_);
+    arming_thread_ = {};
+    // Even if the socket died mid-arm: fd_ is then -1, so the next caller reconnects and arms anew.
+    armed_ = true;
+    return fd_ >= 0;
   }
 
   // Sole owner of the read side. Runs until the socket dies, then fails everything in flight.
@@ -550,6 +524,7 @@ class CdpSession {
         close(fd_);
         fd_ = -1;
       }
+      armed_ = false;
     }
     fail_all_pending();
   }
@@ -596,16 +571,18 @@ class CdpSession {
       ua = sticky_ua_;
     }
     if (ua.empty()) return true;
-    request("Network.enable", "{}");
+    // No Network.enable: the override does not need it (the protocol redirects this command to
+    // Emulation), and it would stream a network event for every media segment during playback.
+    // Checked against the shipped M138 engine: without it the override reaches the navigation
+    // request, a page fetch(), and navigator.userAgent.
     return request("Network.setUserAgentOverride",
-                   std::format(R"({{"userAgent":"{}"}})", json_escape(ua)))
+                   std::format(R"({{"userAgent":"{}"}})", js_string_escape(ua)))
         .has_value();
   }
 
   bool install_script(std::string_view source) {
-    request("Page.enable", "{}");
     return request("Page.addScriptToEvaluateOnNewDocument",
-                   std::format(R"({{"source":"{}"}})", json_escape(source)))
+                   std::format(R"({{"source":"{}"}})", js_string_escape(source)))
         .has_value();
   }
 
@@ -618,8 +595,8 @@ class CdpSession {
     }
     if (origin.empty()) return true;
     return request("Browser.grantPermissions",
-                   std::format(R"({{"origin":"{}","permissions":["{}"]}})", json_escape(origin),
-                               json_escape(perm)))
+                   std::format(R"({{"origin":"{}","permissions":["{}"]}})",
+                               js_string_escape(origin), js_string_escape(perm)))
         .has_value();
   }
 
@@ -707,8 +684,11 @@ class CdpSession {
   int port_;
 
   std::mutex reconnect_mu_;  // serializes reconnects; owns reader_ (join/replace) and the handshake
-  std::mutex conn_mu_;       // guards fd_/stopping_; fd_ is written under conn_mu_ AND send_mu_
+  std::mutex conn_mu_;  // guards fd_/armed_/arming_thread_/stopping_; fd_ is written under conn_mu_
+                        // AND send_mu_
   int fd_ = -1;
+  bool armed_ = false;             // the sticky state has been re-applied to the current socket
+  std::thread::id arming_thread_;  // the thread re-arming it, which alone may use it before armed_
   bool stopping_ = false;
   bool warned_unreachable_ = false;  // reconnect_mu_
   std::thread reader_;
@@ -761,7 +741,7 @@ std::optional<json::Value> DevToolsClient::eval_value(std::string_view expressio
   auto body =
       session_->request("Runtime.evaluate",
                         std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
-                                    json_escape(expression)));
+                                    js_string_escape(expression)));
   if (!body) return std::nullopt;
   const json::Value* v = body->find("result.result.value");
   if (!v) return std::nullopt;  // an `undefined` result carries no `value` at all
@@ -789,7 +769,7 @@ bool DevToolsClient::eval_void(std::string_view expression) {
   return session_
       ->request("Runtime.evaluate",
                 std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
-                            json_escape(expression)))
+                            js_string_escape(expression)))
       .has_value();
 }
 
@@ -805,13 +785,12 @@ constexpr long kNavigateTimeoutMs = 30'000;
 }  // namespace
 
 DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url) {
-  session_->request("Page.enable", "{}");
   // Page.navigate replies at commit or failure, not on receipt, so a slow DNS / connect / captive
   // portal outlasts the 2.5 s default. Timing out there read as "engine unreachable" (no error page
   // for exactly the failures it explains), dropped the shared session, and re-navigated over the
   // load in flight -- so any page slower than ~3.5 s to commit restarted forever.
-  auto body = session_->request("Page.navigate", std::format(R"({{"url":"{}"}})", json_escape(url)),
-                                kNavigateTimeoutMs);
+  auto body = session_->request(
+      "Page.navigate", std::format(R"({{"url":"{}"}})", js_string_escape(url)), kNavigateTimeoutMs);
   if (!body) return {};
 
   NavStatus st;
@@ -824,7 +803,6 @@ DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url)
 }
 
 bool DevToolsClient::reload() {
-  session_->request("Page.enable", "{}");
   return session_->request("Page.reload", R"({"ignoreCache":true})").has_value();
 }
 
@@ -926,12 +904,12 @@ bool DevToolsClient::dispatch_key(std::string_view name, int modifiers) {
   }
   std::string fields =
       std::format(R"("key":"{}","code":"{}","windowsVirtualKeyCode":{},"nativeVirtualKeyCode":{})",
-                  json_escape(spec->key), spec->code, spec->vk, spec->vk);
+                  js_string_escape(spec->key), spec->code, spec->vk, spec->vk);
   if (modifiers != mod::kNone) fields += std::format(R"(,"modifiers":{})", modifiers);
   // A printable key needs `text` on a `keyDown` (not `rawKeyDown`) for Blink to produce a char
   // event.
   const bool printable = !spec->text.empty();
-  if (printable) fields += std::format(R"(,"text":"{}")", json_escape(spec->text));
+  if (printable) fields += std::format(R"(,"text":"{}")", js_string_escape(spec->text));
   const std::string down_type = printable ? "keyDown" : "rawKeyDown";
 
   bool ok = session_

@@ -71,6 +71,10 @@ void test_control_labels_are_what_is_printed_on_the_hardware() {
 void test_action_labels_pass_unknown_keys_through() {
   assert(action_label("playpause") == "Play / pause");
   assert(action_label("toggle_captions") == "Captions");
+  // Each alias the binding predicates accept prints the same phrase, not its raw config name.
+  for (const char* a : {"toggle_captions", "captions"}) assert(action_label(a) == "Captions");
+  for (const char* a : {"toggle_gestures", "touch_gestures", "toggle_touch"})
+    assert(action_label(a) == "Touch gestures on / off");
   // Deprecated aliases still resolve, so they must still print something truthful.
   assert(action_label("seek_back_10") == "Scrub back");
   // Launcher-performed seeks (LT/RT) have no DOM key but must read as a real feature, not vanish.
@@ -256,7 +260,7 @@ void test_overlay_hide_js_removes_it() {
 // ---- first-run marker ---------------------------------------------------------------------------
 
 void test_marker_is_versioned_and_one_shot() {
-  const std::string dir = "/tmp/deckback_onboarding_test";
+  const std::string dir = (deckback_test_tmpdir() / "deckback_onboarding_test").string();
   std::error_code ec;
   std::filesystem::remove_all(dir, ec);
 
@@ -285,7 +289,7 @@ void test_marker_write_failure_is_survivable() {
 // ---------------------------------------------------------------
 
 std::string fresh_marker() {
-  const std::string dir = "/tmp/deckback_onboarding_ctl";
+  const std::string dir = (deckback_test_tmpdir() / "deckback_onboarding_ctl").string();
   std::error_code ec;
   std::filesystem::remove_all(dir, ec);
   return first_run_marker_path(dir);

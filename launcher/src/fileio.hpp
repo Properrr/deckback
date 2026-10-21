@@ -20,6 +20,11 @@ std::optional<std::string> read_file(const std::string& path);
 // state dir may be read-only), so callers warn and carry on rather than treating it as fatal.
 bool write_file(const std::string& path, std::string_view bytes);
 
+// write_file, but the bytes land at `path` all at once or not at all: written to `path + ".part"`,
+// fsync'd, then renamed over `path`. For files a reader would trust merely because they exist — a
+// CDM half-written by a crash or a full disk otherwise read as installed forever.
+bool write_file_atomic(const std::string& path, std::string_view bytes);
+
 // True when `path` exists and is a regular file (not a directory or a dangling symlink).
 bool file_exists(const std::string& path);
 

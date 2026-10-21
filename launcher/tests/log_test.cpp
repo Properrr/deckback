@@ -182,7 +182,7 @@ void test_thread_safety() {
 }  // namespace
 
 DECKBACK_TEST_MAIN(log) {
-  g_root = fs::temp_directory_path() / "deckback_log_test";
+  g_root = deckback_test_tmpdir() / "deckback_log_test";
   fs::remove_all(g_root);
   fs::create_directories(g_root);
 

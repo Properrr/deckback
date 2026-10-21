@@ -445,6 +445,68 @@ void test_unreachable_server() {
 
 }  // namespace
 
+// A fresh socket is not usable until the sticky state is back on it. It used to be usable the
+// moment it was published, so another thread's Page.navigate could reach the new target ahead of
+// the UA override (an extra desktop-redirect cycle). The fake holds the re-arm's first reply to
+// open that window wide; the navigate must still land after the UA.
+int index_of(const std::vector<std::string>& reqs, const std::string& method) {
+  for (size_t i = 0; i < reqs.size(); ++i)
+    if (reqs[i].find("\"method\":\"" + method + "\"") != std::string::npos)
+      return static_cast<int>(i);
+  return -1;
+}
+
+void test_rearm_finishes_before_another_caller_navigates() {
+  FakeServer srv;
+  DevToolsClient nav("127.0.0.1", srv.port());
+  DevToolsClient other("127.0.0.1", srv.port());
+  assert(nav.set_user_agent_override("TV-UA/1.0"));
+  srv.close_after_frames(static_cast<int>(srv.take_requests().size()));  // drop the next frame
+  assert(!other.eval_bool("WANT_TRUE").has_value());                     // ...and the socket
+  srv.close_after_frames(0);
+  srv.set_method_delay_ms("Page.enable", 300);  // the re-arm's first request
+  srv.take_requests();
+
+  std::thread rearm([&] { other.eval_bool("WANT_TRUE"); });  // reconnects, then re-arms
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  std::thread go([&] { nav.navigate("https://www.youtube.com/tv"); });
+  rearm.join();
+  go.join();
+
+  const std::vector<std::string> reqs = srv.take_requests();
+  const int ua = index_of(reqs, "Network.setUserAgentOverride");
+  const int navigate = index_of(reqs, "Page.navigate");
+  assert(ua >= 0 && navigate >= 0);
+  assert(ua < navigate);
+}
+
+// Page.enable once per connection, as part of arming it; navigate/reload/install each re-sent it.
+// And no Network.enable at all: the UA override does not need it (checked on the shipped engine),
+// and it streams a network event per media segment during playback.
+void test_enable_commands_are_not_repeated() {
+  FakeServer srv;
+  DevToolsClient c("127.0.0.1", srv.port());
+  assert(c.set_user_agent_override("TV-UA/1.0"));
+  assert(c.navigate("about:blank"));
+  assert(c.navigate("about:blank"));
+  assert(c.reload());
+  assert(c.add_script_on_new_document("/*y*/1"));
+  std::vector<std::string> reqs = srv.take_requests();
+  assert(count_method(reqs, "Page.enable") == 1);
+  assert(count_method(reqs, "Network.enable") == 0);
+  assert(count_method(reqs, "Network.setUserAgentOverride") >= 1);
+
+  // A new connection is a new target: it is armed again, once, before anything else runs on it.
+  srv.close_after_frames(static_cast<int>(reqs.size()));  // drop the next frame and the socket
+  assert(!c.eval_bool("WANT_TRUE").has_value());
+  srv.close_after_frames(0);
+  assert(c.navigate("about:blank"));
+  reqs = srv.take_requests();
+  assert(count_method(reqs, "Page.enable") == 1);
+  assert(count_method(reqs, "Page.addScriptToEvaluateOnNewDocument") == 1);
+  assert(index_of(reqs, "Network.setUserAgentOverride") < index_of(reqs, "Page.navigate"));
+}
+
 DECKBACK_TEST_MAIN(devtools) {
   test_codec_roundtrips();
   test_codec_masking_actually_masks();
@@ -465,6 +527,8 @@ DECKBACK_TEST_MAIN(devtools) {
   test_requests_from_two_threads_do_not_serialize_on_a_lock();
   test_dispatch_mouse();
   test_unreachable_server();
+  test_rearm_finishes_before_another_caller_navigates();
+  test_enable_commands_are_not_repeated();
   std::puts("devtools_test: ok");
   return 0;
 }

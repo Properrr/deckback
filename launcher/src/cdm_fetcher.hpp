@@ -38,6 +38,16 @@ class CdmFetcher {
   static bool usable_cdm_path(const std::string& path);
 
   static bool backend_available();
+
+  // What is at `dest` before anything is fetched. Re-checked on every launch, so a CDM that was cut
+  // short (a crash or a full disk mid-write, before installs were atomic) is repaired from cdm_url
+  // instead of reading as installed forever. Hashing a pinned CDM costs one read of a few MB.
+  enum class Installed { Missing, Unpinned, Verified, Mismatch };
+  static Installed check_installed(const std::string& dest, const std::string& sha256);
+
+  // Verify `bytes` against `sha256` (empty = unverified, logged) and write them to `dest`
+  // atomically: the old file stays whole until the new one has fully landed.
+  static bool install(const std::string& dest, const std::string& bytes, const std::string& sha256);
 };
 
 }  // namespace deckback

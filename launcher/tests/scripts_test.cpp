@@ -161,7 +161,7 @@ void test_overlays_self_heal_across_body_swaps() {
 
 void test_runtime_override_shadows_the_default() {
   namespace fs = std::filesystem;
-  const fs::path dir = fs::temp_directory_path() / "deckback_scripts_override_test";
+  const fs::path dir = deckback_test_tmpdir() / "deckback_scripts_override_test";
   fs::create_directories(dir);
   {
     std::ofstream f(dir / "skip.js");

@@ -331,6 +331,16 @@ std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arr
   return k.empty() ? std::string(base_arrow) : k;  // unbound: a D-pad press is just its arrow
 }
 
+int find_control_for(const std::vector<std::pair<std::string, std::string>>& keymap,
+                     bool (*matches)(std::string_view)) {
+  for (const auto& [name, value] : keymap) {
+    if (!matches(value)) continue;
+    for (const ControlCode& c : kControlCodes)
+      if (c.name == name) return c.code;
+  }
+  return -1;
+}
+
 int find_control_for_action(const std::vector<std::pair<std::string, std::string>>& keymap,
                             std::string_view action) {
   for (const auto& [name, value] : keymap) {

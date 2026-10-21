@@ -30,9 +30,11 @@ inline std::string ascii_lower(std::string_view s) {
 }
 
 // Escape for embedding in a double-quoted JS string literal — which is the same escape set a JSON
-// string needs, so the CDP client uses it for JSON params too. Handles the characters our generated
-// text can contain; exotic control characters never appear in it.
+// string needs, so the CDP client uses it for JSON params and json::dump uses it for documents.
+// The one escaper: a second copy in json.cpp handled control characters and this one did not, so a
+// page script carrying a raw \x01 became an invalid CDP message rather than an escaped one.
 inline std::string js_string_escape(std::string_view s) {
+  static constexpr char kHex[] = "0123456789abcdef";
   std::string out;
   out.reserve(s.size() + 8);
   for (char c : s) {
@@ -42,6 +44,12 @@ inline std::string js_string_escape(std::string_view s) {
         break;
       case '\\':
         out += "\\\\";
+        break;
+      case '\b':
+        out += "\\b";
+        break;
+      case '\f':
+        out += "\\f";
         break;
       case '\n':
         out += "\\n";
@@ -53,7 +61,13 @@ inline std::string js_string_escape(std::string_view s) {
         out += "\\t";
         break;
       default:
-        out.push_back(c);
+        if (static_cast<unsigned char>(c) < 0x20) {
+          out += "\\u00";
+          out.push_back(kHex[(c >> 4) & 0xF]);
+          out.push_back(kHex[c & 0xF]);
+        } else {
+          out.push_back(c);
+        }
     }
   }
   return out;

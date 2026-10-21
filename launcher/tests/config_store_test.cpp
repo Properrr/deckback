@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <vector>
 
 #include "config.hpp"
 #include "harness.hpp"
@@ -56,7 +57,7 @@ void test_dump_escapes_and_keeps_integers() {
 
 // ---- ConfigStore --------------------------------------------------------------------------------
 
-std::string tmp_path(const char* name) { return (fs::temp_directory_path() / name).string(); }
+std::string tmp_path(const char* name) { return (deckback_test_tmpdir() / name).string(); }
 
 void test_set_persist_reload_apply() {
   const std::string path = tmp_path("deckback_user_test_1.json");
@@ -185,6 +186,44 @@ void test_corrupt_overlay_is_ignored_not_fatal() {
   fs::remove(path);
 }
 
+// The allowlist and apply() come from one table: every key load() accepts must change the Config.
+// Each value here is the opposite of the shipped default, so a key that is accepted but not applied
+// leaves its field at the default and fails. A value of the wrong JSON type is ignored.
+void test_every_overlayable_key_is_applied() {
+  const std::string path = tmp_path("deckback_user_test_6.json");
+  const Config d;
+  const auto flip = [](bool b) { return b ? "false" : "true"; };
+  write_file(path, std::string("{") +                                           //
+                       "\"captions_toast\": " + flip(d.captions_toast) +        //
+                       ", \"caption_remember\": " + flip(d.caption_remember) +  //
+                       ", \"caption_on\": " + flip(d.caption_on) +              //
+                       ", \"disable_touch\": " + flip(d.disable_touch) +        //
+                       ", \"touch_gestures\": " + flip(d.touch_gestures) +      //
+                       ", \"touch_hide_cursor\": " + flip(d.touch_hide_cursor) +
+                       ", \"caption_type\": \"zz-type\", \"caption_language\": \"zz\"" +
+                       ", \"caption_control\": \"zz-control\"" +
+                       ", \"caption_languages\": [\"zz\", 7, \"yy\"]}");
+  ConfigStore s(path);
+  s.load();
+  Config c;
+  s.apply(c);
+  assert(c.captions_toast != d.captions_toast && c.caption_remember != d.caption_remember);
+  assert(c.caption_on != d.caption_on && c.disable_touch != d.disable_touch);
+  assert(c.touch_gestures != d.touch_gestures && c.touch_hide_cursor != d.touch_hide_cursor);
+  assert(c.caption_type == "zz-type" && c.caption_language == "zz");
+  assert(c.caption_control == "zz-control");
+  assert((c.caption_languages == std::vector<std::string>{"zz", "yy"}));  // the 7 is dropped
+
+  write_file(path, R"({"captions_toast": "no", "caption_type": false, "caption_languages": "en"})");
+  ConfigStore wrong(path);
+  wrong.load();
+  Config w;
+  wrong.apply(w);
+  assert(w.captions_toast == d.captions_toast && w.caption_type == d.caption_type);
+  assert(w.caption_languages == d.caption_languages);
+  fs::remove(path);
+}
+
 }  // namespace
 
 DECKBACK_TEST_MAIN(config_store) {
@@ -195,6 +234,7 @@ DECKBACK_TEST_MAIN(config_store) {
   test_remove_resets_to_default();
   test_disable_touch_is_overlayable_for_the_touch_probe();
   test_corrupt_overlay_is_ignored_not_fatal();
+  test_every_overlayable_key_is_applied();
   std::puts("config_store_test: all assertions passed");
   return 0;
 }

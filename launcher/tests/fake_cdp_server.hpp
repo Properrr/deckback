@@ -114,6 +114,11 @@ class FakeServer {
     std::lock_guard lk(req_mu_);
     osd_state_ = std::move(s);
   }
+  // What osd.js `op:"cmd"` returns: a verdict ("ok", "close", "gone", "action:...").
+  void set_osd_cmd_reply(std::string s) {
+    std::lock_guard lk(req_mu_);
+    osd_cmd_reply_ = std::move(s);
+  }
   // List a service worker BEFORE the page in /json/list, as Chromium does when the worker was
   // active last. `last_ws_path` is the path the client upgraded on.
   void set_list_decoy(bool on) { list_decoy_.store(on); }
@@ -125,6 +130,12 @@ class FakeServer {
   void close_after_frames(int n) { close_after_.store(n); }
   // Hold the Page.navigate reply this long, as Chromium does until the navigation commits.
   void set_navigate_delay_ms(int ms) { navigate_delay_ms_.store(ms); }
+  // Hold the reply to every frame naming `method` this long. Widens a race window on demand.
+  void set_method_delay_ms(std::string method, int ms) {
+    std::lock_guard lk(req_mu_);
+    delay_method_ = std::move(method);
+    delay_method_ms_ = ms;
+  }
 
   // One batch for the gesture router's next drain (gestures.js `drain()` JSON); later drains read
   // an empty queue. `gestures_drained` tells a test the router has collected it.
@@ -208,6 +219,15 @@ class FakeServer {
         reqs_.push_back(e);
       }
       if (e.find("Page.reload") != std::string::npos) saw_reload_.store(true);
+      {
+        int ms = 0;
+        {
+          std::lock_guard lk(req_mu_);
+          if (!delay_method_.empty() && e.find(delay_method_) != std::string::npos)
+            ms = delay_method_ms_;
+        }
+        if (ms > 0) std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+      }
       if (e.find("WANT_NOISE") != std::string::npos) {
         send_str(c, ws::encode_frame(
                         ws::kText,
@@ -266,6 +286,10 @@ class FakeServer {
         // set.
         std::lock_guard lk(req_mu_);
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"" + osd_state_ + "\"}}";
+      } else if (e.find("\\\"op\\\":\\\"cmd\\\"") != std::string::npos) {
+        std::lock_guard lk(req_mu_);
+        result =
+            "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"" + osd_cmd_reply_ + "\"}}";
       } else if (e.find("\\\"op\\\":\\\"open\\\"") != std::string::npos)
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"ok\"}}";
       else if (e.find("\\\"op\\\":\\\"close\\\"") != std::string::npos)
@@ -344,6 +368,9 @@ class FakeServer {
   std::atomic<bool> overlay_present_{true};
   std::string nav_error_;                          // guarded by req_mu_
   std::string osd_state_ = "tab=settings;idx=-1";  // guarded by req_mu_
+  std::string osd_cmd_reply_ = "ok";               // guarded by req_mu_
+  std::string delay_method_;                       // guarded by req_mu_
+  int delay_method_ms_ = 0;                        // guarded by req_mu_
   std::string gestures_;                           // guarded by req_mu_
   std::string last_ws_path_;                       // guarded by req_mu_
   std::atomic<bool> list_decoy_{false};

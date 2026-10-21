@@ -1,9 +1,10 @@
 #include "json.hpp"
 
 #include <cmath>
-#include <cstdio>
 #include <cstdlib>
 #include <format>
+
+#include "util.hpp"  // js_string_escape
 
 namespace deckback {
 namespace json {
@@ -382,39 +383,7 @@ namespace {
 
 void dump_string(const std::string& s, std::string& out) {
   out.push_back('"');
-  for (char c : s) {
-    switch (c) {
-      case '"':
-        out += "\\\"";
-        break;
-      case '\\':
-        out += "\\\\";
-        break;
-      case '\b':
-        out += "\\b";
-        break;
-      case '\f':
-        out += "\\f";
-        break;
-      case '\n':
-        out += "\\n";
-        break;
-      case '\r':
-        out += "\\r";
-        break;
-      case '\t':
-        out += "\\t";
-        break;
-      default:
-        if (static_cast<unsigned char>(c) < 0x20) {
-          char buf[7];
-          std::snprintf(buf, sizeof(buf), "\\u%04x", static_cast<unsigned char>(c));
-          out += buf;
-        } else {
-          out.push_back(c);
-        }
-    }
-  }
+  out += js_string_escape(s);
   out.push_back('"');
 }
 
