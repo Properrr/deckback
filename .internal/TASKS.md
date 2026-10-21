@@ -1011,6 +1011,13 @@ changed, because each touches an on-Deck-verified path or needs a seam first:
       - `netprobe` duplicates `connect_tcp`/`mono_ms`. → `connect_tcp` lives in netprobe.
       - `kOverlayable` and `ConfigStore::apply` should come from one table; `touch_hide_cursor` was
         exactly that drift. → one `OverlayKey` table.
+- [ ] **Desktop Mode without Steam Input reads the Deck's own pad wrong.** From the kernel source
+      (`drivers/hid/hid-steam.c`, 6.18): hid-steam puts the Deck's triggers on `ABS_HAT2Y`/`ABS_HAT2X`
+      (0..32767), not `ABS_Z`/`ABS_RZ`, so LT/RT do nothing there; `ABS_HAT0X/Y` is the left trackpad
+      (-32767..32767), which `track_axes` reads by sign as a D-pad; and the real D-pad arrives as
+      `BTN_DPAD_*` buttons, which the launcher does not read at all. Game Mode (Steam Input's
+      virtual Xbox pad) is unaffected. Low priority: Desktop Mode is a dev path, and Steam normally
+      runs there too.
 
 ## Phase 10 — Flathub submission & maintenance  (3–4 ED + ongoing)
 

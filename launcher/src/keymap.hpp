@@ -95,8 +95,8 @@ struct AxisRange {
 
 // Map a raw axis value from its device's range into the Xbox 360 pad's, which every threshold here
 // was written for: sticks -32768..32767, triggers 0..255. Steam Input's virtual pad (Game Mode)
-// already reports exactly that and passes through unchanged, as does an unknown range. Other pads
-// do not: hid-steam's triggers report 0..32767, so a feather touch read as a full press.
+// already reports exactly that and passes through unchanged, as does an unknown range. A pad that
+// reports, say, 0..32767 triggers or 0..255 sticks had a small push read as a full one.
 int normalize_axis(int code, int value, AxisRange range);
 
 // ---- trigger seek (findings input-ux §18) -------------------------------------------------------

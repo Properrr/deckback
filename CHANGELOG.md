@@ -45,7 +45,8 @@ minor versions may include breaking changes.
 - A Widevine CDM cut short by a crash or a full disk was treated as installed forever; it is now
   re-checked at launch and fetched again.
 - `"touch_gestures"` in the keymap now binds the gesture toggle, like its two other names.
-- In Desktop Mode without Steam Input, a light touch on a trigger no longer counts as a full press.
+- Controllers that report their sticks or triggers on a different scale than Steam Input's virtual
+  pad are now scaled to it, instead of a small push reading as a full one.
 - Less engine chatter during playback: Deckback no longer turns on network event reporting, which it
   never used.
 

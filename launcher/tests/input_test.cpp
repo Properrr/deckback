@@ -813,8 +813,8 @@ void test_normalize_axis() {
   for (int v : {0, 64, 191, 192, 255}) assert(normalize_axis(ABS_Z, v, {0, 255}) == v);
   assert(normalize_axis(ABS_HAT0X, -1, {-1, 1}) == -1);  // the hat is read by sign alone
 
-  // hid-steam (desktop mode, no Steam Input): triggers 0..32767. A light touch used to read as a
-  // full press (>= 192); it is now a light touch, and only a deep press crosses the threshold.
+  // A pad whose triggers report 0..32767: a light touch used to read as a full press (>= 192); it
+  // is now a light touch, and only a deep press crosses the threshold.
   assert(normalize_axis(ABS_Z, 1000, {0, 32767}) < 64);
   assert(normalize_axis(ABS_RZ, 32767, {0, 32767}) == 255);
   assert(normalize_axis(ABS_RZ, 0, {0, 32767}) == 0);
