@@ -167,6 +167,10 @@ struct UpdatePromptConfig {
   // `fetch_remote_ref` returns the ref body or nullopt, and runs on the probe thread.
   std::string running_commit{};
   std::function<std::optional<std::string>()> fetch_remote_ref{};
+  // How long a commit the portal answered Empty for stays un-announced by the probe. It matches the
+  // CDN's max-age on `summary`: the likely cause is a fresh ref ahead of a cached summary, and past
+  // this the portal can install it, so a check should offer it again.
+  long refusal_window_ms = 10L * 60 * 1000;
 };
 
 class UpdatePromptController {
@@ -251,6 +255,8 @@ class UpdatePromptController {
   // install from another remote) must not be re-announced on every check.
   std::string probe_announced_;
   std::string probe_refused_;
+  long probe_refused_at_ms_ = 0;
+  bool refused(const std::string& commit) const;
 };
 
 }  // namespace deckback

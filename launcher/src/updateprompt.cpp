@@ -438,8 +438,10 @@ void UpdatePromptController::tick(bool on_watch) {
   // The portal found nothing to install for the commit the probe announced: stop announcing it, or
   // every check would offer an update that cannot land.
   if (fresh && phase == DeployPhase::Empty && !probe_announced_.empty() && cfg_.state &&
-      cfg_.state->commit() == probe_announced_)
+      cfg_.state->commit() == probe_announced_) {
     probe_refused_ = probe_announced_;
+    probe_refused_at_ms_ = mono_ms();
+  }
 
   if (cfg_.state && cfg_.state->available()) {
     const std::string commit = cfg_.state->commit();
@@ -588,15 +590,19 @@ void UpdatePromptController::consume_probe() {
   const std::string commit = probe_commit_;
   probe_state_.store(0, std::memory_order_relaxed);
   const bool for_user = std::exchange(probe_for_user_, false);
-  if (result == RefCheck::UpdateAvailable && commit == probe_refused_) result = RefCheck::UpToDate;
+  if (result == RefCheck::UpdateAvailable && refused(commit)) result = RefCheck::UpToDate;
   if (result == RefCheck::UpdateAvailable) {
     info("update: the published repo has a newer commit (" + commit + ")");
     probe_announced_ = commit;
     if (cfg_.state) cfg_.state->set_available(true, commit);
+    // Re-run the announcement logic even when this is the commit already announced: after a failed
+    // or timed-out deploy nothing else re-offers it (the portal does not re-announce), and the
+    // Failed text tells the user to check again. The markers still apply — an ignored commit stays
+    // hidden and the one-time card is not shown twice.
+    last_commit_.clear();
   }
   // An announcement of the commit the portal refused does not count: nothing can install it.
-  const bool announced = cfg_.state && cfg_.state->available() &&
-                         (probe_refused_.empty() || cfg_.state->commit() != probe_refused_);
+  const bool announced = cfg_.state && cfg_.state->available() && !refused(cfg_.state->commit());
 
   bool fall_back = false;
   {
@@ -621,6 +627,11 @@ void UpdatePromptController::consume_probe() {
         "user asked to check; the published repo was unreadable, falling back to the portal");
   else if (result == RefCheck::Unknown)
     warn("update: could not read the published repo — the portal's own check still runs");
+}
+
+bool UpdatePromptController::refused(const std::string& commit) const {
+  return !probe_refused_.empty() && commit == probe_refused_ &&
+         mono_ms() - probe_refused_at_ms_ < cfg_.refusal_window_ms;
 }
 
 void UpdatePromptController::on_deploy_progress(std::uint32_t op, std::uint32_t n_ops,

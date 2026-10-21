@@ -12,7 +12,10 @@
   - The probe only ever ADDS availability: a CDN-stale "up to date" never hides a portal
     announcement.
   - A staged deploy (Done) is never re-offered.
-  - A commit the portal then answers Empty for is not re-announced by the probe.
+  - A commit the portal then answers Empty for is not re-announced by the probe, for 10 min (the
+    CDN's `max-age`, the likely cause).
+  - After a failed deploy, Check offers the same commit again: it is the retry the Failed text
+    promises.
   - An unreadable repo falls back to the old portal check-by-deploy, the path verified on-Deck.
   - No running commit (outside the sandbox) keeps the old behaviour.
 - **Keys.** Commits use the same 12-char short form as the portal (`short_commit`), so the
@@ -71,7 +74,9 @@
   - Check reads "latest" and installs nothing; the journal has no "deploy requested".
   - Update now shows progress, then Close now exits cleanly.
   - Relaunch from the Library runs the new commit.
-- **T2 (production):** the first real *release-pages* run.
+- **T2 (production):** the first real *release-pages* run. The production dry run mirrored
+  *unsigned* (no key on the workstation); the signed mirror pull has only been exercised against a
+  locally signed repo, so a key mismatch would first show here.
   - It must log `Live head: 7869c172…` and `Published … (parent 7869c172…)`, and not hit the
     permission gate.
   - Then a 0.0.9 Deck should download ~MBs, not 77 MB, if the engine is unchanged.

@@ -599,6 +599,43 @@ void test_a_commit_the_portal_refused_is_not_re_announced() {
   assert(rig.updater.deploys == 1 && rig.fetches == 2);
 }
 
+// A deploy that failed (a network blip) is retried by "Check for updates", as the Failed text says.
+// The probe finds the same commit it announced before; it must be offered again, not read as "no
+// update announced" forever.
+void test_check_after_a_failed_deploy_offers_the_update_again() {
+  ProbeRig rig("deckback_probe_retry");
+  rig.serve(kNewer + "\n");
+  UpdatePromptController ctl(rig.config());
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  ctl.confirm_update();
+  ctl.on_deploy_result(UpdateProgress::Failed, "", "network unreachable");
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Failed; }));
+  assert(!rig.osd.update_available());
+
+  ctl.check_now();
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  assert(ctl.deploy_phase() == DeployPhase::Idle);
+  ctl.confirm_update();
+  assert(rig.updater.deploys == 2);
+}
+
+// The refusal mark covers the CDN window only: past it the portal can install the commit, so a
+// check offers it again.
+void test_a_refusal_expires_with_the_cdn_window() {
+  ProbeRig rig("deckback_probe_refusal_window");
+  rig.serve(kNewer + "\n");
+  UpdatePromptConfig cfg = rig.config();
+  cfg.refusal_window_ms = 50;
+  UpdatePromptController ctl(cfg);
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+  ctl.confirm_update();
+  ctl.on_deploy_result(UpdateProgress::Empty, "", "");
+  assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Empty; }));
+  std::this_thread::sleep_for(std::chrono::milliseconds(80));
+  ctl.check_now();
+  assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
+}
+
 // A slow deploy that keeps reporting progress is alive: the no-answer timeout restarts on each
 // report instead of calling it failed mid-download.
 void test_progress_keeps_a_slow_deploy_alive() {
@@ -643,6 +680,8 @@ DECKBACK_TEST_MAIN(updateprompt) {
   test_a_staged_update_is_not_re_announced();
   test_a_commit_the_portal_refused_is_not_re_announced();
   test_progress_keeps_a_slow_deploy_alive();
+  test_check_after_a_failed_deploy_offers_the_update_again();
+  test_a_refusal_expires_with_the_cdn_window();
   std::puts("updateprompt: ok");
   return 0;
 }
