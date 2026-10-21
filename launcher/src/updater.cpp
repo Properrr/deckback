@@ -4,6 +4,7 @@
 #include <string_view>
 #include <utility>
 
+#include "busloop.hpp"
 #include "fileio.hpp"
 #include "log.hpp"
 
@@ -45,13 +46,6 @@ constexpr const char* kFlatpakInfoPath = "/.flatpak-info";
 constexpr std::string_view kNotSupportedError = "org.freedesktop.DBus.Error.NotSupported";
 constexpr std::string_view kPermissionMessageNeedle = "new permissions";
 
-// Reconnect backoff (durable/dbus-reconnect.md). Base 1s, doubling, capped 60s; give up (go inert
-// until relaunch) after kReconnectMaxTries consecutive failures.
-constexpr std::uint64_t kReconnectBaseMs = 1000;
-constexpr std::uint64_t kReconnectMaxMs = 60'000;
-constexpr unsigned kReconnectMaxShift = 6;  // 1000<<6 = 64000 -> capped to kReconnectMaxMs
-constexpr unsigned kReconnectMaxTries = 12;
-
 }  // namespace
 
 UpdateProgress decode_progress_status(std::uint32_t status) {
@@ -72,16 +66,6 @@ UpdateProgress decode_progress_status(std::uint32_t status) {
 bool is_permission_change_failure(std::string_view error_name, std::string_view error_message) {
   return error_name == kNotSupportedError ||
          error_message.find(kPermissionMessageNeedle) != std::string_view::npos;
-}
-
-std::uint64_t reconnect_delay_ms(unsigned attempt) {
-  const unsigned shift = attempt < kReconnectMaxShift ? attempt : kReconnectMaxShift;
-  const std::uint64_t d = kReconnectBaseMs << shift;
-  return d < kReconnectMaxMs ? d : kReconnectMaxMs;
-}
-
-bool reconnect_should_give_up(unsigned consecutive_failures) {
-  return consecutive_failures >= kReconnectMaxTries;
 }
 
 UpdatePermission decode_update_permission(const std::vector<std::string>& perms) {
@@ -185,16 +169,6 @@ constexpr const char* kPermUpdatesId = "updates";
 // sd-bus's 25 s default. These return an ack; deploy progress arrives via signals.
 constexpr uint64_t kCallTimeoutUsec = 5'000'000;
 
-// A reconnected session-bus link must stay up at least this long before it "earns back" a fresh
-// retry budget; a portal that connects-then-drops faster than this marches toward give-up instead
-// of hammering a 1 s reconnect loop (durable/dbus-reconnect.md, review S6).
-constexpr long kReconnectStableMs = 30'000;
-
-constexpr uint64_t kUsecPerSec = 1'000'000;
-constexpr uint64_t kUsecPerMs = 1000;
-constexpr uint64_t kNsecPerUsec = 1000;
-constexpr size_t kWakeDrainBytes = 64;
-
 // `--selftest-deploy` waits this long for a terminal Progress, polling at this cadence.
 constexpr long kDeploySelftestMs = 90'000;
 constexpr int kDeployPollMs = 500;
@@ -256,8 +230,7 @@ void scan_dict(sd_bus_message* m, std::initializer_list<std::pair<const char*, u
 class PortalUpdater final : public Updater {
  public:
   explicit PortalUpdater(UpdaterConfig cfg) : cfg_(std::move(cfg)) {
-    // CLOEXEC: the engine is forked from this process and must not inherit our wake pipe.
-    if (pipe2(wake_pipe_, O_CLOEXEC | O_NONBLOCK) != 0) {
+    if (!wake_.ok()) {
       warn("updater: pipe() failed — self-update disabled");
       return;
     }
@@ -275,8 +248,6 @@ class PortalUpdater final : public Updater {
     if (slot_avail_) sd_bus_slot_unref(slot_avail_);
     if (slot_progress_) sd_bus_slot_unref(slot_progress_);
     if (slot_owner_) sd_bus_slot_unref(slot_owner_);
-    if (wake_pipe_[0] >= 0) close(wake_pipe_[0]);
-    if (wake_pipe_[1] >= 0) close(wake_pipe_[1]);
     if (bus_) sd_bus_unref(bus_);
   }
 
@@ -601,12 +572,7 @@ class PortalUpdater final : public Updater {
   // Interruptible backoff: sleep up to ms, but wake at once on a stop() nudge. Returns running_ so
   // the retry loop exits immediately on stop (review C2 — also what keeps the L0 lifecycle fast).
   bool wait_backoff(std::uint64_t ms) {
-    struct pollfd pf {};
-    pf.fd = wake_pipe_[0];
-    pf.events = POLLIN;
-    const int to = ms > static_cast<std::uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(ms);
-    poll(&pf, 1, to);
-    if (pf.revents & POLLIN) drain_wake();
+    wake_.wait(ms);
     return running_.load();
   }
 
@@ -642,13 +608,7 @@ class PortalUpdater final : public Updater {
   }
 
   // Drain all pending sd-bus work; false if the connection errored.
-  bool pump_pending() {
-    for (;;) {
-      int r = sd_bus_process(bus_, nullptr);
-      if (r < 0) return false;
-      if (r == 0) return true;
-    }
-  }
+  bool pump_pending() { return bus_pump(bus_); }
 
   void loop() {
     reconnect_failures_ = 0;  // a fresh, healthy connection: full retry budget for the first drop
@@ -703,15 +663,7 @@ class PortalUpdater final : public Updater {
         updating_ = true;
         do_update();
       }
-      struct pollfd fds[2];
-      fds[0].fd = sd_bus_get_fd(bus_);
-      fds[0].events = static_cast<short>(sd_bus_get_events(bus_));
-      fds[0].revents = 0;
-      fds[1].fd = wake_pipe_[0];
-      fds[1].events = POLLIN;
-      fds[1].revents = 0;
-      poll(fds, 2, loop_timeout_ms());
-      if (fds[1].revents & POLLIN) drain_wake();
+      bus_wait(bus_, wake_);
     }
   }
 
@@ -842,30 +794,7 @@ class PortalUpdater final : public Updater {
     deploy_terminal_ = true;
   }
 
-  int loop_timeout_ms() {
-    uint64_t until = 0;
-    int r = sd_bus_get_timeout(bus_, &until);
-    if (r < 0 || until == UINT64_MAX) return -1;
-    struct timespec ts {};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t now = static_cast<uint64_t>(ts.tv_sec) * kUsecPerSec + ts.tv_nsec / kNsecPerUsec;
-    if (until <= now) return 0;
-    uint64_t ms = (until - now + (kUsecPerMs - 1)) / kUsecPerMs;
-    return ms > static_cast<uint64_t>(INT_MAX) ? INT_MAX : static_cast<int>(ms);
-  }
-
-  void nudge() {
-    if (wake_pipe_[1] >= 0) {
-      const char b = 1;
-      ssize_t n = write(wake_pipe_[1], &b, 1);
-      (void)n;
-    }
-  }
-  void drain_wake() {
-    char buf[kWakeDrainBytes];
-    while (read(wake_pipe_[0], buf, sizeof buf) > 0) {
-    }
-  }
+  void nudge() { wake_.nudge(); }
 
   UpdaterConfig cfg_;
   sd_bus* bus_ = nullptr;
@@ -874,7 +803,7 @@ class PortalUpdater final : public Updater {
   sd_bus_slot* slot_owner_ =
       nullptr;  // portal NameOwnerChanged match (case B, durable/dbus-reconnect.md)
   std::string monitor_path_;
-  int wake_pipe_[2] = {-1, -1};
+  WakePipe wake_;  // stop()/request_update() nudge the loop thread
   std::atomic<bool> running_{false};
   bool started_ = false;
   std::atomic<bool> confirm_requested_{false};  // set by request_update() (UI thread), read by loop

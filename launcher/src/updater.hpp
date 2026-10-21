@@ -9,6 +9,8 @@
 #include <string_view>
 #include <vector>
 
+#include "busloop.hpp"  // reconnect_delay_ms, reconnect_should_give_up
+
 namespace deckback {
 
 // Shared, thread-safe hand-off from the updater thread (which detects an available update) to the
@@ -76,17 +78,10 @@ inline std::string short_commit(std::string_view commit) {
   return std::string(commit.substr(0, kShortCommitLen));
 }
 
-// Session-bus reconnect backoff (durable/dbus-reconnect.md). When the updater's session-bus
-// connection drops mid-session, or flatpak-portal restarts and orphans the monitor, the loop
-// re-establishes instead of going inert until relaunch. Pure + always compiled so the schedule is
-// L0-tested where the sd-bus loop compiles out.
-//
-// reconnect_delay_ms: exponential backoff from 1s, doubling, capped at 60s; the shift is clamped so
-// any attempt index is defined (0→1000, 1→2000, … 5→32000, ≥6→60000).
-std::uint64_t reconnect_delay_ms(unsigned attempt);
-// reconnect_should_give_up: after this many consecutive failed (re)connect attempts (~6–7 min of
-// backoff) the watcher goes inert until the next launch — the connect-once floor, just deferred.
-bool reconnect_should_give_up(unsigned consecutive_failures);
+// Session-bus reconnect backoff (durable/dbus-reconnect.md): reconnect_delay_ms and
+// reconnect_should_give_up live in busloop.hpp, shared with the platform's system-bus loop. When
+// the updater's connection drops mid-session, or flatpak-portal restarts and orphans the monitor,
+// the loop re-establishes instead of going inert until relaunch.
 
 // Self-update through the Flatpak portal (`org.freedesktop.portal.Flatpak`'s UpdateMonitor).
 //

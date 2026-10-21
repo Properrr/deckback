@@ -152,6 +152,7 @@ add_library(deckback_core STATIC
   src/pageoverlay.cpp
   src/http.cpp
   src/caption_settings.cpp
+  src/busloop.cpp
   src/platform.cpp
   src/updater.cpp
   src/simwatch.cpp  # sim-only: the --selftest-watch reconnect driver (isolated from updater.cpp)
@@ -247,7 +248,9 @@ if(BUILD_TESTING)
   # The updater's portal path is NOT verified here -- that is a Deck job (durable/self-update.md:
   # --selftest-update + a staging-repo round-trip). These pin what holds off-Deck: the pure
   # Progress.status decode (2 == Done), the factory, and a crash-free / idempotent lifecycle.
-  deckback_test_group(sys watchdog updater cdm_fetcher touchmode)
+  # platform drives the logind backend's reconnect against a private dbus-daemon (SKIPs without
+  # one): a real bus drop and a re-subscribed PrepareForSleep, not a mock of either.
+  deckback_test_group(sys watchdog updater cdm_fetcher touchmode platform)
 
   find_program(NODE_EXECUTABLE NAMES node nodejs)
   if(NODE_EXECUTABLE)

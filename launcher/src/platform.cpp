@@ -15,10 +15,14 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 #include <format>
 #include <mutex>
 #include <string_view>
 #include <thread>
+
+#include "busloop.hpp"
+#include "util.hpp"  // mono_ms
 #else
 #define DECKBACK_HAVE_SDBUS 0
 #endif
@@ -55,20 +59,21 @@ constexpr const char* kNoSuchUnit = "org.freedesktop.systemd1.NoSuchUnit";
 //   * a "sleep"/delay inhibitor is held so on_suspend runs before the system sleeps;
 //   * an "idle"/block inhibitor is held while the player is playing so the screen never dims.
 // All sd-bus calls happen on a single owned event-loop thread (sd-bus is not thread-safe); other
-// threads request idle-inhibit changes via an atomic + self-pipe wakeup.
+// threads request idle-inhibit changes via an atomic + the wake pipe.
+//
+// A dropped system-bus connection is reconnected with the updater's backoff (busloop.hpp). It used
+// to warn once a second forever with power integration dead. The inhibitor fds are logind FIFOs
+// that outlive our bus connection, so a reconnect re-subscribes PrepareForSleep and re-takes only a
+// lock that is not held.
 class SdBusPlatform final : public Platform {
  public:
   SdBusPlatform() {
-    if (sd_bus_open_system(&bus_) < 0 || !bus_) {
-      warn("platform: sd_bus_open_system failed — running without power integration");
+    if (!wake_.ok() || !connect()) {
+      warn("platform: no logind connection — running without power integration");
+      disconnect();
       return;
     }
-    // CLOEXEC: the engine is forked from this process and must not inherit our wake pipe.
-    if (pipe2(wake_pipe_, O_CLOEXEC | O_NONBLOCK) != 0) wake_pipe_[0] = wake_pipe_[1] = -1;
-    sleep_fd_ = take_inhibitor("sleep", "Deckback: pause/checkpoint before suspend", "delay");
-    sd_bus_match_signal(bus_, &slot_, kLogind, kLogindPath, kManager, "PrepareForSleep",
-                        &on_prepare_for_sleep, this);
-    live_ = true;
+    live_.store(true);
     running_.store(true);
     thread_ = std::thread([this] { loop(); });
     info("platform: logind backend live");
@@ -76,14 +81,11 @@ class SdBusPlatform final : public Platform {
 
   ~SdBusPlatform() override {
     running_.store(false);
-    nudge();
+    wake_.nudge();
     if (thread_.joinable()) thread_.join();
     if (idle_fd_ >= 0) close(idle_fd_);
     if (sleep_fd_ >= 0) close(sleep_fd_);
-    if (wake_pipe_[0] >= 0) close(wake_pipe_[0]);
-    if (wake_pipe_[1] >= 0) close(wake_pipe_[1]);
-    if (slot_) sd_bus_slot_unref(slot_);
-    if (bus_) sd_bus_unref(bus_);
+    disconnect();
   }
 
   void on_suspend(std::function<void()> cb) override {
@@ -97,13 +99,13 @@ class SdBusPlatform final : public Platform {
 
   void set_idle_inhibited(bool inhibited) override {
     want_idle_.store(inhibited);
-    nudge();
+    wake_.nudge();
   }
 
-  bool backend_live() const override { return live_; }
+  bool backend_live() const override { return live_.load(); }
 
   int selftest() override {
-    if (!live_) {
+    if (!live_.load()) {
       error("selftest: no live logind connection");
       return 1;
     }
@@ -126,6 +128,48 @@ class SdBusPlatform final : public Platform {
   }
 
  private:
+  // Open the system bus, subscribe PrepareForSleep, and take the sleep delay lock if it is not
+  // already held. Used at startup and by every reconnect.
+  bool connect() {
+    if (const int r = sd_bus_open_system(&bus_); r < 0 || !bus_) {
+      bus_ = nullptr;  // sd_bus_open_system may leave a half-constructed handle on failure
+      warn(std::format("platform: cannot open the system bus: {}", std::strerror(-r)));
+      return false;
+    }
+    if (const int r = sd_bus_match_signal(bus_, &slot_, kLogind, kLogindPath, kManager,
+                                          "PrepareForSleep", &on_prepare_for_sleep, this);
+        r < 0) {
+      warn(std::format("platform: cannot subscribe to PrepareForSleep: {}", std::strerror(-r)));
+      return false;
+    }
+    if (sleep_fd_ < 0)
+      sleep_fd_ = take_inhibitor("sleep", "Deckback: pause/checkpoint before suspend", "delay");
+    return true;
+  }
+
+  // The match slot holds a bus ref, so it goes first.
+  void disconnect() {
+    if (slot_) slot_ = sd_bus_slot_unref(slot_);
+    if (bus_) bus_ = sd_bus_unref(bus_);
+  }
+
+  // Reconnect with backoff until it works, stop() lands, or the budget is spent.
+  bool reconnect() {
+    while (running_.load()) {
+      disconnect();
+      if (connect()) {
+        last_connect_ms_ = mono_ms();
+        return true;
+      }
+      if (reconnect_should_give_up(++reconnect_failures_)) return false;
+      const std::uint64_t delay = reconnect_delay_ms(reconnect_failures_ - 1);
+      warn(std::format("platform: system bus unavailable (attempt {}) — retrying in {}s",
+                       reconnect_failures_, delay / 1000));
+      wake_.wait(delay);
+    }
+    return false;
+  }
+
   // Returns a dup'd, owned fd for the inhibitor lock, or -1 on failure. Closing it releases.
   int take_inhibitor(const char* what, const char* why, const char* mode) {
     sd_bus_error err = SD_BUS_ERROR_NULL;
@@ -169,20 +213,6 @@ class SdBusPlatform final : public Platform {
     }
   }
 
-  void nudge() {
-    if (wake_pipe_[1] >= 0) {
-      const char b = 1;
-      ssize_t n = write(wake_pipe_[1], &b, 1);
-      (void)n;
-    }
-  }
-
-  void drain_wake() {
-    char buf[64];
-    while (read(wake_pipe_[0], buf, sizeof buf) > 0) { /* drain */
-    }
-  }
-
   static int on_prepare_for_sleep(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<SdBusPlatform*>(userdata);
     int going_to_sleep = 0;
@@ -212,44 +242,27 @@ class SdBusPlatform final : public Platform {
     return 0;
   }
 
-  int loop_timeout_ms() {
-    uint64_t until = 0;
-    int r = sd_bus_get_timeout(bus_, &until);
-    if (r < 0 || until == UINT64_MAX) return 1000;
-    struct timespec ts {};
-    clock_gettime(CLOCK_MONOTONIC, &ts);
-    uint64_t now = static_cast<uint64_t>(ts.tv_sec) * 1'000'000ull + ts.tv_nsec / 1000;
-    if (until <= now) return 0;
-    uint64_t ms = (until - now + 999) / 1000;
-    return ms > 1000 ? 1000 : static_cast<int>(ms);
-  }
-
   void loop() {
+    last_connect_ms_ = mono_ms();
     while (running_.load()) {
-      for (;;) {
-        int r = sd_bus_process(bus_, nullptr);
-        if (r < 0) {
-          warn("platform: sd_bus_process error");
-          break;
+      if (!bus_pump(bus_)) {
+        // Same policy as the updater (durable/dbus-reconnect.md): a link that stayed up a while
+        // earns a fresh budget; one that keeps dropping at once counts toward giving up.
+        if (mono_ms() - last_connect_ms_ >= kReconnectStableMs) reconnect_failures_ = 0;
+        warn("platform: system bus connection lost — reconnecting");
+        if (!reconnect()) {
+          if (running_.load())
+            warn(
+                "platform: could not reach logind after repeated tries — sleep/idle integration "
+                "inactive until next launch");
+          live_.store(false);
+          return;
         }
-        if (r == 0) break;
+        info("platform: reconnected to logind");
       }
       if (!running_.load()) break;
-
-      struct pollfd fds[2];
-      fds[0].fd = sd_bus_get_fd(bus_);
-      fds[0].events = static_cast<short>(sd_bus_get_events(bus_));
-      fds[0].revents = 0;
-      fds[1].fd = wake_pipe_[0];
-      fds[1].events = POLLIN;
-      fds[1].revents = 0;
-
-      poll(fds, 2, loop_timeout_ms());
-
-      if (fds[1].revents & POLLIN) {
-        drain_wake();
-        reconcile_idle();
-      }
+      reconcile_idle();  // cheap: acts only when the wanted state differs from the held one
+      bus_wait(bus_, wake_);
     }
   }
 
@@ -257,10 +270,12 @@ class SdBusPlatform final : public Platform {
   sd_bus_slot* slot_ = nullptr;
   int sleep_fd_ = -1;
   int idle_fd_ = -1;
-  int wake_pipe_[2] = {-1, -1};
+  WakePipe wake_;
   std::atomic<bool> want_idle_{false};
   std::atomic<bool> running_{false};
-  bool live_ = false;
+  std::atomic<bool> live_{false};
+  long last_connect_ms_ = 0;         // loop thread
+  unsigned reconnect_failures_ = 0;  // loop thread
   std::thread thread_;
   std::mutex cb_mutex_;
   std::function<void()> suspend_cb_;

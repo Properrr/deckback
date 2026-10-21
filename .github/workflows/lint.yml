@@ -42,8 +42,10 @@ jobs:
         # The launcher's system deps are optional (pkg_check_modules, not REQUIRED), but install them
         # so CI builds the real, fully-featured configuration — otherwise DECKBACK_HAVE_CURL=0 and the
         # CDM download path (plus its tests) never compile.
+        # dbus-daemon: platform_test stands up a private bus to drive the logind backend's reconnect
+        # for real; without it that test SKIPs.
         run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format-18 clang
-          libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev
+          libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev dbus-daemon
       # clang-format-18 check + gcc build & ctest + clang build (-Wall -Wextra -Werror).
       - name: preflight (launcher)
         run: ./scripts/preflight.sh launcher
