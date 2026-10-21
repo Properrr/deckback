@@ -258,7 +258,11 @@ existing auto-repeat + right-stick machinery. It is CSP-safe (`adoptedStyleSheet
 paint*: a wiped overlay either re-injects or drops modal capture, so keys are never swallowed behind
 a menu that isn't on screen (the failure mode of the old update card). **Self-update folds in here:**
 `updater.cpp` (Flatpak-portal detect/deploy, verified on-Deck) still runs, and `updateprompt.cpp`
-feeds the Updates tab + the button's amber badge instead of drawing its own pill/card. L0-tested
+feeds the Updates tab + the button's amber badge instead of drawing its own pill/card. Detection no
+longer waits on the portal's shared 0–30 min timer: at launch and on **Check for updates** the
+launcher reads the published repo's ref (65 bytes) and compares it with the running commit from
+`/.flatpak-info` — a check that installs nothing; the portal stays the only installer. Deploy
+progress and a **Close now** button (the new commit binds on relaunch) are on the tab. L0-tested
 (controller helpers, verdict parser, CSP-safe scripts); an L2 regression suite
 (`tests/deck/test_osd.py`) guards the two prior input bugs but has **not** run on hardware yet.
 
@@ -349,7 +353,7 @@ pytest over SSH+CDP), `soak`/`power`, `cert` (`js_mse_eme` conformance), `flatpa
 | **P5** | Audio & microphone | 🟡 Partial (audio out + repair ✅; voice ⬜/disabled) |
 | **P6** | Sleep / resume / idle-inhibit | ✅ Core verified 2026-07-10 (audio-restore + no-dim clauses 🟡) |
 | **P7** | Widevine path | 🟡 Registration patch built + run; no CDM ever loaded |
-| **P8** | Packaging & distribution | ✅ Built + installed + self-updating, Steam artwork via the installer; ⬜ extra-data CDM wiring, <5-min gate, update recall/deltas |
+| **P8** | Packaging & distribution | ✅ Built + installed + self-updating, Steam artwork via the installer; 🟡 repo history/deltas/recall (rehearsed off-device, first production publish pending); ⬜ extra-data CDM wiring, <5-min gate |
 | **P9** | Test & hardening (OLED matrix) | ⬜ Not started |
 | **P10** | Flathub submission & maintenance | ⬜ Not started |
 | **P11** | Focus/hover preview | ⬜ Not started (probe-first) |

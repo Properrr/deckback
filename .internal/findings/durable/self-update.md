@@ -1,5 +1,84 @@
 # Self-update via the Flatpak portal (launcher/src/updater.cpp)
 
+## ★★★★ U1–U6 LANDED 2026-10-20 — off-device evidence only (no Deck, no production publish)
+
+**Launcher (U4/U5/U6, `updateprompt.cpp`).**
+- **The ref probe.** At launch and on *Check for updates* the launcher GETs
+  `repo/refs/heads/app/io.github.properrr.deckback/x86_64/master` (65 B, served with
+  `max-age=600`, verified 200 on the live site). It compares that with `[Instance] app-commit` from
+  `/.flatpak-info`: equal means "latest", different means an update to confirm. A check installs
+  nothing. The portal remains the only installer and signature verifier.
+- **Guards, each with an L0 test that fails without it:**
+  - The probe only ever ADDS availability: a CDN-stale "up to date" never hides a portal
+    announcement.
+  - A staged deploy (Done) is never re-offered.
+  - A commit the portal then answers Empty for is not re-announced by the probe.
+  - An unreadable repo falls back to the old portal check-by-deploy, the path verified on-Deck.
+  - No running commit (outside the sandbox) keeps the old behaviour.
+- **Keys.** Commits use the same 12-char short form as the portal (`short_commit`), so the
+  ignore and card markers dedup across both sources.
+- **Staging.** `DECKBACK_UPDATE_REF_URL` points the probe at a staging repo for T1.
+- **Progress (U5).** It reaches the tab ("step 2 of 3 (45%)"; `op` is 0-based per flatpak-portal
+  source), and every report restarts the 10-min no-answer timeout.
+- **Close now (U6).** Done offers it, through the same graceful exit as the Exit hold.
+
+**Release pipeline (U1/U2/U3, `scripts/publish-repo.sh`).**
+- **How a publish works:**
+  - Mirror the live repo (head + `DECKBACK_REPO_DEPTH`=2 parents).
+  - Gate the bundle's permissions against the live head (`metadata_permissions`, L0).
+  - `build-commit-from --timestamp=NOW` on top of the head.
+  - Generate the from-parent delta with ostree directly.
+  - Run `build-update-repo --generate-static-deltas --prune --prune-depth=2`.
+- **It fails closed.** An unreachable live repo exits 3. `DECKBACK_REPO_FRESH=1` (workflow input
+  `fresh_history`) starts a new history only on purpose.
+- **Correction to U1's premise.** "From-parent deltas make an update a few MB" was only true with
+  bsdiff on large files. ostree's default delta does not bsdiff files above its size cap, so the
+  ~159 MB `content_shell` ships whole whenever it changes. Measured on the real v0.0.8 → v0.0.9
+  bundles:
+
+  | Delta | Size |
+  |---|---|
+  | from-scratch | 77.1 MB |
+  | from-parent, flatpak defaults | 66.7 MB (63.8 MB of it the engine binary as a fallback object) |
+  | from-parent, `--max-bsdiff-size=512 --min-fallback-size=512` | **4.2 MB** |
+
+  Generating the bsdiff delta took 40 s at 2.5 GB peak RSS, fine on the 16 GB Actions runner. A
+  release that leaves the engine untouched gets a small delta either way.
+- **Verified:**
+  - **Real-bundle end-to-end.** A local signed repo (throwaway key), with a real `flatpak --user`
+    client on 0.0.8, updated to 0.0.9 via the bsdiff delta: 4.2 MB, no whole-object fetches, and
+    the exact published commit. A repo holding two releases is 145 MB, against Pages' 1 GB.
+  - **Production mirror.** Run against the production repo (read-only, nothing deployed), the
+    `--depth=2` mirror pull worked even though the live head's parent 404s.
+  - **Same-tree republish.** Re-publishing the tree that is already live makes no commit: a safe
+    re-run.
+  - **`tests/harness/test_publish_repo.sh`, 27 checks**, green on flatpak 1.18.1/ostree 2025.6 and
+    on Ubuntu 24.04's 1.14.6/2024.5:
+    - the delta is used, asserted from the server's request log;
+    - a client two behind updates;
+    - a recall lands as a new commit the client takes as an ordinary update;
+    - `update --commit` goes back one release, and `mask` holds a version;
+    - a permission add exits 2, and an unreachable repo exits 3.
+
+    Against the pre-U1 script, 12 of the checks fail.
+- **Recall (U2):** RELEASING.md §"Recall a bad release". Turn the bad GitHub release back into a
+  draft, so the Updates tab's changelog stops offering it, and re-dispatch *release-pages* with the
+  last good tag.
+
+**Not verified — do these before claiming any of it:**
+- **T1 (Deck, staging repo, `DECKBACK_UPDATE_REF_URL`):**
+  - Launch with a newer staging commit: the badge appears within seconds of start.
+  - Check reads "latest" and installs nothing; the journal has no "deploy requested".
+  - Update now shows progress, then Close now exits cleanly.
+  - Relaunch from the Library runs the new commit.
+- **T2 (production):** the first real *release-pages* run.
+  - It must log `Live head: 7869c172…` and `Published … (parent 7869c172…)`, and not hit the
+    permission gate.
+  - Then a 0.0.9 Deck should download ~MBs, not 77 MB, if the engine is unchanged.
+- **U8 stays open.** A bundle with `--repo-url` installs as a `deckback-origin` remote, which
+  `channel_of_origin` treats as the DEV channel and `web-install.sh` refuses. It needs the dev and
+  release origins told apart by URL first.
+
 ## ★★★ REVIEW 2026-10-20 — what is still weak, what was fixed, the plan (no device)
 
 A desk review of the whole update path, from the launcher through the release pipeline to the live
@@ -49,7 +128,8 @@ The plan is TASKS Phase 8 §"Self-update hardening".
 - The Failed text no longer promises a retry that does not exist. The Pages terminal instructions
   now use `--user`, and the `.flatpakref` suggests the remote name `deckback`.
 
-**Still weak (ranked; plan items in brackets, see TASKS):**
+**Still weak (ranked; plan items in brackets, see TASKS). Items 1, 2 and 4 were addressed
+off-device the same day (★★★★ above):**
 1. No recall or rollback, and full-size updates [U1 linear repo history, U2 recall runbook].
 2. Slow or silent detection; Check for updates *installs* rather than checks, skipping notify
    mode's consent step [U4 non-installing check].

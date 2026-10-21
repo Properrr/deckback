@@ -8,6 +8,33 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+- **Check for updates only checks.** It now asks the Deckback repo directly and tells you what it
+  found; nothing installs until you choose *Update now*. Deckback also checks once each time it
+  starts, so a new release shows up right away instead of up to half an hour later (or never, on a
+  metered connection).
+- **Smaller updates.** The repo now keeps its history, so an update downloads only what changed:
+  measured on the real releases, going from 0.0.8 to 0.0.9 this way is 4 MB instead of 77 MB.
+
+### Added
+- **Update progress.** *Updating…* now shows how far along it is, e.g. "step 2 of 3 (45%)".
+- **Close now** appears once an update is installed. The new version starts the next time you open
+  Deckback from your Library.
+
+### Fixed
+- "Updating…" could stay on screen until you restarted; it now reports a failure after 10 minutes
+  of silence, and a refused update says so.
+- After "Check for updates" said you were on the latest version, a release published later in the
+  same session was never offered.
+- Re-running the one-line installer, the documented fix for an update that needs new permissions,
+  now really updates the app instead of saying it is already installed.
+- Deckback no longer uses a full CPU core while no controller is connected.
+- Backing out of the menu while holding Y could quit the app.
+- With touch gestures on, tapping the settings menu could start the video behind it.
+- If the launcher was killed, the engine kept running and blocked the next launch.
+- A rare crash when the connection to the engine was re-established from two places at once, and a
+  page that took more than a few seconds to load being restarted over and over.
+
 ## [0.0.9] - 2026-07-31
 
 ### Added

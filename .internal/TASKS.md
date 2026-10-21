@@ -648,20 +648,36 @@ strands every installed user on their current version.
   - Check → Empty, then publish a newer commit: it is offered.
   - With a permission-adding staging commit: the tab shows the blocked text, and re-running
     `install.sh` in Desktop Mode installs it.
-- [ ] **U1 — Linear history in the published repo** (M, release pipeline). Mirror-pull the live repo,
+- [x] **U1 — Linear history in the published repo** — *done 2026-10-20, off-device only.*
+      `publish-repo.sh` mirrors the live head + 2 parents, gates permissions, commits forward and
+      generates the from-parent delta itself with bsdiff on large files. That last part was needed:
+      flatpak's default delta for the real 0.0.8 → 0.0.9 was 66.7 MB (the engine binary ships whole
+      above ostree's bsdiff cap); with bsdiff it is 4.2 MB. Verified with a real-bundle client update on
+      a signed local repo and by `tests/harness/test_publish_repo.sh` (27 checks, flatpak 1.18 and
+      Ubuntu's 1.14). **T2 pending:** the first production run (expect `parent 7869c172…`).
+      Original plan (M, release pipeline). Mirror-pull the live repo,
       then `build-commit-from --timestamp=NOW --gpg-sign` so each release's parent is the commit
       users actually have, then `build-update-repo --generate-static-deltas --prune
       --prune-depth=2`. That gives from-parent deltas (MB instead of ~77 MB per update), a rollback
       target, a fix for the CDN race (old objects survive a deploy), and the base for U2 and U10.
-      The first run must pull with `--depth=0`, because the live parent 404s today. Verify off-device
+      The first run must pull with `--depth=0`, because the live parent 404s today *(not so: a
+      `--depth=2` pull against the real repo tolerated the missing parent)*. Verify off-device
       with two dummy bundles and a local `flatpak --user` remote, then a T2 production run.
-- [ ] **U2 — Recall runbook** (S, RELEASING.md). Re-commit the last good tree forward with a fresh
+- [x] **U2 — Recall runbook** — *done 2026-10-20* (RELEASING.md §"Recall a bad release"). The recall
+      and the user-side `update --commit` / `mask` are rehearsed in `test_publish_repo.sh`; one finding:
+      the bad GitHub release must go back to **draft**, not pre-release, or the Updates tab's changelog
+      keeps offering it. Original plan (S, RELEASING.md). Re-commit the last good tree forward with a fresh
       timestamp (`build-commit-from` keeps the old timestamp by default, and the portal refuses
       downgrades). Document `flatpak mask` as the user-side "hold this version". Needs U1.
-- [ ] **U3 — Publish-time permission gate against the LIVE repo** (S). Diff the new commit's
+- [x] **U3 — Publish-time permission gate against the LIVE repo** — *done 2026-10-20*: compares the
+      bundle's built `metadata` with the mirrored live head's (`metadata_permissions`, L0-tested in
+      `test_check_permissions.sh`); exit 2 unless `ALLOW_PERMISSION_ADD=1`. Original plan (S). Diff the new commit's
       `[Context]` against the live summary's `xa.cache` before deploying. `check-permissions.sh`
       compares against git tags, which misses a bundle built from the wrong tree.
-- [ ] **U4 — A check that does not install** (S–M, launcher).
+- [x] **U4 — A check that does not install** — *done 2026-10-20, L0 + TSan only, not on a Deck.*
+      Probe at launch and on Check; only ever adds availability; falls back to the portal when the
+      repo is unreadable; `DECKBACK_UPDATE_REF_URL` for staging. **T1 pending** (self-update.md ★★★★).
+      Original plan (S–M, launcher):
       - GET `repo/refs/heads/app/<id>/x86_64/master` (65 B) and compare it with `[Instance]
         app-commit` in `/.flatpak-info`, at launch and on Check for updates; feed the result into
         `UpdateState`. The portal stays the only installer and the only signature verifier; a
@@ -669,9 +685,12 @@ strands every installed user on their current version.
       - Fixes the 0–30 min detection, the metered-network blind spot, and Check *installing* (which
         skips notify mode's consent step).
       - L0 with a fake HTTP server, then T1.
-- [ ] **U5 — Show deploy progress** (S): `on_progress` ignores `n_ops/op/progress`. A runtime bump
+- [x] **U5 — Show deploy progress** — *done 2026-10-20, L0 only*; progress also restarts the 10-min
+      no-answer timeout. Original plan (S): `on_progress` ignores `n_ops/op/progress`. A runtime bump
       (hundreds of MB) currently sits behind "this can take a minute".
-- [ ] **U6 — "Restart now" on Done** (S): the graceful exit path (`on_exit`) plus "reopen from your
+- [x] **U6 — "Restart now" on Done** — *done 2026-10-20, L0 only*, as **Close now** (the same
+      graceful exit as the Exit hold; the Library tile relaunches). The `Spawn` spike is still open.
+      Original plan (S): the graceful exit path (`on_exit`) plus "reopen from your
       Library". Spike the portal's `Spawn` with `LATEST_VERSION` later: it may escape gamescope
       focus [U].
 - [ ] **U7 — Host-side update timer** (M, installer, owner decision). A `systemd --user` timer
@@ -679,7 +698,11 @@ strands every installed user on their current version.
       running `flatpak update --user -y --noninteractive`. It is the only thing that keeps the
       runtime and Mesa/VA-API current in Game Mode, and it accepts permission adds. Decide the scope:
       Deckback + its runtime only, or everything.
-- [ ] **U8 — Updatable bundles** (S–M): export the Releases bundle with `--repo-url` + `--gpg-keys` so
+- [ ] **U8 — Updatable bundles** — *blocked on a naming conflict (2026-10-20):* a bundle installed
+      with `--repo-url` gets a `deckback-origin` remote, which `channel_of_origin`
+      (`scripts/lib/flatpak_channel.sh`) reads as the DEV channel and `web-install.sh` refuses as a
+      foreign origin. Tell dev and release origins apart by their URL (the dev one has none) first.
+      Original plan (S–M): export the Releases bundle with `--repo-url` + `--gpg-keys` so
       a bundle install joins the update channel. An existing `*-origin` remote cannot be changed in
       place, so this helps new installs only.
 - [ ] **U9 — Signed `status.json`** (M): a minisign-signed kill-switch and incident banner (blocked
