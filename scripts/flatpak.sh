@@ -63,7 +63,8 @@ info "Building Flatpak in the pack container (runtime ${runtime_version}, staged
 # The container body is SINGLE-quoted and its inputs arrive as environment variables. The previous
 # form was a double-quoted string full of \$ and \" — every edit to it is a coin flip, and the shell
 # does not tell you when you lose.
-COBALT_COMMIT="$(deps_pin)" "$CONTAINER_ENGINE" compose run --rm \
+compose_rootless_args
+COBALT_COMMIT="$(deps_pin)" "$CONTAINER_ENGINE" compose run --rm "${COMPOSE_ROOTLESS[@]}" \
   -e DB_APP="$app" -e DB_MANIFEST="$manifest" -e DB_RUNTIME="$runtime_version" pack bash -c '
   set -euo pipefail
   # Build every module in parallel: flatpak-builder otherwise serialises to one job in the pack

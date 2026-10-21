@@ -203,9 +203,24 @@ deck_or_skip() {
   fi
 }
 
+# Extra `compose run` options for rootless Docker, in the array COMPOSE_ROOTLESS (empty otherwise).
+# Rootless Docker maps the host user to container root, so the image's uid-1000 `dev` user can
+# neither write the bind mounts nor pass git's ownership check on them ("dubious ownership"): run as
+# root instead (it IS the host user), and make archive extraction ignore the foreign uids that user
+# namespace cannot map — GNU tar via TAR_OPTIONS, Python's tarfile via
+# docker/rootless/sitecustomize.py.
+compose_rootless_args() {
+  COMPOSE_ROOTLESS=()
+  if [ "$CONTAINER_ENGINE" = docker ] \
+      && docker info -f '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
+    COMPOSE_ROOTLESS=(--user 0:0 -e TAR_OPTIONS=--no-same-owner -e PYTHONPATH=/work/docker/rootless)
+  fi
+}
+
 # Run a command inside the dev container with the repo + cobalt tree mounted.
 in_container() {
   require_engine
+  compose_rootless_args
   COBALT_COMMIT="$(deps_pin)" \
-    "$CONTAINER_ENGINE" compose run --rm dev "$@"
+    "$CONTAINER_ENGINE" compose run --rm "${COMPOSE_ROOTLESS[@]}" dev "$@"
 }
