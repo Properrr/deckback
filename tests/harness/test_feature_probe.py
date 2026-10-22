@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""L0 coverage of `scripts/feature-probe.py`'s pure decision logic (P12.0a/P12.0b).
+"""L0 coverage of `scripts/feature-probe.py`'s pure decision logic.
 
-A probe's whole value is that its answer can be trusted enough to build on. These tests pin the
-three places this one could print a confident answer it did not measure:
-
-  * an empty method list is what a page with NO player produces, and also what a player exposing
-    nothing would produce. The first must be ENV (3); only the second is a registerable negative.
-  * on the browse screen the player exists but no media is loaded, so every quality getter answers
-    `[]`/`"unknown"` and `<video>.playbackRate` is never reasserted. Both read as a clean positive
-    for features that would then be built on nothing. `video_is_loaded()` is the guard.
-  * zero pairing hits across screens nobody navigated to is not "our UA suppresses pairing".
-
-The first two are the green-band lesson at the page layer: on m114 every automated metric passed and
-a human saw corruption, because the checks could not fail. A negative finding is fine here; a
-confident answer from no data is not.
+No player, no loaded media, or no screen that could host pairing must each be ENV (3), never a
+confident answer; a negative is only reported from data that could have shown a positive.
 """
 
 import importlib.util
@@ -49,7 +38,6 @@ class TestClassifyMethods(unittest.TestCase):
         self.assertEqual(got["other"], ["seekTo"])
 
     def test_a_name_matching_both_is_in_both(self):
-        # Being forced into one bucket is how a real lever gets overlooked.
         got = fp.classify_methods(["setPlaybackRateQuality"])
         self.assertIn("setPlaybackRateQuality", got["rate"])
         self.assertIn("setPlaybackRateQuality", got["quality"])
@@ -151,9 +139,8 @@ class TestPairingHits(unittest.TestCase):
 
 _MENU = "Settings\nLanguage\nLocation\nRestricted Mode\nLinked devices\nAbout\nHelp\nSign out\n" * 2
 
-# What the watch screen really produced on 2026-07-31: 28 characters of innerText plus 32 icon
-# aria-labels. The padding alone pushes it past any length threshold, which is why length is not the
-# test — this fixture is the regression.
+# The watch screen: ~28 characters of innerText plus 32 icon aria-labels — past any length
+# threshold, yet not a screen that can host pairing.
 _WATCH_TEXT = "YouTube\n0:43 / 1:17:29\n" + "\n".join(
     f"button label {i}" for i in range(32)
 )
@@ -178,9 +165,8 @@ class TestScreenIsSubstantive(unittest.TestCase):
         self.assertFalse(fp.screen_is_substantive(None))
 
 
-# The real browse screen at #/ on 2026-07-31: 1513 characters of recommendation feed plus the
-# sidebar. Long, not the player, and not remotely where a pairing row would live -- the fixture for
-# the third and last way this probe found to answer from the wrong screen.
+# The browse screen at #/: a long recommendation feed plus the sidebar — not the player, yet not
+# where a pairing row would live.
 _BROWSE_TEXT = (
     "Recommended\n1:17:30\nSome long video title here\nA Channel\n20K views • 5 hours ago\n"
     "25:48\nAnother video\nAnother Channel\n1K views • 7 hours ago\n"
@@ -224,15 +210,14 @@ class TestCouldHostPairing(unittest.TestCase):
 
 class TestPairingVerdict(unittest.TestCase):
     def test_nothing_navigated_is_env_not_absence(self):
-        # The touch-probe lesson: "no pairing screen" and "nobody looked" are the same zero.
+        # "No pairing screen" and "nobody looked" are the same zero.
         for screens in ([], [_screen("settings", "")], [_screen("settings", "   \n ")]):
             code, head, _ = fp.pairing_verdict(screens, [])
             self.assertEqual(code, fp.EX_ENV, screens)
             self.assertIn("INCONCLUSIVE", head)
 
     def test_only_the_watch_screen_is_env_not_a_negative(self):
-        # The real run that motivated this: the probe printed a confident "NO PAIRING ENTRY" about a
-        # video that was playing at the time, because aria-labels made it look substantive.
+        # aria-labels make a playing video's screen look substantive.
         code, head, lines = fp.pairing_verdict(
             [_screen("start", _WATCH_TEXT, "#/watch?v=9p58")], [])
         self.assertEqual(code, fp.EX_ENV)
@@ -241,7 +226,6 @@ class TestPairingVerdict(unittest.TestCase):
         self.assertNotIn("NO PAIRING", head)
 
     def test_the_browse_feed_is_env_not_a_negative(self):
-        # The second real run: 1513 chars at '#/', zero hits, and the probe called it a dead end.
         code, head, _ = fp.pairing_verdict([_screen("start", _BROWSE_TEXT, "#/")], [])
         self.assertEqual(code, fp.EX_ENV)
         self.assertIn("INCONCLUSIVE", head)
@@ -309,8 +293,7 @@ class TestDrmConnectors(unittest.TestCase):
         self.assertEqual(got["DP-1"], "disconnected")
 
     def test_the_internal_panel_is_not_an_external_output(self):
-        # eDP-1 is the Deck's own screen and is always connected: counting it would make every
-        # undocked run look docked, which is precisely the control this exists to be.
+        # eDP-1 is the Deck's own, always-connected screen.
         self.assertEqual(fp.external_outputs(fp.parse_drm_connectors(_DRM_UNDOCKED)), [])
         self.assertEqual(fp.external_outputs(fp.parse_drm_connectors(_DRM_DOCKED)), ["HDMI-A-1"])
 
@@ -349,8 +332,7 @@ class TestDockVerdict(unittest.TestCase):
         code, head, lines = fp.dock_verdict(before, after)
         self.assertEqual(code, fp.EX_OK)
         self.assertIn("CHANGES NOTHING", head)
-        # ...but it must not be read as "docking is unsupported" without looking at the TV: black,
-        # mirrored-and-upscaled and nothing-at-all are three findings this reading cannot separate.
+        # ...but not "docking is unsupported": black, mirrored and blank TVs all read the same here.
         self.assertIn("what the TV is physically showing", " ".join(lines))
 
 

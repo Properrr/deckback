@@ -1,25 +1,13 @@
-// Press-and-hold playback rate: hold the RIGHT third to speed up, the LEFT third to slow down, and
-// release to go back to normal. A one-shot — the launcher renders {"rate":2} or {"rate":0.5} on
-// hold-start and {"stop":true} on release.
-//
-// Both directions are the SAME mechanism, which is the point. An earlier design made the left third
-// a rewind, and rewind is not a rate: Chromium has no negative `playbackRate` (assigning one throws
-// or is ignored, and there is no decoder path for it), so it would have had to be stepped seeks on a
-// timer — a different code path, a different feel, and a decoder thrash. Slow-motion is a real rate
-// on the ladder the player already advertises, so left and right differ only in the number.
-//
-// P12.0b measured that ladder on-Deck: [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2], and measured
-// <video>.playbackRate holding through real playback. The requested rate is snapped to the nearest
-// advertised value, because asking for one outside the ladder is how you get a silently ignored
-// call or a stall.
+// Press-and-hold playback rate: {"rate":2|0.5} on hold-start, {"stop":true} on release (no rewind:
+// Chromium has no negative playbackRate). The rate snaps to the player's advertised ladder; stop
+// restores the pre-hold rate. Returns the resulting <video>.playbackRate, or false.
 (function (p) {
   var v = document.querySelector('video');
   if (!v) return false;
   var st = window.__deckbackScrub;
 
   if (!p || p.stop) {
-    // Restore the rate the user was actually watching at, not a hardcoded 1: they may have set a
-    // speed of their own, and a hold must not quietly reset it.
+    // Restore the pre-hold rate, not a hardcoded 1: the user may have set a speed of their own.
     if (st && typeof st.rate0 === 'number') {
       try { v.playbackRate = st.rate0; } catch (_) {}
       try {

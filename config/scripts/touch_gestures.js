@@ -1,59 +1,12 @@
-// Touch gesture router — the page-layer half of P12.4. THE source of truth: the launcher compiles
-// this in (CMake generates the script registry from config/scripts/*.js) and installs it at
-// document-start (Page.addScriptToEvaluateOnNewDocument) when config `touch_gestures` is set.
-//
-// Why the page and not evdev. input-ux §11 priced a gesture layer as an EVIOCGRAB commitment:
-// grabbing the panel would starve gamescope, making tap-to-activate, palm rejection and the
-// coordinate transform all ours, and a launcher crash would kill touch entirely. That analysis is
-// DEAD twice over — touch-lock.md proved on hardware that the launcher (as the seat user) cannot
-// even open the panel node, and the 2026-07-31 touch probe proved that with gamescope's touch mode
-// at 4 (passthrough) REAL wl_touch reaches Blink: a finger produces touchstart/touchmove/touchend
-// with per-finger identifiers and page-space coordinates. So the router is an ordinary capture-phase
-// listener, it needs no privileges, and a crash leaves touch exactly as it found it.
-//
-// Note this contradicts no_pointer.js's header, which says a finger "produces pointerdown/click,
-// never touchstart". That was true of the mode the app pins (hover, 0) — not of the panel.
-//
-// Mechanism. Capture-phase listeners registered at document-start run before any Leanback handler;
-// every touch event we consume gets stopImmediatePropagation() + preventDefault(), so Leanback
-// never sees the finger and cannot double-act on it. Recognised gestures are pushed onto a queue
-// that the launcher drains over CDP and turns into TRUSTED key events — a page cannot synthesize
-// those (m114.md), which is why this file decides WHAT happened and never what to do about it.
-//
-// Gesture set, from input-ux §3 (mobile's spatial model) and §7 (the gaps vs mobile YouTube):
-//
-//   drag/swipe        -> exactly ONE move per gesture (maxSteps), fired as soon as the finger
-//                        passes stepPx or on release if it never does. Leanback has no pointer
-//                        scroll, so rails longer than a screen are otherwise untraversable by
-//                        touch — the Switch YouTube app's most-criticised gap.
-//
-//                        Tuned on hardware 2026-07-31, in two passes, because the first two
-//                        designs each failed in a way only a finger reveals. Proportional scrolling
-//                        (one arrow per stepPx) is wrong here: Leanback moves SELECTION per key and
-//                        cannot interpolate, so "distance travelled" has no continuous meaning and
-//                        a long swipe silently double-steps. And stepPx alone cannot be tuned out
-//                        of that, because the value big enough to stop a normal swipe
-//                        double-stepping is the value that makes a short swipe do nothing at all.
-//                        So: one gesture is one move, and stepPx only decides WHEN within the
-//                        gesture it fires. maxSteps > 1 restores the proportional model.
-//   flick             -> optional momentum arrows (default OFF: on a discrete-focus UI they
-//                        overshoot rather than glide)
-//   left-edge swipe   -> Escape. There is no touch Back path at all otherwise.
-//   double-tap L/R    -> seek -/+ (mobile's left-half/right-half model). Repeating it on the same
-//                        side ACCUMULATES like mobile: 10, 20, 30, 40s, not four separate jumps.
-//   single tap        -> Enter (activate tile / toggle controls)
-//   long press L/R/C  -> hold-to-scrub while held, direction from the zone: right runs forward at
-//                        2x, left rewinds. Released on lift.
-//
-// MULTITOUCH IS INERT HERE, BUT IT IS DELIVERED. Any sequence that ever sees more than one finger
-// is abandoned and counted in stats().multiFinger, and no gesture comes out of it. That counter was
-// built as a self-probe — and on 2026-07-31 it CLIMBED during ordinary use (5 in 48 sequences), on
-// a device whose navigator.maxTouchPoints reads 0. So gamescope -> Xwayland -> XI2 -> Blink does
-// carry multitouch, and pinch/two-finger work is unblocked.
-//
-// Still unknown, and required before designing one: HOW MANY points arrive. This abandons on the
-// SECOND finger, so it has never counted past 2, and it does not check that coordinates stay sane
-// with two down. Raise the abandon threshold and read maxTouches first.
+// Touch gesture router, installed at document-start when config `touch_gestures` is set.
+// Capture-phase listeners swallow every touch (and its compat mouse/pointer events) and queue
+// gestures that the launcher drains (__deckbackGestures.drain) and turns into trusted key events:
+//   arrow {dir}       swipe; maxSteps moves per gesture, the first at stepPx or on release
+//   back              swipe right from the left edge
+//   tap {zone,x,y}    single tap, committed after the double-tap window
+//   seek {dir,n}      double-tap left/right; n counts a run of repeats on the same side
+//   hold {on,zone}    long press start / release
+// A sequence that ever sees a second finger is abandoned and counted in stats().multiFinger.
 (function () {
   var W = window;
   if (W.__deckbackGestures && W.__deckbackGestures.uninstall) {
@@ -96,8 +49,7 @@
   var seq = null;
   var lastTap = null;      // {x, y, t} of the previous completed tap, for double-tap pairing
   var pendingTap = null;   // setTimeout id: a single tap not yet committed
-  // Mobile's accumulating seek: keep double-tapping the same side and the jump grows 10, 20, 30,
-  // 40s rather than firing four separate 10s jumps. {zone, n, t} of the run in progress.
+  // {zone, n, t} of the accumulating double-tap seek run in progress.
   var seekRun = null;
 
   var now = function (e) {
@@ -120,9 +72,8 @@
     return 'center';
   };
 
-  // Content follows the finger: dragging up moves DOWN the list, as on mobile. `delta` is the
-  // travel along `axis`; the arrow names the LIST movement, never the finger movement. One place,
-  // because the live steps and the release both need it and they must never disagree.
+  // Content follows the finger: dragging up moves DOWN the list. `delta` is the travel along `axis`;
+  // returns the LIST movement, never the finger movement.
   var arrowFor = function (axis, delta) {
     var forward = delta > 0;
     return axis === 'x' ? (forward ? 'left' : 'right') : (forward ? 'up' : 'down');
@@ -136,7 +87,7 @@
   var onStart = function (e) {
     stats.sequences++;
     if (fingers(e) > 1) {
-      // More than one finger: abandon the sequence rather than guess. See the header.
+      // More than one finger: abandon the sequence rather than guess.
       stats.multiFinger++;
       if (seq) seq.abandoned = true;
       return;
@@ -154,8 +105,7 @@
     seq.longTimer = W.setTimeout(function () {
       if (seq && !seq.moved && !seq.abandoned) {
         seq.longFired = true;
-        // The zone decides the DIRECTION, as on mobile: hold the right third to run forward, the
-        // left third to rewind. Captured from where the finger went down, not where it lifts.
+        // The zone where the finger went down (not where it lifts) picks the hold's direction.
         push({g: 'hold', on: true, zone: zoneOf(seq.x0)});
       }
     }, cfg.longPressMs);
@@ -180,8 +130,7 @@
     // horizontal and vertical arrows.
     if (!seq.axis) seq.axis = totalDx > totalDy ? 'x' : 'y';
 
-    // A sequence that began in the left edge zone might still become a Back swipe, so it emits
-    // nothing until release — otherwise Back would also scroll the rail it swiped across.
+    // A drag from the left edge zone may still become Back, so it emits nothing until release.
     if (seq.edge && seq.axis === 'x') return;
 
     seq.accum += seq.axis === 'x' ? dx : dy;
@@ -220,8 +169,7 @@
         lastTap = null;
         var zone = zoneOf(p.x);
         if (zone === 'left' || zone === 'right') {
-          // Same side, soon enough: extend the run. Otherwise start a new one. The launcher
-          // multiplies its skip interval by `n`, so the page never needs to know the seconds.
+          // Same side within seekRunMs extends the run; the launcher multiplies its skip by `n`.
           var t = now(e);
           if (seekRun && seekRun.zone === zone && (t - seekRun.t) <= cfg.seekRunMs) seekRun.n++;
           else seekRun = {zone: zone, n: 1, t: t};
@@ -234,8 +182,7 @@
         return;
       }
       lastTap = {x: p.x, y: p.y, t: now(e)};
-      // Wait out the pairing window before committing a single tap, so a double-tap seek does not
-      // also fire an Enter. This is the same latency mobile YouTube has, for the same reason.
+      // Commit a single tap only after the pairing window, so a double-tap does not also fire Enter.
       var cx = p.x, cy = p.y;
       pendingTap = W.setTimeout(function () { commitTap(cx, cy); }, cfg.doubleTapMs);
       return;
@@ -248,21 +195,15 @@
     }
     if (s.edge && s.axis === 'x') return;  // an edge drag that did not qualify does nothing
 
-    // ANY deliberate swipe moves at least once. Without this, a flick shorter than stepPx emits
-    // nothing at all and the panel feels dead -- the exact complaint that stepPx alone cannot fix,
-    // because raising it to stop a normal swipe double-stepping is what makes a short one do
-    // nothing. So stepPx governs only the ADDITIONAL moves of a longer drag, and travelling past
-    // the tap slop is always worth one.
+    // Any swipe past the tap slop moves at least once, even if shorter than stepPx.
     if (s.emitted === 0) {
       var axis = s.axis || (Math.abs(dx) > Math.abs(dy) ? 'x' : 'y');
       push({g: 'arrow', dir: arrowFor(axis, axis === 'x' ? dx : dy)});
       s.emitted++;
     }
 
-    // Momentum: a fast release keeps the list moving, as a flick does on mobile. Default 0 -- on a
-    // DISCRETE-focus UI a burst of arrows overshoots rather than glides, because Leanback moves
-    // selection per key and cannot interpolate. Kept configurable, not deleted. Also bounded by the
-    // per-gesture budget, so raising it cannot smuggle extra moves past maxSteps.
+    // Momentum arrows on a fast release (flickMaxArrows, default 0: discrete focus overshoots),
+    // still bounded by maxSteps.
     if (s.emitted >= cfg.maxSteps) return;
     var vel = Math.sqrt(dx * dx + dy * dy) / dt;
     if (vel >= cfg.flickMinVel) {
@@ -289,8 +230,7 @@
   };
 
   var handler = function (e) {
-    // Swallow first, so an exception in recognition can never leak the event to Leanback and cause
-    // a double actuation. Recognition failing silently is a missed gesture; leaking is a wrong one.
+    // Swallow first, so an exception in recognition can never leak the event to Leanback.
     swallow(e);
     if (!cfg.enabled) return;
     try {
@@ -301,9 +241,8 @@
     } catch (_) {}
   };
 
-  // The compatibility mouse/pointer events Blink synthesizes from touch are swallowed too: with
-  // preventDefault() on the touch they should not arrive at all, but if any does it must not reach
-  // Leanback as a stray click.
+  // Compat mouse/pointer events synthesized from touch are swallowed too, so none reaches Leanback
+  // as a stray click.
   var TOUCH = ['touchstart', 'touchmove', 'touchend', 'touchcancel'];
   var COMPAT = ['mousedown', 'mouseup', 'mousemove', 'click', 'dblclick', 'auxclick', 'contextmenu',
                 'pointerdown', 'pointerup', 'pointermove', 'pointercancel'];
@@ -327,9 +266,8 @@
 
   W.__deckbackGestures = {
     version: 2,
-    // The launcher drains this. `configured` tells it whether THIS instance has been given the
-    // user's thresholds yet: a page reload installs a fresh document-start copy with defaults, and
-    // the launcher has no reload signal it can trust, so the answer travels with every drain.
+    // Launcher poll. `configured` is false until configure() reaches this instance (a reload
+    // installs a fresh copy with defaults).
     drain: function () {
       var out = queue;
       queue = [];

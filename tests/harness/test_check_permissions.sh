@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
 # L0 tests for scripts/lib/permissions.sh — the parsing and set comparison behind
-# scripts/check-permissions.sh, the gate that stops a manifest change stranding installed users.
-#
-# The load-bearing ones: permission_args() must pick up EVERY sandbox-widening arg (an omission is
-# exactly the v0.0.7 bug — one unnoticed --talk-name and no 0.0.6 user could ever self-update again)
-# while ignoring the two that carry no permission; added_permissions() must report additions and
-# stay silent on removals, which flatpak always allows; and can_self_update() must recognise the
-# portal talk-name so releases predating the updater are skipped rather than failed forever.
-#
-# Needs no git, no flatpak, no container. Run: tests/harness/test_check_permissions.sh
+# scripts/check-permissions.sh, which fails a release that adds a sandbox permission (installed
+# users then cannot self-update). Removals are allowed; flatpak always accepts them.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 
@@ -42,7 +35,7 @@ modules:
       - --not-a-finish-arg
 '
 
-# v0.0.7: identical plus one talk-name. This is the exact shape of the change that broke self-update.
+# v0.0.7: identical plus one talk-name.
 MANIFEST_07="${MANIFEST_06/  - --device=input/  - --device=input
   - --talk-name=org.freedesktop.systemd1}"
 
@@ -81,14 +74,13 @@ code "can_self_update: no when it is absent" 1 \
   can_self_update "${MANIFEST_06/  - --talk-name=org.freedesktop.portal.Flatpak/}"
 
 # ---- the shipped manifest is clean ---------------------------------------------------------------
-# Guards the gate itself: if the real manifest ever parses to nothing, every comparison above would
-# pass vacuously and the gate would wave a broken release through.
+# If the real manifest parsed to nothing, every comparison above would pass vacuously.
 eq "shipped manifest parses to a non-empty permission set" "yes" \
   "$([ -n "$(permission_args "$(cat "$DECKBACK_MANIFEST")")" ] && echo yes || echo no)"
 eq "shipped manifest can self-update" "yes" \
   "$(can_self_update "$(cat "$DECKBACK_MANIFEST")" && echo yes || echo no)"
 
-# ---- metadata_permissions: the live-repo gate (publish-repo.sh, TASKS U3) -----------------------
+# ---- metadata_permissions: the live-repo gate (publish-repo.sh) ---------------------------------
 # A built commit's `metadata`, as `ostree cat <commit> /metadata` prints it.
 META_08='[Application]
 name=io.github.properrr.deckback

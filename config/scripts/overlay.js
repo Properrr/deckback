@@ -1,9 +1,6 @@
-// First-run controls card (findings input-ux §17). Params: title, footer (strings) and rows (an
-// array of [control, action] pairs — structured data the page turns into <td>s, so nothing is
-// pre-escaped by the caller). Appended to documentElement (not innerHTML-replaced) because Leanback
-// is still alive underneath. innerHTML needs a Trusted Types value under youtube.com/tv's CSP; the
-// policy is folded in here (memoised on window.__dbTTP), which is why the card renders on the Deck
-// and not only in host-side tests.
+// First-run controls card. Params: title, footer (strings), rows ([control, action] pairs). Appended
+// to documentElement over live Leanback; innerHTML goes through a Trusted Types policy (memoised on
+// window.__dbTTP) because youtube.com/tv ignores a bare innerHTML assignment.
 (function (p) {
   var STYLE = "<style>#__deckback_help{position:fixed;inset:0;z-index:2147483646;" +
     "background:rgba(8,8,8,0.93);color:#fff;display:flex;flex-direction:column;" +

@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
 # L0 tests for scripts/lib/power_adjudicate.awk — the P4 power gate's adjudication rules.
-#
-# Why this file exists: `just power` once printed `mean 0.00 W over 300 samples` and exited 0 on a
-# Deck with no readable battery node, because awk coerces "" to 0. The P4 gate is "<= 9 W", so a run
-# that measured NOTHING scored a perfect pass. These tests pin the rules that make that impossible.
-#
-# Needs no Deck, no container, no Chromium. Run: tests/harness/test_power_adjudicate.sh
+# Missing samples must void the run (exit 3), never average to 0 W and pass.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 
@@ -41,9 +36,8 @@ expect() {
   pass=$((pass + 1))
 }
 
-# --- THE REGRESSION THIS FILE EXISTS FOR --------------------------------------------------------
-# Empty watts fields are missing data, NOT zero watts. They must void the run, never average to a
-# perfect score. If this test ever passes with exit 0, the gate has gone blind again.
+# --- missing data voids the run -----------------------------------------------------------------
+# Empty watts fields are missing data, not zero watts (awk coerces "" to 0).
 expect "empty samples void the run (never 'mean 0.00 W, PASS')" \
   3 "$(adjudicate 9 "1," "2," "3,")" "measurement void"
 
@@ -63,7 +57,7 @@ expect "mean under the budget passes" \
 expect "mean over the budget fails with the assertion code" \
   2 "$(adjudicate 9 "1,12.00" "2,14.00")" "FAIL: mean draw exceeds the gate"
 
-# Exactly at the budget passes: the gate is "<= 9 W", not "< 9 W".
+# The gate is "<= 9 W", not "< 9 W".
 expect "mean exactly at the budget passes" \
   0 "$(adjudicate 9 "1,9.00" "2,9.00")" "PASS"
 
@@ -73,8 +67,7 @@ expect "a hair over the budget fails" \
 expect "the budget is configurable" \
   0 "$(adjudicate 15 "1,12.00" "2,14.00")" "PASS"
 
-# The reported sample count must be the number actually averaged, so a human reading the line can
-# sanity-check it against the requested duration.
+# The reported count is the number actually averaged.
 expect "reports the sample count it averaged" \
   0 "$(adjudicate 9 "1,1.00" "2,2.00" "3,3.00")" "over 3 samples"
 

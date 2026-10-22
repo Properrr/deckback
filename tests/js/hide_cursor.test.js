@@ -1,9 +1,4 @@
-// Node test for config/scripts/hide_cursor.js.
-//
-// This script exists as its own file because it is one of two suspects for the failure in
-// durable/touch-gestures.md §7.0 — a build on which a real finger produced no events at all. It must
-// therefore be provably self-contained: it may hide the cursor, and it may do nothing else.
-//
+// Node test for config/scripts/hide_cursor.js: it hides the cursor and does nothing else.
 // Run: node tests/js/hide_cursor.test.js   (also wired into ctest when node is present).
 'use strict';
 const fs = require('fs');
@@ -68,8 +63,7 @@ function testItReappliesOnNavigation() {
 }
 
 function testItTouchesNothingElse() {
-  // The whole reason this is a separate file: it must not be able to affect input. If it ever grows
-  // an event listener other than DOMContentLoaded, the split has stopped meaning anything.
+  // It must not affect input: no event listener other than DOMContentLoaded.
   const w = load(mkWindow());
   check(w._listeners.length === 1 && w._listeners[0] === 'DOMContentLoaded',
     `it registers exactly one listener, got ${JSON.stringify(w._listeners)}`);
@@ -78,8 +72,7 @@ function testItTouchesNothingElse() {
 }
 
 function testItSurvivesAHostileDocument() {
-  // A page that throws from every seam must not take the script down: it is injected at
-  // document-start alongside the router, and an uncaught throw there is a broken feature.
+  // A page that throws from every seam must not take the script down.
   const w = {
     CSSStyleSheet: function () { throw new Error('nope'); },
     document: {

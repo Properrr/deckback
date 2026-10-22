@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""L0 coverage of `scripts/deckctl.py`'s verdicts — no Deck, no browser, no socket.
-
-`deckctl` exists to answer questions about the running app with an *exit code*, and the exit code is
-the whole product: `just power` and `just soak` branch on it. The distinctions that matter:
+"""L0 coverage of `scripts/deckctl.py`'s exit-code verdicts — no Deck, no browser, no socket.
 
     3 ENV     nothing is playing, the video is paused, the Media domain never reported
     2 ASSERT  a video is playing and the engine got it wrong (stalled, rewound, software decode)
-
-Both are read off the same `currentTime`. Getting them backwards sends whoever reads the log to
-debug VA-API because someone forgot to press play — or, far worse, files a real stall as operator
-error and closes the ticket.
 """
 
 import argparse
@@ -51,8 +44,7 @@ class FakeCDP:
 
 
 def _args(**kw):
-    # A tiny but NON-ZERO window. With window=0 the required advance is 0, so a stalled
-    # video passes every check — the test would assert nothing.
+    # A tiny but NON-ZERO window: with window=0 the required advance is 0 and a stall passes.
     base = dict(window=0.05, min_fraction=0.5, timeout=0.0, require_vaapi=False)
     base.update(kw)
     return argparse.Namespace(**base)
@@ -78,8 +70,7 @@ class Playing(unittest.TestCase):
         self.assertEqual(deckctl.cmd_playing(cdp, _args()), deckctl.EX_ENV)
 
     def test_a_stall_is_ASSERT(self):
-        # Playing, unpaused, and currentTime frozen. That is the product, and it must not be excused
-        # as an environment problem — `just soak` exits on this code and a 3 reads as "your fault".
+        # Playing, unpaused, currentTime frozen: a product failure, never ENV.
         cdp = FakeCDP([_state(10.0), _state(10.0)])
         self.assertEqual(deckctl.cmd_playing(cdp, _args()), deckctl.EX_ASSERT)
 
@@ -88,7 +79,6 @@ class Playing(unittest.TestCase):
         self.assertEqual(deckctl.cmd_playing(cdp, _args()), deckctl.EX_ASSERT)
 
     def test_pausing_mid_window_is_ENV_not_a_stall(self):
-        # The operator's world changed under us between the two samples. A stall it is not.
         cdp = FakeCDP([_state(10.0), _state(10.0, paused=True)])
         self.assertEqual(deckctl.cmd_playing(cdp, _args()), deckctl.EX_ENV)
 
@@ -104,7 +94,6 @@ class Decoder(unittest.TestCase):
         self.assertTrue(cdp.media_enabled, "Media.enable was never sent")
 
     def test_software_decode_is_ASSERT_when_required(self):
-        # A 9 W budget measured under Dav1d is a number about software AV1, which we do not ship.
         cdp = FakeCDP(media=FakeMedia("Dav1dVideoDecoder", False))
         self.assertEqual(deckctl.cmd_decoder(cdp, _args(require_vaapi=True)), deckctl.EX_ASSERT)
 
@@ -113,8 +102,7 @@ class Decoder(unittest.TestCase):
         self.assertEqual(deckctl.cmd_decoder(cdp, _args(require_vaapi=False)), deckctl.EX_OK)
 
     def test_a_silent_media_domain_is_ENV_not_software_decode(self):
-        # The dangerous confusion. No decoder name means the probe never reported; calling that
-        # "software decode" (exit 2) sends the reader to debug VA-API, which is working fine.
+        # No decoder name means the probe never reported — not evidence of software decode.
         cdp = FakeCDP(media=FakeMedia(None, None))
         self.assertEqual(deckctl.cmd_decoder(cdp, _args(require_vaapi=True)), deckctl.EX_ENV)
 

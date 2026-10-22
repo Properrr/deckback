@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
 """L0 coverage of the idle-nudge helper's pure logic (scripts/idle-nudge.py).
 
-The helper keeps the Deck awake during playback by jiggling a synthetic pointer, but ONLY while it
-believes a video is playing. That belief comes from parsing logind's inhibitor list. When the parse
-is wrong the helper goes silent and the screen dims then suspends mid-video — with *no error* on the
-Deck, because "nothing to nudge" and "detection broke" look identical from the outside.
-
-The regression this file pins down: the helper used to grep the human-readable `systemd-inhibit
---list` table for "playback active". That table truncates its WHY column to the terminal width, so a
-SteamOS systemd bump that tightened truncation dropped the match — helper silent, screen sleeps. The
-fix reads logind's ListInhibitors over D-Bus (busctl --json), whose reply is never truncated. These
-tests assert the matcher's behavior on both an untruncated source (True) and a truncated table
-(False, documenting exactly the failure that shipped), so a future refactor can't quietly reintroduce
-either half. They import the module WITHOUT python-evdev installed (CI has none) — proving the evdev
-dependency stayed lazy, which is the only reason this logic is testable off-Deck at all.
+The helper nudges only while logind holds Deckback's "playback active" inhibitor, read from the
+untruncated busctl --json reply. Imported without python-evdev, so evdev must stay lazy.
 """
 
 import importlib.util
@@ -37,8 +26,7 @@ def _load_module():
 idle = _load_module()
 
 
-# A realistic logind ListInhibitors reply (busctl --json=short) with Deckback's two inhibitors held.
-# The WHY strings appear verbatim — this is the source the fix relies on.
+# A logind ListInhibitors reply (busctl --json=short) with Deckback's two inhibitors held.
 BUSCTL_PLAYING = (
     '{"type":"a(ssssuu)","data":[['
     '["idle","Deckback","Deckback: playback active","block",1000,4242],'
@@ -60,8 +48,7 @@ TABLE_FULL = (
     "Deckback 1000 deck 4242 deckback idle Deckback: playback active block\n"
 )
 
-# The same table TRUNCATED to a narrow terminal — logind ellipsizes the WHY column and "active" is
-# gone. This is byte-for-byte the shape that silently broke detection on the SteamOS bump.
+# The same table TRUNCATED to a narrow terminal: the WHY column is ellipsized, "active" is gone.
 TABLE_TRUNCATED = (
     "WHO      UID  USER PID  COMM     WHAT WHY                 MODE\n"
     "Deckback 1000 deck 4242 deckback idle Deckback: playback… bloc\n"
@@ -79,9 +66,7 @@ class TestInhibitorMatch(unittest.TestCase):
         self.assertTrue(idle.inhibitor_active(TABLE_FULL))
 
     def test_regression_truncated_table_loses_the_marker(self):
-        # This is the bug, frozen: the marker is really absent once the column is truncated. It is
-        # NOT that the matcher is wrong — it's that the truncatable table is the wrong *source*, which
-        # is why read_inhibitors() prefers the D-Bus reply above.
+        # The marker is really absent: the table is the wrong source, hence the D-Bus reply.
         self.assertFalse(idle.inhibitor_active(TABLE_TRUNCATED))
 
     def test_empty_and_none_are_safe(self):
@@ -140,17 +125,10 @@ class TestResolveInterval(unittest.TestCase):
 
 
 class TestMissingLimit(unittest.TestCase):
-    """The self-removal grace period, in wall-clock terms.
-
-    This is the bug that actually took the helper down on the OLED Deck: `just deck-install-dev` is a
-    flatpak *uninstall* immediately followed by an install, so the app dir disappears on every deploy.
-    With the old 3-poll (~75 s) debounce the watcher decided Deckback was gone, ran `disable --now`,
-    and left the unit disabled — screen dimming mid-video from then on, silently.
-    """
+    """The self-removal grace period must outlast a reinstall (uninstall then install)."""
 
     def test_grace_is_long_enough_to_survive_a_reinstall(self):
-        # Observed deploy gaps were ~9-15 s; even a slow rebuild between uninstall and install must
-        # not trip this.
+        # Even a slow rebuild between uninstall and install must not trip this.
         for interval in (idle.MIN_INTERVAL, idle.DEFAULT_INTERVAL, idle.MAX_INTERVAL):
             seconds = idle.missing_limit(interval) * interval
             self.assertGreaterEqual(seconds, 600, f"grace too short at interval={interval}")
@@ -172,20 +150,11 @@ class TestDeckbackInstalled(unittest.TestCase):
 
 
 class TestHeartbeat(unittest.TestCase):
-    """The liveness hand-off to the sandboxed app.
-
-    The app cannot ask systemd whether this unit runs — that needs --talk-name=org.freedesktop.
-    systemd1, and adding it to the manifest is exactly what broke self-update in v0.0.7. So the
-    helper stamps a file the app stats instead. Two things must hold or the replacement is worse
-    than what it replaced: the path has to be the one the Flatpak's $XDG_DATA_HOME resolves to
-    (write the wrong path and the app silently never sees a heartbeat), and stamping must never be
-    able to take the nudging down with it.
-    """
+    """The liveness file the sandboxed app stats: under its $XDG_DATA_HOME, and never fatal."""
 
     def test_path_is_the_flatpak_data_dir(self):
-        # $XDG_DATA_HOME inside the sandbox is ~/.var/app/<id>/data, so the app reads
-        # $XDG_DATA_HOME/deckback/idle-nudge.alive == this path. Pinned literally: a refactor that
-        # "tidies" this path breaks the hand-off with no error on either side.
+        # The app reads $XDG_DATA_HOME/deckback/idle-nudge.alive, with ~/.var/app/<id>/data as
+        # $XDG_DATA_HOME.
         self.assertEqual(
             idle.heartbeat_path(home="/home/deck"),
             "/home/deck/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive",
@@ -201,9 +170,7 @@ class TestHeartbeat(unittest.TestCase):
             self.assertGreater(os.path.getmtime(path), 0)
 
     def test_write_failure_is_survivable(self):
-        # An unwritable destination must return False, not raise: run_daemon() stamps the heartbeat
-        # at the top of every pass, so an exception here would kill the nudging outright — trading a
-        # missing warning for the very screen-dimming the helper exists to prevent.
+        # Must return False, not raise: run_daemon() stamps every pass; a raise stops the nudging.
         with tempfile.TemporaryDirectory() as home:
             blocker = os.path.join(home, "blocked")
             with open(blocker, "w"):
@@ -213,10 +180,7 @@ class TestHeartbeat(unittest.TestCase):
 
 class TestLazyEvdev(unittest.TestCase):
     def test_module_imported_without_evdev_binding(self):
-        # The detection logic must be importable where python-evdev is absent (all of CI). If evdev
-        # were imported at module scope this file would have errored on import above; assert too that
-        # the module never bound an evdev name at top level, so a stray top-level import can't creep
-        # back and re-break off-Deck testability.
+        # Importable without python-evdev, and no evdev name bound at module scope.
         self.assertNotIn("evdev", vars(idle))
         self.assertNotIn("UInput", vars(idle))
         self.assertTrue(hasattr(idle, "_open_uinput"))

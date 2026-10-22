@@ -1,6 +1,5 @@
-// Play-state poll (player.cpp decode_play_state): one round trip, three signals packed into a
-// bitmask. bit0 playing, bit1 player_open (Leanback's #/watch route), bit2 text_input_focused.
-// Keyed on `activeElement`, which appears only here (the test double matches on it). No params.
+// Play-state poll as a bitmask: bit0 playing, bit1 player open (#/watch), bit2 text input focused.
+// No params. Keyed on `activeElement`, which appears only here (the test double matches on it).
 (function (p) {
   var v = document.querySelector('video');
   var playing = !!(v && !v.paused && !v.ended && v.readyState > 2);

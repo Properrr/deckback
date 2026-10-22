@@ -1,11 +1,5 @@
-// Node behavioural test for the Updates tab of config/scripts/osd.js, driven through a mock DOM.
-//
-// Why a real drive and not a source grep: the bug this covers is a REACHABILITY bug. The release
-// notes rendered correctly the whole time — a user still reported "I didn't see a changelog",
-// because the notes box caps at 44vh, its content is several times that, and ↑/↓ moved between the
-// two action buttons instead of scrolling it. The box drew a scroll thumb nothing could move. A
-// string match on the source cannot tell you a key reaches the content; pressing the key can.
-//
+// Node behavioural test for the Updates tab of config/scripts/osd.js, driven through a mock DOM:
+// key presses must reach the whole release notes, which a source grep cannot show.
 // Run: node tests/js/osd_updates_nav.test.js   (also wired into ctest when node is present).
 'use strict';
 const fs = require('fs');
@@ -23,8 +17,7 @@ function check(cond, msg) {
 }
 
 // ---- minimal DOM -------------------------------------------------------------------------------
-// Only what osd.js touches. Layout is faked with fixed numbers: the notes box is a 300 px window
-// onto 1200 px of text, which is the real shape (44vh over a full release's changelog).
+// Only what osd.js touches. Layout is faked: the notes box is a 300 px window onto 1200 px of text.
 const NOTES_VIEWPORT = 300;
 const NOTES_CONTENT = 1200;
 
@@ -54,8 +47,7 @@ function makeEl(tag) {
     contains(c) { return node.className.split(' ').includes(c); },
     toggle(c, on) { if (on) node.classList.add(c); else node.classList.remove(c); },
   };
-  // The scroll box's clip height, and its inner wrapper's content height, are what applyScroll()
-  // does its arithmetic on — so this is where the "content is taller than the window" shape lives.
+  // Clip height and inner content height: what applyScroll() does its arithmetic on.
   Object.defineProperty(node, 'clientHeight', {
     get() { return node.classList.contains('scroll') ? NOTES_VIEWPORT : 0; },
   });
@@ -139,7 +131,7 @@ function exec(S, cmd) { return S.exec(cmd); }
   const notes = S.notesBox();
   check(!!notes, 'the Updates tab has a notes box when notes were supplied');
 
-  // THE regression: ↑/↓ must move the notes, not the focus ring.
+  // ↑/↓ move the notes, not the focus ring.
   const before = notes.__off;
   const idxBefore = S.focusIdx;
   exec(S, 'down');
@@ -152,12 +144,12 @@ function exec(S, cmd) { return S.exec(cmd); }
   exec(S, 'up');
   check(notes.__off === 0, 'scrolling stops at the top instead of going negative');
 
-  // Enough presses must reach the end of the changelog — the thing the user could not do at all.
+  // Enough presses reach the end of the changelog.
   for (let i = 0; i < 50; i++) exec(S, 'down');
   check(notes.__off === NOTES_CONTENT - NOTES_VIEWPORT,
     'the notes scroll all the way to the last line, got ' + notes.__off);
 
-  // ←/→ now carry focus between the two action buttons, which sit in one horizontal row.
+  // ←/→ carry focus between the two action buttons, which sit in one horizontal row.
   S.focusIdx = 0;
   exec(S, 'right');
   check(S.focusIdx === 1, 'right moves to the second action button');
@@ -170,7 +162,7 @@ function exec(S, cmd) { return S.exec(cmd); }
   check(exec(S, 'select') === 'action:update.confirm', 'A activates the focused button');
 }
 
-// The hint bar has to advertise the rebound keys, or a reachable changelog is still an invisible one.
+// The hint bar advertises the rebound keys.
 {
   const { S } = open();
   exec(S, 'tab_next');
@@ -181,8 +173,7 @@ function exec(S, cmd) { return S.exec(cmd); }
     'the Settings tab keeps the default hint, got: ' + S.navHint.textContent);
 }
 
-// With no notes (the GitHub fetch failed, or nothing is published) ↑/↓ must fall back to moving
-// focus — otherwise the buttons become unreachable, which is the same bug pointed the other way.
+// With no notes, ↑/↓ fall back to moving focus so the buttons stay reachable.
 {
   const { S } = open({ upd_notes: '' });
   exec(S, 'tab_next');
@@ -200,10 +191,7 @@ function exec(S, cmd) { return S.exec(cmd); }
   check(exec(S, 'select') === 'action:update.check', 'A runs the manual check');
 }
 
-// A verdict arriving while the menu is OPEN must patch the panel in place. The menu is otherwise a
-// snapshot taken at open time, so the answer to a check — which lands under a second after the
-// press, with the menu still up — would never be seen. Reported on-device as "the button does
-// nothing": it worked, the reply just had nowhere to go.
+// A verdict arriving while the menu is open patches the panel in place.
 {
   const { S } = open({ upd_has: false, upd_buttons: [['update.check', 'Check for updates']] });
   exec(S, 'tab_next');
@@ -240,8 +228,8 @@ function exec(S, cmd) { return S.exec(cmd); }
   check(S.tabs.updates.classList.contains('badge'), 'the Updates tab badges when an update appears');
 }
 
-// A patch aimed at a menu that is gone must say so, not throw — the launcher clears its captured
-// state on 'gone', which is what keeps capture and paint from drifting apart.
+// A patch aimed at a menu that is gone answers 'gone' (the launcher then clears its captured
+// state) instead of throwing.
 {
   const { S } = open();
   S.root.remove();

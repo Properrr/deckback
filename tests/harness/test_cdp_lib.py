@@ -1,17 +1,8 @@
 #!/usr/bin/env python3
 """L0 tests for the pure parts of scripts/cdp.py — no socket, no engine, no Deck.
 
-Covers `key_spec` (what we are allowed to synthesize), `MediaState` (the decoder-identity
-accumulator, TEST-PLAN §5), and the `--assert`/`--baseline` machinery `just smoke` gates on (T6).
-All are pure functions of their input, which is exactly why they were factored out of the socket
-code.
-
-`MediaState` accumulates; it does not adjudicate. The P4 verdict lives once, in
-`tests/deck/lib/probes.py:hardware_decode_verdict`. The gate tests below drive the whole seam —
-feed events in, read a verdict out — because the two halves living in different files is the only
-reason there is a seam to get wrong.
-
-Run: python3 tests/harness/test_cdp_lib.py   (also run by tests/harness/run.sh and CI)
+Covers `key_spec`, `MediaState` feeding `probes.hardware_decode_verdict` (the P4 gate), and the
+`--assert`/`--baseline` machinery `just smoke` gates on.
 """
 import os
 import pathlib
@@ -42,11 +33,11 @@ def check(name, cond, detail=""):
 def test_named_keys():
     check("ArrowUp resolves to VK 38", key_spec("ArrowUp") == ("ArrowUp", "ArrowUp", 38, ""))
     check("Enter resolves to VK 13", key_spec("Enter") == ("Enter", "Enter", 13, ""))
-    # Tree-verified in cobalt/src/starboard/key.h: kSbKeyMediaRewind = 0xE3, ..FastForward = 0xE4.
+    # cobalt/src/starboard/key.h: kSbKeyMediaRewind = 0xE3, ..FastForward = 0xE4.
     check("MediaRewind is VK 227", key_spec("MediaRewind")[2] == 227)
     check("MediaFastForward is VK 228", key_spec("MediaFastForward")[2] == 228)
     # Delete(46) is the OSK erase candidate: kSbKeyBack == kSbKeyBackspace == 8, so Backspace is
-    # predicted to pop the view rather than erase (input-ux §8.4).
+    # predicted to pop the view rather than erase.
     check("Delete is VK 46", key_spec("Delete")[2] == 46)
     check("Backspace is VK 8", key_spec("Backspace")[2] == 8)
     check("aliases resolve (Down -> ArrowDown)", key_spec("Down") == key_spec("ArrowDown"))
@@ -56,7 +47,7 @@ def test_named_keys():
 
 def test_printable_keys():
     # Printable keys MUST carry `text`, or Blink never fires beforeinput/textInput and nothing lands
-    # in a focused <input>. This is the whole text-entry mechanism.
+    # in a focused <input>.
     check("'a' -> KeyA/65 with text", key_spec("a") == ("a", "KeyA", 65, "a"))
     check("'N' keeps the physical code", key_spec("N") == ("N", "KeyN", 78, "N"))
     check("'7' -> Digit7/55", key_spec("7") == ("7", "Digit7", 55, "7"))
@@ -68,8 +59,7 @@ def test_printable_keys():
 
 
 def test_refuses_to_guess():
-    # No guessing: an unknown name yields None so the caller raises, rather than dispatching a
-    # plausible-looking key that silently does nothing.
+    # An unknown name yields None so the caller raises rather than dispatching a dud key.
     for bad in ("VolumeUp", "ab", "", "\n", "\x7f", "PlayPause"):
         check(f"refuses {bad!r}", key_spec(bad) is None)
 
@@ -99,8 +89,7 @@ def test_media_ignores_unrelated_events():
 
 
 def test_media_null_does_not_erase():
-    """The engine re-emits properties as null while tearing a player down. A null must not erase a
-    decoder name we already observed, or the gate reads 'no decoder' at the end of every video."""
+    """A null (re-emitted on player teardown) must not erase a decoder name already observed."""
     m = MediaState()
     m.feed(_props_event("p1", kVideoDecoderName="VaapiVideoDecoder"))
     m.feed(_props_event("p1", kVideoDecoderName=None))
@@ -120,7 +109,7 @@ def test_hardware_gate_passes_on_vaapi():
     ok, reason = _verdict(m)
     check("VaapiVideoDecoder passes the P4 gate", ok, reason)
 
-    # Substring match: an older path stringifies as VaapiVideoDecodeAccelerator (TEST-PLAN §5).
+    # Substring match: an older path stringifies as VaapiVideoDecodeAccelerator.
     m2 = MediaState()
     m2.feed(_props_event("p2", kVideoDecoderName="VaapiVideoDecodeAccelerator",
                          kIsPlatformVideoDecoder="true"))
@@ -129,8 +118,7 @@ def test_hardware_gate_passes_on_vaapi():
 
 
 def test_hardware_gate_fails_on_software():
-    # Dav1dVideoDecoder is AV1 *software* decode — it must never appear, and if it does the AV1
-    # steering broke. This assertion is the difference between "slow" and "we shipped a regression".
+    # Dav1dVideoDecoder is AV1 *software* decode: if it appears, the AV1 steering broke.
     for name in ("Dav1dVideoDecoder", "VpxVideoDecoder", "FFmpegVideoDecoder"):
         m = MediaState()
         m.feed(_props_event("p1", kVideoDecoderName=name, kIsPlatformVideoDecoder="false"))
@@ -140,8 +128,7 @@ def test_hardware_gate_fails_on_software():
 
 
 def test_hardware_gate_fails_when_nothing_played():
-    # The dangerous case, and the one the power gate got wrong: no observation must never read as a
-    # pass. A silent absence of evidence is not evidence of hardware decode.
+    # No observation must never read as a pass.
     m = MediaState()
     ok, reason = _verdict(m)
     check("no decoder observed FAILS (never a silent pass)", not ok, reason)
@@ -149,12 +136,7 @@ def test_hardware_gate_fails_when_nothing_played():
 
 
 def test_hardware_gate_fails_when_the_platform_flag_never_arrived():
-    """A decoder name with no `kIsPlatformVideoDecoder` is a BROKEN PROBE, not a software decoder.
-
-    The two must be told apart. The copy of this gate that used to live in cdp.py read a missing flag
-    as `false` and reported "software decode", sending whoever read the log to debug VA-API when the
-    real fault was that the Media domain had not finished reporting.
-    """
+    """A decoder name with no `kIsPlatformVideoDecoder` is a BROKEN PROBE, not software decode."""
     m = MediaState()
     m.feed(_props_event("p1", kVideoDecoderName="VaapiVideoDecoder"))
     ok, reason = _verdict(m)
@@ -164,14 +146,7 @@ def test_hardware_gate_fails_when_the_platform_flag_never_arrived():
 
 
 def test_hardware_gate_fails_on_software_decoder_claiming_to_be_platform():
-    """The `"Vaapi" in name` check must stand on its own.
-
-    Found by mutation: every other software-decoder test also sets kIsPlatformVideoDecoder=false, so
-    they all short-circuit on the platform flag and never reach the name check. Deleting the name
-    check left the suite green. A decoder that reports itself as a platform decoder but is not VA-API
-    (a v4l2/other-vendor accelerator, or a mislabeled path) must still fail the P4 gate, which is
-    specifically about VA-API.
-    """
+    """The `"Vaapi" in name` check stands on its own: a non-VA-API platform decoder still fails."""
     m = MediaState()
     m.feed(_props_event("p1", kVideoDecoderName="Dav1dVideoDecoder", kIsPlatformVideoDecoder="true"))
     ok, reason = _verdict(m)
@@ -180,8 +155,7 @@ def test_hardware_gate_fails_on_software_decoder_claiming_to_be_platform():
 
 
 def test_hardware_gate_fails_if_platform_flag_false():
-    # A decoder named "Vaapi..." but not flagged as a platform decoder must not pass on the name
-    # alone — both conditions are required by TEST-PLAN §5.
+    # A "Vaapi..." name alone is not enough; both conditions are required.
     m = MediaState()
     m.feed(_props_event("p1", kVideoDecoderName="VaapiVideoDecoder", kIsPlatformVideoDecoder="false"))
     ok, _ = _verdict(m)
@@ -191,12 +165,7 @@ def test_hardware_gate_fails_if_platform_flag_false():
 # ---- the smoke-gate assertion machinery (T6) -------------------------------------------------
 
 def test_run_assertions_demands_exactly_true():
-    """Truthy is not true. A predicate that returns "false", 1, or undefined is a broken predicate.
-
-    `undefined` is the one that matters: it is what `Runtime.evaluate` returns when we misspell a
-    property, and under a truthiness test it reads as a clean failure while under a `== true` test it
-    reads as a clean pass. Neither is what happened. Only `is True` distinguishes them.
-    """
+    """Only exactly True passes; "false", 1 or undefined (a misspelled property) is broken."""
     for value in (True,):
         check(f"{value!r} passes", run_assertions(lambda _e: value, ["x"]) == [])
     for value in (1, "true", "false", "", 0, None, [], [1], {}):
@@ -218,12 +187,7 @@ def test_run_assertions_reports_every_failure_not_just_the_first():
 
 
 def test_codec_assertions_cover_all_three_apis_and_a_negative_control():
-    """T6: AV1 must look unsupported through every API YouTube probes, and only through those.
-
-    The `ok_mimes` half is not decoration. Steering that reported *everything* unsupported would
-    satisfy an AV1-only assertion perfectly while YouTube served nothing at all — a green gate over a
-    black screen.
-    """
+    """AV1 must look unsupported through every API YouTube probes, while OK_MIMES stay supported."""
     a = codec_assertions(AV1_MIME, OK_MIMES)
     av1 = [x for x in a if "av01" in x]
     check("MediaSource.isTypeSupported probed for AV1",
@@ -248,12 +212,7 @@ def test_codec_assertions_escape_the_mime_string():
 
 
 def test_av1_baseline_asserts_the_unsteered_engine_supports_av1():
-    """The control for the control.
-
-    Without this the whole T6 gate is vacuous on an engine built with no AV1 decoder: every steering
-    assertion passes because there was never anything to steer. That is `just power` reporting
-    `mean 0.00 W … PASS` from a battery with no telemetry, in a different costume.
-    """
+    """The unsteered engine must support AV1, or every steering assertion passes vacuously."""
     b = av1_baseline_assertion(AV1_MIME)
     check("baseline demands AV1 is supported BEFORE steering", "=== true" in b and "av01" in b, b)
     check("baseline is the opposite of the post-steering assertion",
@@ -267,13 +226,7 @@ def test_assertion_failure_is_not_retryable():
 
 
 def test_av1_steering_script_has_exactly_one_source():
-    """`config/scripts/av1_steering.js` is the only copy.
-
-    The launcher embeds all of config/scripts/ as the ScriptLibrary registry (CMake generates
-    scripts_registry.hpp) and `just smoke` injects the same file. A second copy — a C++ string
-    literal, a Python constant — is a copy that goes stale silently, and the symptom is a green
-    smoke run gating a script nobody ships.
-    """
+    """`config/scripts/av1_steering.js` is the only copy; launcher and `just smoke` both use it."""
     js = pathlib.Path(_ROOT, "config", "scripts", "av1_steering.js")
     check("config/scripts/av1_steering.js exists", js.is_file())
     src = js.read_text()

@@ -1,21 +1,8 @@
 #!/usr/bin/env python3
 """L0 coverage of the touch passthrough probe's pure logic (scripts/touch-probe.py).
 
-The probe itself cannot run without a Deck AND a human tapping the panel, so without this file every
-decision it makes would be unreviewable until the one session where it matters. What is pinned here
-is the part that turns raw observations into a verdict — the part that would otherwise be able to
-print a confident answer from no data at all, which is exactly the failure `just power` shipped once
-(`mean 0.00 W … PASS` on a Deck with no battery telemetry).
-
-The two that would bite:
-
-  * `classify()` must rank a single `touchstart` above a thousand `mousemove`s. Only the former
-    proves real `wl_touch` survived gamescope -> Xwayland -> XI2 -> Blink; the latter is the pointer
-    emulation we already have and do not want. A count-based "whichever is biggest" would report
-    'mouse' for a perfect passthrough sample and send the reader to the wrong design.
-  * `verdict()` must return ENV, not a cheerful negative, when NOTHING was observed. "No touch events
-    in mode 4" and "nobody tapped the screen" produce identical counts, and only one of them is a
-    finding about gamescope.
+`classify()` ranks any `touchstart` above any number of mouse events; `verdict()` returns ENV, not a
+negative finding, when nothing was observed.
 """
 
 import importlib.util

@@ -1,14 +1,7 @@
 #!/usr/bin/env python3
 """L0 coverage of the display-corruption pixel gate (`probes.green_band_ratio` / `video_corruption_verdict`).
 
-Why this file exists. On 2026-07-10 VA-API hardware decode engaged, `corruptedVideoFrames` stayed 0,
-and every video was painted with neon-green horizontal bands anyway — ANGLE's import of the decoded
-surface was broken, invisible to the media pipeline (durable/hardware.md). The pixel gate in
-`tests/deck/test_media.py::test_video_is_not_corrupt` is the check that would have caught it, but that
-gate only runs with a Deck attached. Its detector is a pure function over PNG bytes, so it is checked
-here on synthetic frames on every push — and, per F1, it is checked that it can BOTH fire on corruption
-AND stay silent on a clean (including green-foliage-heavy) frame. A detector that cannot do both is not
-a check; it is either a rubber stamp or a false alarm.
+On synthetic frames: it must fire on neon-green bands AND stay silent on a foliage-heavy frame.
 """
 
 import io
@@ -26,8 +19,7 @@ from lib import probes  # noqa: E402
 W, H = 400, 100
 NEON = (0, 255, 0)
 BLACK = (0, 0, 0)
-# A saturated-but-natural foliage green: bright, but red and blue are substantial, so it is NOT the
-# corruption signature. This is the pixel most likely to be mis-flagged, so it is the one we pin.
+# Natural foliage green (substantial red and blue): the pixel most likely to be mis-flagged.
 FOLIAGE = (70, 150, 60)
 
 

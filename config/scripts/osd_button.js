@@ -1,5 +1,5 @@
-// Settings button (osd-menu-plan.md §6): top-right pill affordance for the OSD menu, replacing the
-// self-update pill. pointer-events:none, CSSOM-styled, keep-alive'd. Params: label, badge (bool).
+// Settings button: top-right pill for the OSD menu. Params: label, badge (bool). pointer-events:none,
+// CSSOM-styled, keep-alive'd.
 (function (p) {
   // keep-alive (shared)
   if (!window.__dbKeepAlive) {
@@ -50,7 +50,7 @@
   });
 
   var gear = document.createElement('span');
-  gear.textContent = '⚙';  // ⚙ gear
+  gear.textContent = '⚙';
   css(gear, { 'font-size': '22px', 'line-height': '1', flex: '0 0 auto' });
   var text = document.createElement('span');
   text.textContent = label;

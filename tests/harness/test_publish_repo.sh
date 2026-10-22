@@ -1,18 +1,9 @@
 #!/usr/bin/env bash
-# L1 rehearsal of scripts/publish-repo.sh (TASKS U1/U2/U3): synthetic bundles, a throwaway signing
-# key, a local "live" site and a real `flatpak --user` client in a private FLATPAK_USER_DIR. Checks
-# what the release pipeline promises, the way a user's machine would see it:
-#   - the first publish continues today's production state (a live head whose parent 404s);
-#   - every publish chains onto the live head, and a client one behind updates through the static
-#     delta (asserted from the server's request log, not from flatpak's wording);
-#   - a client two behind still updates;
-#   - re-publishing an older bundle is a recall the client installs as an ordinary update;
-#   - a bundle that adds a permission is refused (exit 2), and an unreachable live repo is an error
-#     (exit 3), never a silent fresh start.
-#
-# Needs flatpak, ostree, gpg and python3; prints SKIP and passes without them (the CI lint image has
-# neither flatpak nor ostree). No network, no root, nothing outside a temp dir.
-# Run: tests/harness/test_publish_repo.sh
+# L1 rehearsal of scripts/publish-repo.sh: synthetic bundles, a throwaway signing key, a local
+# "live" site and a real `flatpak --user` client. Publishes chain onto the live head, clients one or
+# two behind update (one behind via the static delta), a re-published older bundle is a recall, an
+# added permission is refused (exit 2) and an unreachable live repo is an error (exit 3).
+# Needs flatpak, ostree, gpg and python3; prints SKIP and passes without them. No network, no root.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 root="$PWD"
@@ -79,10 +70,8 @@ org.freedesktop.login1=talk
 ${3:-}
 EOF
 }
-# bundle <name> <version> [extra]: each bundle comes from its own builder repo whose commit has a
-# parent there (a dev build) that the bundle does NOT carry and no published repo has — like
-# flatpak-builder's local repo in production. So a published commit can only chain onto the live head
-# if publish-repo.sh made it so, never by accident of the builder's history.
+# bundle <name> <version> [extra]: each builder repo has a parent commit (a dev build) the bundle
+# does NOT carry, so a published commit chains onto the live head only if publish-repo.sh makes it.
 bundle() {
   local b="$T/builder-$1"
   ostree init --repo="$b" --mode=archive-z2
@@ -117,7 +106,7 @@ head_of() { ostree rev-parse --repo="$T/$1/repo" "$ref"; }
 client_says() { "$FLATPAK_USER_DIR/app/$app/current/active/files/bin/hello"; }
 requests_since() { tail -n +"$(($1 + 1))" "$T/http.log"; }
 
-# Production today: the repo rebuilt from one bundle, so the live head's parent is missing (404).
+# Starting state: a repo built from one bundle, so the live head's parent is missing (404).
 mkdir -p "$T/site0/repo"
 ostree init --repo="$T/site0/repo" --mode=archive-z2
 flatpak build-import-bundle --gpg-sign="$key" "$T/site0/repo" "$T/v0b.flatpak" >/dev/null
@@ -164,8 +153,7 @@ FLATPAK_USER_DIR="$T/client-old" flatpak --user update -y --noninteractive --no-
 eq "a client two releases behind (no delta from its commit) still updates" "0.1.1" \
   "$("$T/client-old/app/$app/current/active/files/bin/hello")"
 
-# What RELEASING.md tells a user they can do without us: see the kept history, go back one release,
-# and hold a version.
+# RELEASING.md's user promises: see the kept history, go back one release, hold a version.
 yes_ "remote-info --log lists the previous release" \
   grep -q "$h1" <(flatpak --user remote-info --log deckback "$app" 2>/dev/null)
 flatpak --user update -y --noninteractive --no-deps --no-related --commit="$h1" "$app" >/dev/null 2>&1

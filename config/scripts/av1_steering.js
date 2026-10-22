@@ -1,18 +1,6 @@
-// AV1 codec steering. THE source of truth: compiled into the launcher (CMake generates
-// av1_steering_js.hpp from this file) and injected verbatim by `just smoke`, so the nightly canary
-// exercises the script that ships rather than a copy of it that can drift.
-//
-// Why steer at all: AV1 hardware decode on the Deck is *unproven through* VaapiVideoDecoder. libva
-// on the OLED unit advertises AV1Profile0, so the old "no AV1 hardware" claim is disputed
-// (.internal/findings/durable/hardware.md) — but until we observe AV1 decoding through the platform
-// path we assume a Dav1d software fallback, which blows the battery budget.
-//
-// Injected at the start of every document (Page.addScriptToEvaluateOnNewDocument), before Leanback
-// probes formats. Covers the three APIs YouTube TV uses to choose a codec. Done over CDP rather
-// than as an engine patch, per the launcher-as-platform-layer principle.
-//
-// Each override is independently try/caught: a missing API must disable that one hook, never abort
-// the other two and leave AV1 half-steered.
+// AV1 steering (AV1 hardware decode is unproven on the Deck), injected at document-start: report AV1
+// unsupported via MediaSource.isTypeSupported, canPlayType and mediaCapabilities.decodingInfo. Each
+// hook is try/caught on its own so a missing API disables only that hook.
 (function(){
   var AV1 = /av01|(^|[^a-z])av1([^a-z]|$)/i;
   var isAv1 = function(s){ return typeof s === 'string' && AV1.test(s); };

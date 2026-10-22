@@ -1,16 +1,9 @@
-// Chapter-aware L2/R2 seek (findings input-ux §18). p.dir is +1 (next) / -1 (prev); p.skip is the
-// fixed-interval fallback in seconds. Chapter boundaries come from the TVHTML5 /next endpoint's
-// macroMarkersListEntity (MARKER_TYPE_CHAPTERS) — the client's own InnerTube data — cached on
-// window.__dbChapters per video.
-//
-// Non-blocking by design: eval_void does not await promises, so on a cache miss this KICKS OFF the
-// fetch (warming the cache for the next press) and does a plain fixed skip for THIS press — L2/R2
-// always do something, and warm presses seek to real boundaries. Hot-swappable via a config push.
+// Chapter-aware seek. p.dir is +1 (next) / -1 (prev); p.skip is the fixed-interval fallback in
+// seconds. Chapter starts come from InnerTube /next (macroMarkersListEntity), cached per video on
+// window.__dbChapters. Non-blocking: a cache miss starts the fetch and fixed-skips this press.
 (function (p) {
-  // Only seek while the watch view is the foreground route. Off it (e.g. back on the home screen)
-  // the last video's player still lives in the DOM but is backgrounded, and seeking it RESUMES that
-  // hidden playback — the previous video plays audibly out of view. Mirror player_state.js's own
-  // "player open" signal (location.hash contains '/watch') so the seek and the layer poll agree.
+  // Off the watch route the last video's player is still in the DOM, backgrounded; seeking it would
+  // resume playback out of view.
   if (location.hash.indexOf('/watch') < 0) return false;
   // On TVHTML5 the player is `.html5-video-player`, NOT the desktop-only `#movie_player`.
   var pl = document.querySelector('.html5-video-player') || document.querySelector('#movie_player');
@@ -33,7 +26,7 @@
   // Warm cache for this video: seconds, sorted ascending, starts[0] === 0.
   if (cache && cache.vid === vid && Array.isArray(cache.starts)) {
     var starts = cache.starts;
-    if (!starts.length) return fixedSkip();  // no chapters
+    if (!starts.length) return fixedSkip();
     if (p.dir > 0) {
       // Next boundary strictly ahead; the last chapter has none -> fixed skip forward.
       for (var i = 0; i < starts.length; i++) {

@@ -1,38 +1,23 @@
-"""Capability + telemetry probes (TEST-PLAN §5).
+"""Capability + telemetry probes: page-level expressions and pure parsers.
 
-Two channels answer different questions and are constantly confused:
-
-* **Page-level** (`Runtime.evaluate`) — what YouTube *believes* about us. This is what guards R1 (the
-  UA bet) and tells us whether the AV1 steering script took effect. It knows nothing about the GPU:
-  `video.getVideoPlaybackQuality()` returns frame counts and no decoder name.
-
-* **CDP `Media` domain** — what the *engine actually did*. `kVideoDecoderName` and
-  `kIsPlatformVideoDecoder` are the only supported way to learn the decoder identity, and they are
-  the P4 hardware-decode gate. (`scripts/cdp.py:MediaState` collects them.)
-
-The pure parsers here are unit-tested on the workstation by `tests/harness/test_deck_lib.py`. That
-matters more than it sounds: `parse_power_now()` replaces a shell one-liner that once reported
-`mean 0.00 W … PASS` on a Deck whose battery exposes no telemetry — a perfect score from zero data.
+Page-level `Runtime.evaluate` shows what YouTube believes about us; only the CDP `Media` domain
+(`scripts/cdp.py:MediaState`) knows the decoder identity.
 """
 
 from __future__ import annotations
 
 # ---- page-level probe expressions ----------------------------------------------------------------
 
-# Never assert on a value we chose (TEST-PLAN §0). `navigator.userAgent` is the page's view of the
-# UA, not the string we handed to Network.setUserAgentOverride — the two differ if the override was
-# lost across Leanback's target teardown, which is exactly the failure worth catching.
+# The page's view of the UA, which differs from the override we sent if it was lost on teardown.
 UA_EXPR = "navigator.userAgent"
 
 ON_LEANBACK_EXPR = "location.href.indexOf('youtube.com/tv') >= 0"
 
-# Leanback's "Who's watching" picker (an account with several profiles boots into it). Activation
-# there opens a profile's panel — Account lock / Remove account — and never changes the route, so a
-# test that presses A on it proves nothing and walks the user's account settings. Page-type class
-# observed on-Deck 2026-10-21.
+# Leanback's "Who's watching" picker. Pressing A there opens account settings and never changes
+# the route, so activation tests must not run on it.
 ACCOUNT_PICKER_EXPR = "!!document.querySelector('.WEB_PAGE_TYPE_ACCOUNT_SELECTOR')"
 
-# `player_open` keys off the #/watch hash route, whose shape is verified (deep-link test 2026-07-08).
+# The player is open when a <video> exists and the hash route is #/watch.
 PLAYER_OPEN_EXPR = "!!document.querySelector('video') && location.hash.indexOf('/watch') >= 0"
 
 ACTIVE_ELEMENT_EXPR = (
@@ -50,8 +35,7 @@ PLAYBACK_QUALITY_EXPR = (
     "return q.totalVideoFrames+','+q.droppedVideoFrames+','+q.corruptedVideoFrames;})()"
 )
 
-# The three APIs the AV1 steering script overrides. Answers "TTT"/"FFF"-style triples so one round
-# trip covers all of them and they cannot disagree between polls.
+# MSE isTypeSupported + canPlayType for `mime` in one round trip, as JSON {mse, canPlay}.
 def codec_support_expr(mime):
     q = mime.replace("\\", "\\\\").replace("'", "\\'")
     return (
@@ -68,8 +52,8 @@ VP9_MIME = 'video/webm; codecs="vp9"'
 VP09_MIME = 'video/mp4; codecs="vp09.00.10.08"'
 H264_MIME = 'video/mp4; codecs="avc1.640028"'
 
-# requestMediaKeySystemAccess is async, so it cannot be read from a single Runtime.evaluate.
-# Kick it off into a global, then poll. `WIDEVINE_RESULT` is 'pending' until it settles.
+# requestMediaKeySystemAccess is async: start it into a global, then poll. `WIDEVINE_RESULT` is
+# 'pending' until it settles.
 WIDEVINE_START = (
     "(function(){window.__dbWidevine='pending';"
     "if(!navigator.requestMediaKeySystemAccess){window.__dbWidevine='no-api';return true;}"
@@ -98,7 +82,7 @@ def parse_codec_support(raw):
 
 # ---- battery telemetry ---------------------------------------------------------------------------
 
-# Read from sysfs. Two units exist in the wild and must not be averaged together:
+# Two sysfs units exist and must not be averaged together:
 #   power_now  — microwatts, directly usable
 #   current_now + voltage_now — microamps x microvolts, the fallback on packs with no power_now
 POWER_NOW_PATHS = (
@@ -116,20 +100,16 @@ VOLTAGE_NOW_PATHS = (
 
 
 class NoTelemetry(RuntimeError):
-    """The battery reported nothing. NOT a power-budget failure — the measurement never happened.
+    """The battery reported nothing: the measurement never happened.
 
-    This exception exists because the old `just power` averaged an empty field to 0.00 W and printed
-    PASS against a "<= 9 W" budget. A gate that scores a perfect result from zero samples is not a
-    gate. Callers must map this to exit 3 (ENV), never exit 2 (ASSERT).
+    Callers must map this to exit 3 (ENV), never exit 2 (ASSERT).
     """
 
 
 def parse_power_now(text):
     """One microwatt sample -> watts. Raises NoTelemetry on anything that is not a number.
 
-    Rejects the empty string, whitespace, `-`, and non-numeric junk. A zero reading is *valid* (the
-    Deck can genuinely be on mains) and must be returned, not swallowed — so "0" is a number and ""
-    is not, and the difference is the entire point.
+    "0" is a valid reading (the Deck can be on mains); "" is not.
     """
     if text is None:
         raise NoTelemetry("no power_now reading")
@@ -158,11 +138,7 @@ def parse_current_voltage(current_text, voltage_text):
 
 
 def summarize_power(samples, budget_w):
-    """(mean, peak, verdict) over watt samples.
-
-    Raises NoTelemetry on an empty list. An average over nothing is 0.0, which would pass any budget
-    — the exact bug this module was written to make impossible to reintroduce.
-    """
+    """(mean, peak, verdict) over watt samples. Raises NoTelemetry on an empty list."""
     if not samples:
         raise NoTelemetry("no power samples collected")
     mean = sum(samples) / len(samples)
@@ -172,18 +148,14 @@ def summarize_power(samples, budget_w):
 
 # ---- decoder identity (the P4 gate) --------------------------------------------------------------
 
-# Software decoders that must never appear on a Deck. Dav1d is the AV1 software path: if it shows up,
-# either the steering failed or AV1 is being served anyway (findings durable/hardware.md).
+# Software decoders that must never appear on a Deck (Dav1d means AV1 steering failed).
 SOFTWARE_DECODERS = ("Dav1dVideoDecoder", "VpxVideoDecoder", "FFmpegVideoDecoder")
 
 
 def hardware_decode_verdict(decoder_name, is_platform):
     """(ok, reason). Mirrors `scripts/cdp.py:MediaState.hardware_decode_ok`.
 
-    Both conditions are required, and neither is redundant: `kIsPlatformVideoDecoder` alone has been
-    seen true for decoders that are not VA-API, and a name match alone does not prove the platform
-    path was taken. A missing value is *not* a pass — it means the Media domain never reported, which
-    is a broken probe, not working hardware.
+    Requires both a VA-API name and `kIsPlatformVideoDecoder`; a missing value is a failure.
     """
     if not decoder_name:
         return (False, "no kVideoDecoderName reported (Media domain never fired?)")
@@ -201,17 +173,10 @@ def hardware_decode_verdict(decoder_name, is_platform):
 
 # ---- display-layer corruption (the pixel gate) ---------------------------------------------------
 #
-# WHY THIS EXISTS: on 2026-07-10, VA-API hardware decode (VaapiVideoDecoder) engaged correctly and
-# ANGLE painted green-band corruption over every frame — yet kVideoDecoderName, kIsPlatformVideoDecoder,
-# corruptedVideoFrames=0 and droppedVideoFrames=0 ALL reported PASS while the panel was striped
-# (findings durable/hardware.md, milestones/m114.md). corruptedVideoFrames counts *decoder*-reported
-# corruption; the fault was in ANGLE's *import* of a correctly-decoded surface, invisible to the media
-# pipeline. So decoder-identity checks cannot gate display correctness — only pixels can. This is the
-# check that would have caught it (F1: a check that cannot fail is not a check).
+# Decoder metrics cannot see a bad import of a correctly decoded surface; only pixels can.
 
-# The corruption is bright, near-pure green (~#00FF00): G high, R and B both low. Natural foliage green
-# in real video is never this pure (grass/leaves carry substantial R and B). Measured separation on the
-# 2026-07-10 frames was decisive: corrupt ≈0.17 band-row ratio, clean = 0.000.
+# The corruption is near-pure green (~#00FF00): G high, R and B both low. Natural greens carry
+# substantial R and B.
 GREEN_BAND_G_MIN = 200      # a corrupt pixel's green channel is at least this
 GREEN_BAND_RB_MAX = 110     # ...and its red AND blue are both at most this
 GREEN_BAND_ROW_FRAC = 0.40  # a "band row" is >=40% pure-green pixels across its width
@@ -219,11 +184,9 @@ GREEN_BAND_RATIO_MAX = 0.02 # fail if >2% of rows are band rows (clean frames ar
 
 
 def green_band_ratio(png_bytes):
-    """Fraction of image rows that are dominated by near-pure-green pixels.
+    """Fraction of rows in a PNG dominated by near-pure-green pixels (VA-API/ANGLE banding).
 
-    Detects the VA-API/ANGLE import corruption (horizontal neon-green banding) from a PNG screenshot.
-    Pure function over bytes so it is L0-testable with synthetic images. Samples every 4th column for
-    speed; the bands span the full width, so subsampling does not miss them.
+    Samples every 4th column; the bands span the full width.
     """
     import io
     from PIL import Image
@@ -258,9 +221,7 @@ def video_corruption_verdict(png_bytes):
 
 # ---- playback liveness (the T5 gate) -------------------------------------------------------------
 
-# `currentTime` alone cannot tell a paused video from a stalled one, and the two have opposite
-# owners: a paused video is the operator forgetting to press play (ENV, 3), a stalled one is the
-# product (ASSERT, 2). Read both in one round trip so they cannot disagree between polls.
+# currentTime plus paused/ended/readyState in one round trip: paused is ENV (3), stalled is ASSERT (2).
 PLAYBACK_STATE_EXPR = (
     "(function(){var v=document.querySelector('video');"
     "if(!v)return JSON.stringify({video:false});"
@@ -279,19 +240,10 @@ def parse_playback_state(raw):
 
 
 def playback_advanced(before, after, elapsed_s, min_fraction=0.5):
-    """Did the video actually play across a window of `elapsed_s` wall seconds? -> (ok, reason).
+    """Did the video play across `elapsed_s` wall seconds? -> (ok, reason).
 
-    This is the check that makes `just power` mean anything. A 9 W budget measured over a **paused**
-    video passes effortlessly and describes nothing; the same shape as averaging an empty battery
-    field to 0.00 W (finding F1). The number is only a playback measurement if playback happened.
-
-    `min_fraction` of wall time, not all of it: a resume, a rebuffer, or an ad break legitimately
-    costs a second or two. Zero advance is never legitimate.
-
-    Backwards movement is its own verdict. Across a suspend/resume (P6) it means the player restarted
-    the video rather than continuing it, which is exactly the "position correct" clause of the gate —
-    and reporting it as "did not advance" would send the reader looking for a stall that never
-    happened.
+    Needs at least `min_fraction` of wall time (rebuffers and ads cost a little). Backwards movement
+    gets its own verdict: the player restarted the video.
     """
     if not before.get("video") or not after.get("video"):
         return (False, "no <video> element (is a video open?)")
@@ -313,10 +265,8 @@ def playback_advanced(before, after, elapsed_s, min_fraction=0.5):
 
 # ---- EPP (a defect we can measure and cannot fix) ------------------------------------------------
 
-# SteamOS resets EPP on cores 1-7 from `balance_performance` to `performance` after a resume
-# (steamos#2383), costing draw and heat. Writing it back needs root, so it is infeasible from the
-# Flatpak. `just soak` therefore MEASURES and REPORTS it and must never fail on it: a gate we cannot
-# pass and cannot fix is a gate that gets disabled, and then it stops reporting too.
+# SteamOS resets EPP on cores 1-7 to `performance` after a resume (steamos#2383). Fixing it needs
+# root, so `just soak` only reports it and must never fail on it.
 EPP_GLOB = "/sys/devices/system/cpu/cpu*/cpufreq/energy_performance_preference"
 EPP_READ_CMD = f"grep -H . {EPP_GLOB} 2>/dev/null"
 
@@ -343,8 +293,6 @@ def epp_report(before, after):
     """(changed, summary) where `changed` maps cpu -> (before, after) for cores that moved.
 
     A core present in only one reading is reported as changed, with `None` on the missing side.
-    Silently intersecting the two would hide a core that vanished, and "fewer cores than before" is
-    not a thing we should learn about by not learning about it.
     """
     changed = {}
     for cpu in sorted(set(before) | set(after)):
@@ -360,14 +308,10 @@ def epp_report(before, after):
 
 
 def trusted_html_js(raw_html_js_literal):
-    """JS that assigns `raw_html_js_literal` (a JS string expression) through a Trusted Types policy.
+    """JS that passes `raw_html_js_literal` (a JS string expression) through a Trusted Types policy.
 
-    This MUST mirror `js_trusted_html` in launcher/src/overlay.cpp. It exists because youtube.com/tv
-    enforces `require-trusted-types-for 'script'`, so a bare `el.innerHTML = "<h2>..."` throws and
-    renders nothing. The launcher's real injection goes through the policy; a test that injects with
-    a bare innerHTML is testing a technique the product does not use, and fails on the real page while
-    the product works (which is exactly what happened on 2026-07-10 -- the test's inline copy drifted
-    from the launcher after the launcher was fixed).
+    Must mirror `js_trusted_html` in launcher/src/overlay.cpp: youtube.com/tv enforces
+    `require-trusted-types-for 'script'`, so a bare `innerHTML` assignment throws.
     """
     return (
         "(function(_h){try{var T=window.trustedTypes;if(!T)return _h;"

@@ -1,15 +1,11 @@
-// OSD Settings menu (osd-menu-plan.md). Invoked via p.op and returns a string over eval_string:
+// OSD Settings menu. Invoked via p.op and returns a string over eval_string:
 //   open  -> build from model params, "ok"        close -> tear down, "closed"
 //   cmd   -> apply p.cmd, verdict "consumed"|"close"|"action:<id>"|"apply:<id>"|"gone"
 //   state -> "tab=..;idx=.."
 // Component lives on window.__dbOSD. CSP-safe (adoptedStyleSheets + CSSOM only, no style element or
 // inline style attribute, no innerHTML) and keep-alive'd like the other launcher overlays.
-//
-// Settings has sub-tabs (Keys read-only, Captions writable). The Captions sub-tab is an editable
-// surface: combo rows (←/→ cycle) and a dynamic preferred-language list (X removes an entry, ←/→
-// reorders it by priority, A on the add-row opens a full-language picker). A combo/list edit returns
-// "apply:cc.<key>=<val>" so the launcher persists it WITHOUT closing the menu. Held ↑/↓ auto-repeat
-// (the launcher's own acceleration) for fast scanning; L1/R1 page-jump the picker ±10.
+// Captions sub-tab: combo rows (←/→ cycle) and a preferred-language list (X removes, ←/→ reorders, A
+// on the add-row opens a picker; L1/R1 jump ±10). Edits return "apply:cc.<key>=<val>" and stay open.
 (function (p) {
   var ID = '__deckback_osd';
 
@@ -60,9 +56,8 @@
     "#__deckback_osd .rail{display:flex;flex-direction:column;gap:8px;flex:0 0 auto;}" +
     "#__deckback_osd .subtab{padding:8px 20px;border-radius:9px;color:#bdbdbd;font-weight:600;}" +
     "#__deckback_osd .subtab.on{color:#fff;background:rgba(255,255,255,0.10);}" +
-    // Injected overlays cannot use native scrolling: youtube.com/tv resets scrollTop on any element
-    // we add (verified on-Deck). So .scroll clips (overflow:hidden) and we translate an inner wrapper
-    // ourselves, drawing our own thumb. inset:0-style height cap comes from each region's own rule.
+    // No native scrolling: youtube.com/tv resets scrollTop on injected elements. .scroll clips and
+    // the inner wrapper is translated by hand, with a drawn thumb.
     "#__deckback_osd .scroll{position:relative;overflow:hidden;min-height:0;}" +
     "#__deckback_osd .sinner{will-change:transform;padding-right:16px;}" +
     "#__deckback_osd .sbar{position:absolute;top:0;right:0;width:8px;height:100%;" +
@@ -122,16 +117,14 @@
     "#__deckback_osd .hint .legend{min-width:0;overflow:hidden;text-overflow:ellipsis;" +
     "white-space:nowrap;}" +
     "#__deckback_osd .hint .kb{font-weight:700;}" +
-    // Exit rides in the hint bar, the OSD's existing bottom chrome, at hint type size: a full-width
-    // row of its own read as a second heavy bar stacked on this one.
+    // The Exit chip, inside the hint bar.
     "#__deckback_osd .exitchip{position:relative;overflow:hidden;display:inline-flex;" +
     "align-items:center;gap:8px;padding:3px 11px;border-radius:9px;color:#e8e8e8;white-space:nowrap;}" +
-    // "Hold A" only while focused — unfocused it is one word, and the hint is noise until reachable.
+    // "Hold A" shows only while focused.
     "#__deckback_osd .exitchip .hold{display:none;}" +
     "#__deckback_osd .exitchip.dbf .hold{display:inline;color:#9a9a9a;}" +
     "#__deckback_osd .exitchip.off{opacity:0.45;}" +
-    // The hold fill: width is driven by a CSS transition whose duration C++ supplies, so the bar and
-    // the launcher's timer cannot drift apart, and no per-frame CDP traffic is needed.
+    // The hold fill: a CSS width transition whose duration the launcher supplies, matching its timer.
     "#__deckback_osd .exitchip .fill{position:absolute;left:0;top:0;bottom:0;width:0;" +
     "background:rgba(245,179,1,0.30);pointer-events:none;}";
 
@@ -330,17 +323,13 @@
     legend.appendChild(el('span', 'kb', 'X'));
     legend.appendChild(el('span', null, ' Remove   '));
     legend.appendChild(el('span', 'kb', 'L1/R1'));
-    // Per-tab, because the Updates tab rebinds ↑↓ to scroll the release notes. The notes are taller
-    // than the box in every real release, and a scrollbar with no documented way to move it reads as
-    // "the changelog is three lines long".
+    // Per-tab: on the Updates tab ↑↓ scroll the release notes.
     var navHint = el('span', null, NAV_HINT_DEFAULT);
     legend.appendChild(navHint);
     hint.appendChild(legend);
 
-    // Exit is a GLOBAL gesture, not a focusable widget: in the Keys sub-tab moveOrScroll routes ↑/↓
-    // to the key list while `subsel` is focused, so focus can never leave it and a focusable chip is
-    // unreachable there. Holding a fixed button works from any tab, any focus, and needs no
-    // traversal. The chip is a permanent legend in the hint bar — visible, never focused.
+    // Exit is a global hold, never in the focus ring: in the Keys sub-tab ↑/↓ cannot leave `subsel`,
+    // so a focusable chip would be unreachable there.
     var exitBar = el('span', 'exitchip');
     exitBar.setAttribute('data-role', 'exit');
     var exitFill = el('span', 'fill');
@@ -451,9 +440,8 @@
         try { n.scrollIntoView({ block: 'nearest' }); } catch (_) {}
       }
     };
-    // The Updates panel's release-notes box, or null when the fetch produced nothing. Its presence
-    // is what decides whether ↑↓ scrolls or moves focus, so both the key routing and the hint read
-    // it from here rather than each testing for '.notes' their own way.
+    // The Updates panel's release-notes box, or null. Decides whether ↑↓ scrolls or moves focus, for
+    // both the key routing and the hint.
     S.notesBox = function () {
       return S.tab === 'updates' && S.panels.updates
         ? S.panels.updates.querySelector('.notes')
@@ -622,8 +610,8 @@
       return 'consumed';
     }
 
-    // Exit is hold-to-confirm, so A on it does not act: it starts the fill and answers 'hold'. The
-    // launcher owns the deadline and either fires the exit or sends hold_cancel on an early release.
+    // Hold-to-confirm Exit: starts the fill and answers 'hold'. The launcher owns the deadline and
+    // either fires the exit or sends hold_cancel on an early release.
     S.holdStart = function (ms) {
       if (!S.exitEnabled || !S.exitFill) return 'consumed';
       var f = S.exitFill;
@@ -654,9 +642,7 @@
         var n = S.focusables[S.focusIdx];
         if (n && n.getAttribute('data-role') === 'subsel') return S.scroll(dir);
       }
-      // Updates: ↑↓ scrolls the notes rather than hopping between the two action buttons, which sit
-      // in one horizontal row and are reached with ←/→ instead. Without this the changelog past the
-      // first few lines was unreachable — it had a thumb and no way to move it.
+      // Updates: ↑↓ scrolls the notes; the action buttons are a row reached with ←/→.
       if (S.notesBox()) return S.scroll(dir);
       return S.focusables.length ? S.move(dir) : S.scroll(dir);
     }
@@ -719,10 +705,8 @@
       }
       return 'consumed';
     };
-    // Re-render the Updates panel from a fresh model. A check is a query: the menu stays open, so
-    // the answer has to land in the panel the user is still looking at. Rebuilds the status line and
-    // the buttons (which change with the verdict — "Check for updates" becomes nothing once a deploy
-    // is in flight) and repairs focus, since the node the ring pointed at may be gone.
+    // Re-render the Updates panel from a fresh model while the menu stays open: rebuilds the status
+    // line and buttons and repairs focus, since the focused node may be gone.
     S.setUpdate = function (m) {
       var panel = S.panels.updates;
       if (!panel) return 'gone';

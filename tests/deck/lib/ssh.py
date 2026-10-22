@@ -1,14 +1,7 @@
-"""SSH to the Deck. Thin on purpose — the Deck is a dumb target (TEST-PLAN §3).
+"""SSH to the Deck, mapped onto the harness exit codes (.internal/HARNESS.md).
 
-The exit-code taxonomy from `.internal/HARNESS.md` is the contract this module exists to protect:
-
-    2 = ASSERT     the product is wrong
-    3 = ENV        the environment is wrong (no Deck, no udev rule, no binary)
-    4 = TRANSPORT  the connection failed
-
-Confusing them is how a broken SSH tunnel gets filed as a product bug, and how `just power` once
-reported ``mean 0.00 W … PASS`` on a Deck with no battery telemetry. `SshError` and `DeckUnreachable`
-are separate exceptions so a retry decorator can retry the second and never the first.
+2 = ASSERT (product wrong), 3 = ENV (no Deck, no udev rule, no binary), 4 = TRANSPORT. Retry
+`DeckUnreachable`, never `SshError`.
 """
 
 from __future__ import annotations
@@ -37,17 +30,12 @@ class NoDevTools(RuntimeError):
     """The Deck is reachable but the app is not exposing DevTools. ENVIRONMENT (3), not a defect."""
 
 
-# The repo root, as lib.sh computes it from its own path before `cd`-ing there. A module-level name
-# so the L0 tests can point the derivation at a scratch repo instead of the developer's real one.
+# The repo root, as lib.sh computes it. Module-level so L0 tests can point it at a scratch repo.
 _REPO_ROOT = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", ".."))
 
 
 def _shell_assignments(path):
-    """`KEY=value` pairs from a sourceable shell fragment. Not a shell: no expansion, no execution.
-
-    Enough for `.env` and `.steamdeck_auth`, which lib.sh only ever `.`-sources for plain literals.
-    A line it cannot parse is skipped rather than guessed at.
-    """
+    """`KEY=value` pairs from a sourceable shell fragment: no expansion, unparseable lines skipped."""
     out = {}
     try:
         with open(path) as f:
@@ -65,11 +53,7 @@ def _shell_assignments(path):
 
 
 def _deck_files():
-    """Merged `.env` then `.steamdeck_auth`, matching lib.sh's source order (the latter wins).
-
-    Read from the repo root *last*, because that is the only directory lib.sh ever reads: it `cd`s
-    there first. The cwd is consulted only as a fallback for a caller running from somewhere else.
-    """
+    """Merged `.env` then `.steamdeck_auth` (the latter wins), from the cwd then the repo root."""
     merged = {}
     for directory in dict.fromkeys((os.getcwd(), _REPO_ROOT)):
         for name in (".env", ".steamdeck_auth"):
@@ -78,23 +62,9 @@ def _deck_files():
 
 
 def deck_host():
-    """The Deck's ssh destination, derived exactly as `scripts/lib.sh` derives it.
+    """The Deck's ssh destination, derived exactly as `scripts/lib.sh` derives it, or None.
 
-    `.steamdeck_auth` (gitignored, `STEAMDECK_USER` + `STEAMDECK_IP`) is the documented place to put
-    the Deck's address, and lib.sh composes `DECK_HOST` from it and **exports** it, so every Python
-    tool launched through a `scripts/*.sh` recipe inherits a correct value.
-
-    This function used to read only `$DECK_HOST` and a `DECK_HOST=` line in `.env` — neither of which
-    a Deck configured the documented way ever sets. That is invisible for as long as every entry
-    point is a shell script, and `just touch-probe` is the first recipe to call a Python entry point
-    **directly**: it answered "no Deck reachable at <unset DECK_HOST>:22" against a Deck answering
-    SSH on the previous line. Same shape as harness.md F14, which hid the fact that the L2 suite had
-    never once run, and as the export bug lib.sh's own comment records — "a fix that has to be
-    repeated per caller is a fix that will be forgotten by the next caller". So the derivation lives
-    here, next to the reader, rather than in the next caller's shim.
-
-    Precedence: `$DECK_HOST` (what lib.sh exports, so a child of a recipe agrees with its parent by
-    construction) > `.steamdeck_auth` > `.env`.
+    Precedence: `$DECK_HOST` > `STEAMDECK_USER@STEAMDECK_IP` from `.steamdeck_auth` > `.env`.
     """
     v = os.environ.get("DECK_HOST")
     if v:
@@ -107,11 +77,7 @@ def deck_host():
 
 
 def deck_port():
-    """The Deck's ssh port: `$DECK_PORT`, else `STEAMDECK_PORT` from `.steamdeck_auth`, else 22.
-
-    Same failure as `deck_host()` and worse to diagnose: a wrong port is not "no Deck configured",
-    it is a connection refused by something that may well be a different machine.
-    """
+    """The Deck's ssh port: `$DECK_PORT`, else `STEAMDECK_PORT` from `.steamdeck_auth`, else 22."""
     v = os.environ.get("DECK_PORT") or _deck_files().get("STEAMDECK_PORT")
     try:
         return int(v)
@@ -120,18 +86,7 @@ def deck_port():
 
 
 def ssh_hostname(dest):
-    """The hostname inside an ssh destination, or None.
-
-    `DECK_HOST` is an ssh *destination* -- `deck@192.168.1.10`, `deck@[fe80::1%eth0]` -- which is
-    what ssh(1) accepts and what a socket does not. `socket.create_connection(("deck@1.2.3.4", 22))`
-    raises gaierror, so a reachability probe handed the raw destination answers "unreachable" for
-    every Deck that has ever been configured, on a Deck that is answering SSH at that moment.
-
-    That is not hypothetical. Every consumer of `reachable()` -- the `deck` fixture, `deckctl.py`
-    (so `just power`, `just soak`), and `cert.py --deck` -- was fed the destination verbatim. With
-    `--no-skip` the L2 suite reported exit 2, "the product is wrong", about a healthy product;
-    without it, all 23 tests skipped and pytest exited 0. The suite had never once run.
-    """
+    """The hostname inside an ssh destination (`deck@1.2.3.4`, `deck@[fe80::1%eth0]`), or None."""
     if not dest:
         return None
     host = dest.rsplit("@", 1)[-1]  # user@host; DECK_HOST never carries a password
@@ -141,13 +96,7 @@ def ssh_hostname(dest):
 
 
 def reachable(host, port=22, timeout=3.0):
-    """Is the Deck's SSH port accepting connections?
-
-    Answers about transport only. Whether the *key* is accepted is `require_deck`'s job (lib.sh),
-    which every script that reaches the Deck runs first. Deliberately not an ssh handshake: this is
-    a session fixture on the hot path, and a false "reachable" here surfaces immediately as an auth
-    error from the first real command rather than as a silent skip.
-    """
+    """Is the SSH port of destination `host` accepting TCP connections? Transport only, no auth."""
     name = ssh_hostname(host)
     if not name:
         return False
@@ -200,11 +149,7 @@ class Ssh:
         return p.returncode, out, err
 
     def python(self, source, check=True, timeout=None):
-        """Pipe a Python program to the Deck's interpreter over stdin.
-
-        Nothing is ever installed on the Deck, and nothing is left behind: no temp file to clean up
-        after a failed run, and no stale copy of a script to be silently re-used by the next one.
-        """
+        """Pipe a Python program to the Deck's interpreter over stdin; nothing is left on the Deck."""
         return self.run(
             "python3 -", check=check, input_bytes=source.encode(), timeout=timeout
         )
@@ -221,13 +166,8 @@ class Ssh:
 class Tunnel:
     """`ssh -N -L <local>:localhost:<remote>` as a context manager.
 
-    Chrome >= 111 rejects a `Host:` header that is not `localhost` on the `/json` endpoints, so the
-    CDP client must never talk to the Deck's LAN IP. Tunnelling makes `127.0.0.1` correct by
-    construction rather than by remembering.
-
-    Waits for the forwarded port to accept a connection instead of sleeping a magic number, and
-    distinguishes the two ways that wait can end: ssh died (transport) versus ssh is fine but nothing
-    is listening on the far side (the app is not running — an environment fact, not a defect).
+    Chrome >= 111 requires `Host: localhost` on `/json`, so CDP must go through the tunnel. Raises
+    DeckUnreachable if ssh dies, NoDevTools if nothing listens on the far side.
     """
 
     def __init__(self, host, port=22, cdp_port=9222, timeout=10.0):

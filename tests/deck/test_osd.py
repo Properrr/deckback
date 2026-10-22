@@ -1,16 +1,6 @@
-"""The in-app OSD Settings menu (osd-menu-plan.md), on hardware.
+"""The in-app OSD menu on hardware: `osd.js` driven over CDP, then the launcher path via uinput.
 
-Two layers, mirroring test_input.py's positive-control idea:
-
-  * The `osd.js` component driven directly over CDP — focus/tab/scroll verdicts and the "capture <=>
-    paint" DOM survival invariant. A pass tells you about **the component** and its CSP-safe render.
-  * The full launcher path via /dev/uinput — Menu opens the OSD, B closes it, and input reaches
-    Leanback again afterwards. A pass tells you about **the launcher wiring**.
-
-The two prior bugs this guards (osd-menu-plan.md §2): (a) an action firing off its context, and (b) a
-modal overlay trapping input while nothing is on screen. Test 5 is (b) end-to-end; test 3 is (b)'s DOM
-invariant; the launcher never opening a dead-end menu covers the reported "Menu with no update blocks
-input, expected A/B/Y".
+Invariant under test: input is captured iff the menu is painted (capture <=> paint).
 """
 
 from __future__ import annotations
@@ -28,9 +18,8 @@ _REPO = Path(__file__).resolve().parent.parent.parent
 _OSD_JS = _REPO / "config" / "scripts" / "osd.js"
 
 SETTLE_S = 0.6
-# The launcher rescans /dev/input on a 2 s hotplug tick (input.cpp kHotplugScanMs), and the OSD's
-# per-tick CDP work can stretch that interval. A fresh synthetic pad's event must not land inside
-# that window or the launcher never opens the node in time to see it — so settle well past 2 s.
+# The launcher rescans /dev/input every 2 s (kHotplugScanMs), stretched by the OSD's per-tick CDP
+# work; settle well past it so a new pad is opened before its event.
 UINPUT_SETTLE_S = 4.0
 OSD_PRESENT = "!!document.getElementById('__deckback_osd')"
 OSD_ABSENT = "!document.getElementById('__deckback_osd')"
@@ -77,12 +66,7 @@ def _open(cdp, *, tab="settings", has_update=False, about=False, about_features=
 
 @pytest.fixture(autouse=True)
 def _cleanup(cdp):
-    """Close any OSD a prior (possibly failed) test left, before and after.
-
-    Through osd.js's own `close`, never a bare `node.remove()`: the root is keep-alive'd, so the
-    observer re-attached a removed node within a frame and every run left a dead menu painted over
-    Leanback with nothing capturing input for it.
-    """
+    """Close any OSD a test left behind, via osd.js's `close` (keep-alive re-attaches a bare remove)."""
     yield
     try:
         _osd(cdp, op="close")
@@ -95,12 +79,7 @@ def _cleanup(cdp):
 
 @pytest.mark.probe
 def test_osd_renders_over_leanback(leanback):
-    """The render claim: a CSP-safe overlay actually paints over youtube.com/tv (self-update.md).
-
-    The launcher builds no HTML here — it injects this exact file — so we inject it too and check it
-    lands and is styled (position:fixed, not an unstyled in-flow block, which is how the old pill/card
-    silently failed on-Deck).
-    """
+    """osd.js paints over youtube.com/tv with its fixed-position style and Keys rows."""
     assert _open(leanback) == "ok"
     time.sleep(0.3)
     assert leanback.evaluate(OSD_PRESENT), "the OSD <div> did not survive on the page"
@@ -114,23 +93,21 @@ def test_osd_renders_over_leanback(leanback):
 
 @pytest.mark.gate
 def test_osd_focus_and_verdicts(leanback):
-    """Every command's verdict from the states that matter — the focus model with no L0 JS harness."""
+    """Each command returns the right verdict from the Updates and Settings tabs."""
     _open(leanback, tab="updates", has_update=True)
 
-    # Updates has focusable buttons, so focus lands on the first one.
     assert leanback.evaluate("!!document.querySelector('#__deckback_osd .btn.dbf')"), (
         "opening Updates did not focus the first action button"
     )
     assert _cmd(leanback, "select") == "action:update.confirm"
 
-    # The two actions are one horizontal row: Right moves focus and a second select fires the other
-    # action. Up/Down belong to the release notes here (osd.js moveOrScroll), so they must not.
+    # The actions are one horizontal row; Up/Down scroll the release notes instead of moving focus.
     assert _cmd(leanback, "down") == "consumed"
     assert _cmd(leanback, "select") == "action:update.confirm", "Down left the notes and moved focus"
     assert _cmd(leanback, "right") == "consumed"
     assert _cmd(leanback, "select") == "action:update.ignore"
 
-    # Contextual Y ignores only on the Updates tab.
+    # Y ignores only on the Updates tab.
     assert _cmd(leanback, "ignore") == "action:update.ignore"
 
     # Switch to Settings (Keys). No focusable widget there, so up/down scroll and Y does nothing.
@@ -141,18 +118,12 @@ def test_osd_focus_and_verdicts(leanback):
     assert _cmd(leanback, "down") == "consumed"
     assert _cmd(leanback, "ignore") == "consumed", "Y ignored a version from the Keys tab"
 
-    # Back at the top level closes.
     assert _cmd(leanback, "back") == "close"
 
 
 @pytest.mark.gate
 def test_osd_survives_leanback_body_swap(leanback):
-    """Bug-b DOM invariant: a Leanback body swap must not strand the modal menu (self-update.md).
-
-    input.cpp treats the menu as modal while open; if a swap detaches the node and it does not come
-    back, the launcher swallows keys behind an absent menu ("keys don't work"). The shared keep-alive
-    MutationObserver must re-append it.
-    """
+    """Keep-alive re-appends the OSD after a Leanback body swap detaches it."""
     assert _open(leanback) == "ok"
     assert leanback.evaluate(OSD_PRESENT)
     leanback.evaluate(
@@ -172,16 +143,9 @@ def test_osd_survives_leanback_body_swap(leanback):
 
 @pytest.mark.gate
 def test_cmd_during_a_detach_window_keeps_capture(leanback):
-    """A command dispatched while the node is momentarily detached must keep capture, not release it.
-
-    While the OSD is open the launcher captures input; a body swap can detach the node for a tick
-    before the keep-alive observer re-appends it. A keypress landing in that window must return
-    'consumed' (keep capture), not 'gone' — else the node re-appears painted with no owner and input
-    passes through to Leanback behind a visible menu (the capture<=>paint invariant, self-update.md).
-    """
+    """A command sent while the node is briefly detached returns 'consumed', not 'gone'."""
     assert _open(leanback) == "ok"
-    # Detach the node and dispatch a cmd in ONE synchronous eval, before the MutationObserver
-    # microtask can re-append it, so osd.js genuinely sees an off-DOM but keep-alive-owned node.
+    # Detach and dispatch in ONE synchronous eval, before the MutationObserver can re-append.
     verdict = leanback.evaluate(
         "(function(){document.getElementById('__deckback_osd').remove();"
         "return (" + _OSD_JS.read_text() + ")({op:'cmd',cmd:'tab_next'});})()"
@@ -189,18 +153,13 @@ def test_cmd_during_a_detach_window_keeps_capture(leanback):
     assert verdict == "consumed", (
         f"a cmd during a detach window returned {verdict!r} — must keep capture as 'consumed'"
     )
-    # The observer re-appends it; the menu reports a live state again, proving it was never lost.
     assert leanback.wait_for(OSD_PRESENT, timeout=5), "keep-alive did not re-append after the cmd"
     assert _osd(leanback, op="state").startswith("tab="), "the re-appended menu is not driveable"
 
 
 @pytest.mark.gate
 def test_osd_tab_cycle_and_scroll(leanback):
-    """L1/R1 cycle every tab in order, and a long-content tab's overflow actually scrolls.
-
-    The About tab uses the same transform-based scroll region the changelog / future long-content
-    tabs will depend on, so a padded feature list exercises the scroll-region contract on hardware.
-    """
+    """tab_next cycles every tab and wraps, and the About tab's overflow scrolls."""
     long_feats = [f"Feature line number {i} that fills the About tab" for i in range(30)]
     assert _open(leanback, about=True, about_features=long_feats) == "ok"
     for key in ("settings", "updates", "about"):
@@ -208,7 +167,7 @@ def test_osd_tab_cycle_and_scroll(leanback):
             f"!!document.querySelector('#__deckback_osd .tab[data-tab={key}]')"
         ), f"the {key} tab did not render"
 
-    # tab_next cycles settings -> updates -> about and wraps back to settings.
+    # settings -> updates -> about, then wraps to settings.
     assert _cmd(leanback, "tab_next") == "consumed"
     assert _cmd(leanback, "tab_next") == "consumed"
     assert leanback.evaluate(
@@ -220,9 +179,8 @@ def test_osd_tab_cycle_and_scroll(leanback):
         "the padded About content did not overflow its region, so the scrollbar can't be exercised"
     )
     assert _cmd(leanback, "scroll_down") == "consumed"
-    # youtube.com/tv resets native scrollTop on any injected element (verified on-Deck), so the OSD
-    # translates an inner wrapper instead. The sleep proves our offset PERSISTS — it doesn't get
-    # reset the way scrollTop did.
+    # youtube.com/tv resets native scrollTop on injected elements, so the OSD translates an inner
+    # wrapper; the sleep checks the offset persists.
     time.sleep(SETTLE_S)
     assert leanback.evaluate(f"{region}.__off") > 0, "scroll_down did not advance the scroll offset"
     assert leanback.evaluate(f"getComputedStyle({region}.__inner).transform") != "none", (
@@ -239,7 +197,7 @@ def test_osd_tab_cycle_and_scroll(leanback):
 
 
 def _press(deck, code):
-    """Play one button press on a fresh synthetic pad; skip on a missing udev rule (env, not defect)."""
+    """Play one button press on a fresh synthetic pad; skip on a missing udev rule."""
     rc, _, err = deck.python(u.remote_program(u.gamepad_spec(), u.press(code), settle=UINPUT_SETTLE_S),
                              check=False)
     if rc == 3:
@@ -249,11 +207,7 @@ def _press(deck, code):
 
 @pytest.mark.gate
 def test_about_tab_renders_its_content(leanback):
-    """The About tab paints its metainfo-sourced fields — title, summary, features, version/author.
-
-    The launcher single-sources this from the AppStream metainfo; here we drive the component with a
-    known model and assert the shape renders (the on-device launcher path is checked separately).
-    """
+    """The About tab paints title, features and version/author from the model it is given."""
     assert _open(leanback, about=True) == "ok"
     assert leanback.evaluate("!!document.querySelector('#__deckback_osd .tab[data-tab=about]')"), (
         "the About tab did not render when about content was provided"
@@ -273,11 +227,7 @@ def test_about_tab_renders_its_content(leanback):
 @pytest.mark.gate
 @pytest.mark.uinput
 def test_menu_opens_and_b_closes_the_osd(deck, leanback):
-    """Physical Menu (BTN_START) opens the OSD off playback; B closes it.
-
-    This is also the "Menu with nothing to offer" case: with no update available the menu still opens
-    to a populated Settings/Keys view, so there is no dead-end (the reported bug-b variant).
-    """
+    """Menu (BTN_START) opens a populated OSD even with no update; B closes it."""
     _press(deck, u.BTN_START)
     assert leanback.wait_for(OSD_PRESENT, timeout=5), "Menu (BTN_START) did not open the OSD"
     assert leanback.evaluate(
@@ -291,7 +241,7 @@ def test_menu_opens_and_b_closes_the_osd(deck, leanback):
 @pytest.mark.gate
 @pytest.mark.uinput
 def test_input_reaches_leanback_after_osd_closes(deck, leanback):
-    """Bug b, end-to-end: after the menu closes, the D-pad must move Leanback focus again."""
+    """After the menu closes, the D-pad moves Leanback focus again."""
     _press(deck, u.BTN_START)
     assert leanback.wait_for(OSD_PRESENT, timeout=5), "Menu did not open the OSD"
     _press(deck, u.BTN_EAST)  # B closes
@@ -313,19 +263,14 @@ def test_input_reaches_leanback_after_osd_closes(deck, leanback):
 @pytest.mark.gate
 @pytest.mark.uinput
 def test_capture_released_when_a_reload_wipes_the_open_menu(deck, leanback):
-    """Regression (suspend/resume passthrough): press Menu, then the page reloads out from under the
-    open menu — a full reload wipes the OSD's JS context, and keep-alive cannot bring it back. The
-    launcher must not keep capturing input behind a menu that is no longer painted, or every key
-    passes through to Leanback while a (stale or absent) menu sits on screen. capture <=> paint.
+    """A reload that wipes the open menu releases capture, so the D-pad reaches Leanback again.
 
-    A same-URL location.reload() is the tractable stand-in for a Game-Mode suspend/resume: both leave
-    the navigator's not-app->app transition unfired, so only the input-tick reconciler can catch it.
+    location.reload() stands in for suspend/resume: neither fires the navigator's app transition.
     """
     _press(deck, u.BTN_START)
     assert leanback.wait_for(OSD_PRESENT, timeout=5), "Menu did not open the OSD"
 
     leanback.evaluate("location.reload()")
-    # The reloaded page has no OSD node (context wiped); wait for Leanback itself to come back.
     app_ready = ("location.href.indexOf('youtube.com/tv') >= 0 && "
                  "document.querySelectorAll('[class*=zylon]').length > 3")
     assert leanback.wait_for(OSD_ABSENT, timeout=20), "page did not reload"

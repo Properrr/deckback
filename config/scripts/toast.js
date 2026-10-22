@@ -1,9 +1,6 @@
-// On-screen toast (findings input-ux §14). p.text is shown for p.ms then fades. documentElement,
-// not body: Leanback swaps body content on navigation, so an <html>-level child survives longer. The
-// node is reused by id so repeated toasts do not stack. textContent (not innerHTML) needs no Trusted
-// Types. A one-shot: ScriptLibrary.render() appends {"text":...,"ms":...}. Styled via CSSOM
-// (.style.setProperty): youtube.com/tv's CSP style-src has no 'unsafe-inline', so an inline style
-// attribute is dropped and the toast renders unstyled (durable/self-update.md).
+// On-screen toast: shows p.text for p.ms, then fades. One node, reused by id, on documentElement
+// (Leanback swaps body content). textContent, never innerHTML (Trusted Types); styled via CSSOM
+// because youtube.com/tv's CSP drops inline style attributes.
 (function (p) {
   var id = '__deckback_toast';
   var d = document.getElementById(id);
@@ -21,8 +18,7 @@
   s.setProperty('padding', '18px 30px');
   s.setProperty('border-radius', '14px');
   s.setProperty('pointer-events', 'none');
-  // pre-wrap, not pre: `pre` never wraps, so a toast wider than the panel is clipped at BOTH edges
-  // (centred via translateX(-50%)) with no ellipsis and no error. max-width makes it wrap early.
+  // pre-wrap + max-width: `pre` would clip a wide toast at both edges instead of wrapping.
   s.setProperty('white-space', 'pre-wrap');
   s.setProperty('max-width', '76vw');
   s.setProperty('text-align', 'center');

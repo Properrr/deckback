@@ -1,16 +1,7 @@
 """The launcher's evdev -> CDP path, and Leanback's response to it.
 
-Two channels, and the difference is the whole design of this file:
-
-  CDP key injection bypasses evdev, Steam Input and gamescope. A pass tells you about **Leanback**.
-  uinput injection goes through all of them. A pass tells you about **our launcher**.
-
-So a CDP test is the positive control for a uinput test: if `ArrowDown` over CDP does not move focus,
-then a uinput D-pad press failing to move focus indicts nothing — the assertion method itself is
-broken. Order matters, and pytest runs top to bottom.
-
-Never assert that focus moved *by one*. Steam Input may re-wrap a newly created uinput pad and
-deliver every press twice (TEST-PLAN §3, open question). Assert that focus **changed**.
+CDP tests run first as the positive control for the uinput tests. Assert that focus changed, never
+by how much (Steam Input may double-deliver presses).
 """
 
 from __future__ import annotations
@@ -31,11 +22,7 @@ def _focus(cdp):
 
 @pytest.mark.gate
 def test_cdp_arrow_moves_focus(leanback):
-    """The positive control for everything below. Proves the *assertion method* works.
-
-    Also the R1 canary: if Leanback stops moving focus on ArrowDown, our whole input model is void
-    regardless of how the key got there.
-    """
+    """CDP ArrowDown moves Leanback's focus (the positive control for the uinput tests)."""
     before = _focus(leanback)
     leanback.dispatch_key("ArrowDown")
     time.sleep(SETTLE_S)
@@ -48,7 +35,7 @@ def test_cdp_arrow_moves_focus(leanback):
 
 @pytest.mark.gate
 def test_cdp_keys_are_trusted(leanback):
-    """`isTrusted` is what makes Leanback act on the event at all (S0.6)."""
+    """CDP-injected keydowns are `isTrusted`, which Leanback requires."""
     leanback.evaluate(
         "(function(){window.__dbTrusted=null;"
         "document.addEventListener('keydown',function(e){window.__dbTrusted=e.isTrusted;},"
@@ -64,15 +51,11 @@ def test_cdp_keys_are_trusted(leanback):
 @pytest.mark.gate
 @pytest.mark.uinput
 def test_uinput_dpad_moves_focus(deck, leanback):
-    """The launcher read a real evdev event and dispatched a real key. Nothing else can do this.
-
-    A pass proves the entire Phase 3 chain: /dev/input -> GamepadInput -> CDP -> Leanback.
-    """
+    """A uinput D-pad press moves focus: /dev/input -> GamepadInput -> CDP -> Leanback."""
     before = _focus(leanback)
 
     pad = u.gamepad_spec()
-    # settle=2.5s: the launcher rescans for new pads on a 2 s hotplug tick (input.cpp
-    # kHotplugScanMs), so a device created and destroyed faster than that is never seen.
+    # settle=2.5s: the launcher rescans for new pads on a 2 s hotplug tick (kHotplugScanMs).
     rc, _, err = deck.python(u.remote_program(pad, u.dpad(0, 1), settle=2.5), check=False)
     if rc == 3:
         pytest.skip(f"/dev/uinput unusable (environment): {err.strip()}")
@@ -90,7 +73,7 @@ def test_uinput_dpad_moves_focus(deck, leanback):
 @pytest.mark.gate
 @pytest.mark.uinput
 def test_uinput_button_a_activates(deck, leanback):
-    """A -> Enter -> Leanback activates the focused tile. Asserts the route changed, not that we sent."""
+    """A uinput A press activates the focused tile (the route changes)."""
     if leanback.evaluate(probes.ACCOUNT_PICKER_EXPR):
         pytest.skip("Leanback is on the account picker (environment): pick a profile on the Deck first")
     before = leanback.evaluate("location.href")
@@ -100,7 +83,6 @@ def test_uinput_button_a_activates(deck, leanback):
         pytest.skip(f"/dev/uinput unusable: {err.strip()}")
     assert rc == 0, err
 
-    # Activation navigates (to a watch route, a shelf, a menu). Poll rather than sleep a guess.
     changed = leanback.wait_for(f"location.href !== {before!r}", timeout=10)
     assert changed, (
         f"A (BTN_SOUTH) did not change the route from {before!r}. Either the launcher did not "
@@ -111,17 +93,11 @@ def test_uinput_button_a_activates(deck, leanback):
 @pytest.mark.probe
 @pytest.mark.uinput
 def test_right_stick_scrolls_focus(deck, leanback):
-    """input-ux §15. Requires ABS_RX/ABS_RY to exist at all — see test_capabilities.py.
-
-    Full deflection held briefly should produce several arrow bursts, so focus moves. We assert it
-    changed, never how far: the repeat rate is time-based and the pad's own report cadence is not
-    ours to predict.
-    """
+    """A held full right-stick deflection moves focus (needs ABS_RY; see test_capabilities.py)."""
     before = _focus(leanback)
     pad = u.gamepad_spec()
     events = u.stick(u.ABS_RY, 32767)
-    # Hold: the launcher repeats on its own timer while the axis stays deflected, so simply not
-    # re-centering for a moment is the whole "hold".
+    # The launcher repeats on its own timer while the axis stays deflected.
     events += [(u.EV_ABS, u.ABS_RY, 32767)] + u.syn()
     events += u.stick(u.ABS_RY, 0)
     rc, _, err = deck.python(u.remote_program(pad, events, settle=2.5), check=False)

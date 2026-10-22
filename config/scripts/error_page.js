@@ -1,9 +1,6 @@
-// Kiosk failure page (findings input-ux §7). Replaces Chromium's error interstitial — which has no
-// control a controller can focus — with our own focused Try-again page. Params: title, hint, url,
-// detail (strings). Only Enter/Space retry; no key quits (quitting the app because the Wi-Fi blinked
-// is not a kindness). documentElement.innerHTML needs a Trusted Types value under youtube.com/tv's
-// CSP; the policy is folded in here (memoised on window.__dbTTP, try/caught) and falls back to the
-// raw string on about:blank, which has no Trusted Types.
+// Kiosk failure page: replaces Chromium's interstitial with a focused Try-again button. Params: title,
+// hint, url, detail (strings). Enter/Space/click set window.__deckbackRetry; no key quits. innerHTML
+// goes through a Trusted Types policy (memoised on window.__dbTTP); raw string on about:blank.
 (function (p) {
   var STYLE = "<style>html,body{margin:0;height:100%;background:#0f0f0f;color:#fff;" +
     "font:400 24px/1.45 system-ui,Roboto,Arial,sans-serif;}" +

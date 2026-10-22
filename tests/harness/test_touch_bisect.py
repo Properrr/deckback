@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 """L0 coverage of the touch bisect's verdict (scripts/touch_bisect_probe.py).
 
-The bisect answers "does touch still reach the gesture router?" across engines and page scripts. Its
-one way to be worse than useless is to report OK for a cell it never actually ran -- so the only
-logic worth pinning is that "could not observe" is ENV (3), never OK (0).
+"Could not observe" must be ENV (3), never OK (0).
 """
 import importlib.util
 import os
@@ -24,7 +22,6 @@ class TestVerdict(unittest.TestCase):
         self.assertEqual(tb.verdict({"sequences": 9}, 3), tb.EX_OK)
 
     def test_fewer_taps_than_dispatched_is_a_regression(self):
-        # This is the cell that would have caught the v0.0.9 symptom, had the cause been reachable.
         self.assertEqual(tb.verdict({"sequences": 0}, 3), tb.EX_ASSERT)
         self.assertEqual(tb.verdict({"sequences": 2}, 3), tb.EX_ASSERT)
 

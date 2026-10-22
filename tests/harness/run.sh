@@ -1,7 +1,5 @@
 #!/usr/bin/env bash
-# Run every L0 harness test (tests/harness/test_*.sh). No Deck, no container, no Chromium checkout —
-# these test the shell/awk logic of the harness itself, which is otherwise only exercised on hardware.
-#
+# Run every L0 harness test (tests/harness/test_*.{sh,py}); needs no Deck, container or checkout.
 # Exit: 0 all passed · 1 one or more failed.
 set -uo pipefail
 cd "$(dirname "$0")" || exit 1
@@ -12,9 +10,8 @@ for t in test_*.sh test_*.py; do
   echo "── $t ──────────────────────────────────────────"
   case "$t" in
     *.sh) runner=(bash "$t") ;;
-    # -B: never read or write .pyc. Python's bytecode cache keys on the source's mtime in whole
-    # seconds plus its size, so a same-size edit inside one second silently reuses stale bytecode —
-    # which is how a mutation run once reported two killed mutants as SURVIVED (finding F7).
+    # -B: no .pyc — the cache keys on whole-second mtime + size, so a quick same-size edit can
+    # reuse stale bytecode.
     *.py) runner=(python3 -B "$t") ;;
   esac
   if "${runner[@]}"; then :; else

@@ -1,15 +1,8 @@
 #!/usr/bin/env python3
-"""L0 coverage of the L3 conformance gate — no browser, no Chromium checkout, no network.
+"""L0 coverage of the L3 conformance gate's decisions — no browser, no Chromium tree, no network.
 
-`just cert` needs a `content_shell` build to run, so it will not run in CI for a while yet. What CAN
-be checked here is every decision it makes once the numbers are in, and those decisions are the whole
-gate. In particular:
-
-  * A wedged suite must never pass. The harness's own `getTestResults()` buckets tests into `pass`
-    and `fail` and silently drops `UNKNOWN` and `TIMEOUT`, so a suite that dies on test 3 of 400
-    reports zero failures. We scrape `globalRunner.testList` instead, and `UNKNOWN` fails the run.
-  * A run with no baseline must not pass either. It has nothing to have an opinion about.
-  * A vector whose hash moved is Google changing a bucket (exit 3), not our decoder breaking (2).
+A wedged suite (`UNKNOWN` tests, which `getTestResults()` drops) or a missing baseline never passes;
+a moved vector hash is ENV (3), not a decoder regression (2).
 """
 
 import functools
@@ -51,8 +44,7 @@ class Scrape(unittest.TestCase):
         self.assertEqual(ch.progress(tests), (2, 3))
 
     def test_timeout_is_a_result_and_unknown_is_not(self):
-        # The harness reached the TIMEOUT test and it ran out of time; it never reached the UNKNOWN
-        # one. Treating them alike makes the no-progress watchdog either blind or hysterical.
+        # A TIMEOUT test ran out of time; an UNKNOWN one was never reached.
         self.assertIn(ch.TIMEOUT, ch.TERMINAL)
         self.assertNotIn(ch.UNKNOWN, ch.TERMINAL)
 
@@ -64,8 +56,7 @@ class Scrape(unittest.TestCase):
 
 class Preflight(unittest.TestCase):
     def test_insecure_origin_is_refused(self):
-        # Every EME test would fail at requestMediaKeySystemAccess, for a reason that has nothing to
-        # do with our engine. Catch it before a single test runs.
+        # Every EME test would fail at requestMediaKeySystemAccess, regardless of the engine.
         ok, why = ch.preflight_verdict(json.dumps(
             {"secure": False, "host": "192.168.1.7:8000", "href": "http://192.168.1.7:8000/main.html"}))
         self.assertFalse(ok)
@@ -92,14 +83,12 @@ class Adjudication(unittest.TestCase):
         self.assertEqual(v.regressions[0]["actual"], "FAILED")
 
     def test_a_known_failure_does_not_fail_the_build(self):
-        # Some tests are legitimately OPTIONAL_FAILED and some fail on known gaps of ours. A suite
-        # red on day one is ignored by day three, which is how the gate dies.
+        # Expected failures (OPTIONAL_FAILED, known gaps) come from the baseline.
         v = ch.adjudicate([T("a", ch.OPTIONAL_FAILED)], {"a": "OPTIONAL_FAILED"})
         self.assertFalse(v.failed)
 
     def test_a_never_run_test_fails_the_run(self):
-        # THE bug this file exists for. A suite that wedged after 1 of 3 tests has no opinion about
-        # the other two, and silence is not assent. `getTestResults()` would report zero failures.
+        # A suite that wedged after 1 of 3 tests has no opinion about the other two.
         v = ch.adjudicate([T("a", ch.PASSED), T("b", ch.UNKNOWN)], {"a": "PASSED", "b": "PASSED"})
         self.assertTrue(v.failed)
         self.assertEqual([t["name"] for t in v.unknown], ["b"])
@@ -114,8 +103,7 @@ class Adjudication(unittest.TestCase):
         v = ch.adjudicate([T("new", ch.PASSED)], {"gone": "PASSED"})
         self.assertEqual([t["name"] for t in v.new_tests], ["new"])
         self.assertEqual(v.missing_tests, ["gone"])
-        # Neither fails the build: a harness bump adds and removes tests, and that is a review event,
-        # not a 3 a.m. page.
+        # Neither fails the build: a harness bump adds and removes tests.
         self.assertFalse(v.failed)
 
     def test_timeout_against_a_passing_baseline_is_a_regression(self):
@@ -131,8 +119,7 @@ class Adjudication(unittest.TestCase):
 
 class Flake(unittest.TestCase):
     def test_a_test_that_passes_on_rerun_is_flaky_not_pass(self):
-        # TEST-PLAN §0: retry transport, never adjudication. A green re-run does not delete the red
-        # one, it renames it.
+        # Retry transport, never adjudication: a green re-run makes the test flaky, not passing.
         self.assertEqual(ch.flake_verdict(ch.FAILED, ch.PASSED), "flaky")
         self.assertEqual(ch.flake_verdict(ch.FAILED, ch.FAILED), "fail")
         self.assertEqual(ch.flake_verdict(ch.PASSED, ch.PASSED), "pass")
@@ -149,14 +136,7 @@ class UtilRewrite(unittest.TestCase):
         self.assertNotIn("storage.googleapis.com", out)
 
     def test_the_vector_routes_cannot_shadow_the_harness_tree(self):
-        """`/media/` DID shadow it, and the whole suite silently never started.
-
-        js_mse_eme keeps its suite definitions in `media/` — `media/conformanceTest.js` and friends,
-        loaded by main.html as ordinary script tags. Serving vectors at `/media/` sent those requests
-        to Google's bucket, where they 404. No test was ever defined, `window.globalRunner` was never
-        created, and cert.py reported "the harness never installed globalRunner": a message about the
-        engine, for a bug in the server.
-        """
+        """Vector routes sit under one prefix segment no harness-tree entry uses (it has media/)."""
         self.assertTrue(ch.MEDIA_ROUTE.startswith(ch.VECTOR_PREFIX))
         self.assertTrue(ch.CERT_ROUTE.startswith(ch.VECTOR_PREFIX))
         top = ch.VECTOR_PREFIX.strip("/")
@@ -166,20 +146,18 @@ class UtilRewrite(unittest.TestCase):
         names = {p.name for p in cert.HARNESS_DIR.iterdir()}
         self.assertNotIn(top, names,
                          f"{top!r} collides with a real entry in the harness tree")
-        # And the thing that actually bit: `media` IS a real directory in there.
+        # `media` is a real harness directory, hence the prefix.
         self.assertIn("media", names, "harness has its own media/ — the prefix exists because of it")
 
     def test_a_harness_that_renamed_the_constants_raises(self):
-        # The load-bearing case. A silent no-op rewrite would send every media request back to
-        # Google's bucket, unhashed, and the run would still go green.
+        # A silent no-op rewrite would send every media request to Google's bucket, unhashed.
         with self.assertRaises(ch.HarnessError):
             ch.rewrite_util_js("const MEDIA_URL = '//x/';")
         with self.assertRaises(ch.HarnessError):
             ch.rewrite_util_js("const MEDIA_PATH = '//x/';")  # CERT_PATH missing
 
     def test_the_real_vendored_harness_still_has_the_constants(self):
-        # Guards the pin: if a future HARNESS.pin bump renames these, this fails here rather than
-        # silently at 3 a.m. against a bucket we do not control.
+        # Fails here if a HARNESS.pin bump renames these constants.
         util = cert.HARNESS_DIR / "harness" / "util.js"
         if not util.exists():
             self.skipTest("harness not synced (scripts/cert.py --sync-only)")
@@ -285,13 +263,7 @@ class Pins(unittest.TestCase):
 
 
 class EchoRoute(unittest.TestCase):
-    """`XHRUint8Array` needs a server route the harness never mentions and never ships.
-
-    Its absence does not present as "route missing". The XHR completes (501 fires `load`, not
-    `error`), `getResponseData()` trips an internal assert, `runner.succeed()` is never reached, and
-    the harness reports `XHRUint8Array TIMED OUT` — which reads as a slow or wedged engine. This test
-    exists so that never happens twice.
-    """
+    """`XHRUint8Array` needs an echo route the harness never ships; without it, it TIMES OUT."""
 
     def _serve(self):
         cert.Handler.manifest = {}
@@ -305,7 +277,7 @@ class EchoRoute(unittest.TestCase):
         return f"http://127.0.0.1:{httpd.server_address[1]}"
 
     def test_the_route_the_harness_hardcodes_is_the_route_we_serve(self):
-        # If someone "tidies" ECHO_ROUTE, this is the tripwire: the harness's URL is a literal.
+        # The harness's URL is a literal; ECHO_ROUTE must match it.
         conformance = cert.HARNESS_DIR / "media" / "conformanceTest.js"
         if not conformance.exists():
             self.skipTest("harness not synced (scripts/cert.py --sync-only)")
@@ -350,13 +322,7 @@ class PortGuard(unittest.TestCase):
         self.assertTrue(cert.port_is_free(port))
 
     def test_the_guard_answers_the_question_the_server_asks(self):
-        """The guard must agree with `Server`, whatever `Server` does.
-
-        It used to bind without SO_REUSEADDR while `Server.allow_reuse_address` sets it, so a
-        TIME_WAIT socket from the previous run made the guard say "busy" about a port the server
-        would bind fine: `just cert` twice in a row, second run dead with exit 3 and an environment
-        error about nothing.
-        """
+        """The guard must agree with `Server` (which sets SO_REUSEADDR) on what is bindable."""
         with socket.socket() as s:
             s.bind(("127.0.0.1", 0))
             port = s.getsockname()[1]
@@ -372,11 +338,7 @@ class PortGuard(unittest.TestCase):
 
 class UsageExitCode(unittest.TestCase):
     def test_a_bad_flag_is_usage_not_a_conformance_regression(self):
-        """argparse exits 2. In this repo 2 is EX_ASSERT, the one code that fails a build.
-
-        `just cert conformance-test deck -- --freeze-vectors` (one `--` too many) reported itself to
-        the caller as "a test that used to pass does not".
-        """
+        """argparse exits 2, which is EX_ASSERT — the code that fails a build."""
         r = subprocess.run([sys.executable, "-B", str(_REPO / "scripts" / "cert.py"), "--bogus"],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, cert.EX_USAGE, r.stderr)
@@ -393,13 +355,8 @@ class VendoredHarness(unittest.TestCase):
         self.assertEqual(missing, [], f"{len(missing)} script sources missing, e.g. {missing[:2]}")
 
     def test_closure_is_pinned_to_a_goog_provide_release(self):
-        """Closure switched `goog.array` to `goog.module` in v20200830.
-
-        `main.html` loads all 35 Closure files as plain <script src> with CLOSURE_NO_DEPS=true, and a
-        goog.module file executed as a plain script throws. Pin a newer Closure and the page fills
-        with "goog.require could not find: goog.array", `window.globalRunner` is never created, and
-        the failure reads exactly like a broken engine.
-        """
+        """Closure moved `goog.array` to `goog.module` in v20200830; main.html loads Closure as
+        plain scripts (CLOSURE_NO_DEPS=true), where a goog.module file throws."""
         arr = (cert.HARNESS_DIR / "third_party/closure-library/closure-library"
                                   "/closure/goog/array/array.js")
         if not arr.exists():
@@ -411,8 +368,7 @@ class VendoredHarness(unittest.TestCase):
 
 class Tiers(unittest.TestCase):
     def test_playbackperf_is_a_trend_and_never_a_gate(self):
-        # Its results depend on TDP, refresh rate, and thermals. On a handheld it is not
-        # deterministic, and a nondeterministic gate is a gate someone disables.
+        # Its results depend on TDP, refresh rate and thermals: not deterministic on a handheld.
         self.assertFalse(set(cert.GATE_SUITES) & set(cert.TREND_SUITES))
         for s in cert.TREND_SUITES:
             self.assertIn("playbackperf", s)

@@ -1,22 +1,6 @@
-// Hide the X cursor. A SEPARATE, SEPARATELY-INJECTED script on purpose — see the warning below.
-//
-// gamescope composites our X cursor, so `cursor: none` on the page makes it draw nothing (verified
-// on-Deck). `disable_touch` gets this for free because `no_pointer.js` carries the same code; the
-// gesture policy does not, because the two are mutually exclusive, so with the router installed
-// no_pointer.js is not and the cursor comes back.
-//
-// ★ WHY IT IS NOT PART OF touch_gestures.js. It was, for one build, and on that build a real finger
-// produced ZERO events of any family. The cause is NOT established — that build also changed the
-// entire engine binary (gold+ThinLTO vs the deck/qa builds every hand test used), and the router's
-// listeners were observed still attached — but the two suspects were entangled in one file, so
-// neither could be dropped without dropping the other. Splitting them makes the question answerable
-// on hardware: `touch_hide_cursor: false` in user.json removes exactly this and nothing else, with
-// no rebuild. Keep it separate until `durable/touch-gestures.md` §7.0 closes.
-//
-// Page constraints, each learned the hard way: a `<style>` tag is blocked by youtube.com/tv's CSP
-// (style-src has no 'unsafe-inline'), so this uses a CONSTRUCTABLE stylesheet with `insertRule` as a
-// fallback and an inline baseline on documentElement that inherits down. The `*` rule beats
-// per-element cursors like a button's `cursor: pointer`.
+// Hide the X cursor: gamescope composites it, so page-level `cursor: none` hides it. Separate from
+// touch_gestures.js so `touch_hide_cursor: false` removes exactly this (no_pointer.js has its own
+// copy). <style> is CSP-blocked: constructable sheet, insertRule fallback, inline baseline.
 (function () {
   var W = window;
   var RULE = '*,*::before,*::after{cursor:none !important}';

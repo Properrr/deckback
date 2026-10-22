@@ -1,8 +1,6 @@
-"""The two surfaces a user hits when things go wrong or when they arrive for the first time.
+"""Injected overlays (controls card, toast) and the error page render and respond on hardware.
 
-Both were built without hardware, and both fail *silently* by design: a CDP injection that produces a
-syntax error renders nothing and reports nothing (a failed toast must never break the touch lock it
-announces). So there is exactly one way to know whether they render: look.
+These injections fail silently by design, so the only check is to look at the DOM.
 """
 
 from __future__ import annotations
@@ -28,18 +26,9 @@ TOAST_PRESENT = "!!document.getElementById('__deckback_toast')"
 
 @pytest.mark.probe
 def test_controls_card_can_render_over_leanback(leanback, deck):
-    """input-ux §17. Does a CDP-injected <div> survive Leanback's own DOM management?
-
-    Forced by deleting the first-run marker and restarting is too heavy for a probe; instead we
-    inject the same JS the launcher injects and check it lands. That tests the *rendering* claim,
-    which is the unverified one. Whether the launcher calls it at the right moment is covered at L0.
-    """
-    # The launcher builds this JS in C++, so we cannot import it. Re-create the essential shape: an
-    # element with the same id, appended to documentElement, its innerHTML assigned through the SAME
-    # Trusted Types policy the launcher uses (probes.trusted_html_js mirrors js_trusted_html). A bare
-    # innerHTML here throws under youtube.com/tv's CSP -- which is what this test failed on once the
-    # launcher was fixed and this inline copy was not (2026-07-10). The escaping is covered at L0
-    # (overlay_test, onboarding_test); what is unproven on hardware is whether the node survives.
+    """A CDP-injected controls-card <div> survives Leanback's DOM management."""
+    # Mirrors the launcher's C++-built JS: same id, appended to documentElement, innerHTML through
+    # the same Trusted Types policy (a bare innerHTML throws under youtube.com/tv's CSP).
     html = probes.trusted_html_js("'<table><tr><td>A</td><td>Select</td></tr></table>'")
     leanback.evaluate(
         "(function(){var d=document.createElement('div');d.id='__deckback_help';"
@@ -59,7 +48,7 @@ def test_controls_card_can_render_over_leanback(leanback, deck):
 
 @pytest.mark.probe
 def test_toast_can_render_over_leanback(leanback):
-    """input-ux §14. Same claim, different id — and the toast is what the touch lock relies on."""
+    """A CDP-injected toast <div> survives Leanback's DOM management."""
     leanback.evaluate(
         "(function(){var d=document.createElement('div');d.id='__deckback_toast';"
         "d.textContent='probe';document.documentElement.appendChild(d);return true;})()"
@@ -72,16 +61,10 @@ def test_toast_can_render_over_leanback(leanback):
 
 @pytest.mark.probe
 def test_error_page_renders_and_focuses_retry(cdp, deck):
-    """input-ux §16. Sever DNS, assert OUR page appears and no Chromium interstitial is reachable.
-
-    Destructive: it edits the app's view of the network. We restore by navigating back, and the
-    launcher's own retry loop recovers on its own if we die mid-test.
-    """
-    # Navigate somewhere that cannot resolve. This exercises the real path: Page.navigate reports
-    # failure via errorText, and the launcher must notice and draw its own page.
+    """A failed navigation shows our error page with Retry focused, then recovers to Leanback."""
     cdp.call("Page.navigate", {"url": "https://deckback-invalid.invalid/"})
 
-    # The launcher polls; give it a couple of ticks (devtools_poll_ms defaults to 1000).
+    # The launcher polls every devtools_poll_ms (default 1000).
     appeared = cdp.wait_for(ERROR_PAGE_PRESENT, timeout=20)
     assert appeared, (
         "the launcher's error page never appeared after a failed navigation. The user is looking at "
@@ -92,18 +75,14 @@ def test_error_page_renders_and_focuses_retry(cdp, deck):
         "unfocused button is an unreachable one, which is the failure this page replaces."
     )
 
-    # And it recovers: the launcher's own backoff should take us home without our help.
+    # The launcher's own backoff returns to the TV app.
     back = cdp.wait_for(probes.ON_LEANBACK_EXPR, timeout=60)
     assert back, "the launcher never recovered from the error page back to the TV app"
 
 
 @pytest.mark.probe
 def test_injected_enter_activates_our_retry_button(cdp):
-    """The retry path only works if our own injected Enter reaches our own page.
-
-    Distinct from `test_cdp_arrow_moves_focus`: that proves keys reach *Leanback*. This proves they
-    reach a document we created on about:blank, which is a different security origin.
-    """
+    """An injected Enter reaches a focused button on our own about:blank document."""
     cdp.call("Page.navigate", {"url": "about:blank"})
     cdp.wait_for("document.readyState === 'complete'", timeout=10)
     cdp.evaluate(

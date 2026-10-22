@@ -1,27 +1,7 @@
-"""Synthetic evdev devices on the Deck, driven from the workstation over SSH.
+"""Synthetic evdev devices on the Deck, driven over SSH by a generated program on /dev/uinput.
 
-Why this exists, and where its limits are.
-
-CDP key injection (``scripts/cdp.py``) is the *better* tool for behavioural assertions: it bypasses
-evdev, Steam Input and gamescope entirely, so a passing test says something about Leanback. But it
-therefore says **nothing about the launcher's own evdev→CDP path**, which is where every Phase 3 bug
-would live. uinput is the only way to exercise that path end to end: create a pad, press a button,
-and assert that Leanback's focus moved — which can only have happened if the launcher read the event
-and dispatched a key.
-
-So: **use CDP for "does Leanback do X"; use uinput for "does our launcher notice Y".**
-
-  Open question (TEST-PLAN §3): does Steam Input in Game Mode grab and re-wrap a *newly created*
-  uinput pad, delivering every press twice? Unverified. Tests that count keystrokes must not assume
-  a 1:1 mapping until that is settled — assert that focus *moved*, not that it moved exactly once.
-
-The Deck ships python3 but no ``python-evdev``, and we refuse to install anything on it (TEST-PLAN
-§3: "the Deck is a dumb target"). So the device is driven with ``ctypes``/``struct`` against
-``/dev/uinput`` directly, from a program this module generates and pipes over SSH.
-
-Everything in this module up to ``remote_program()`` is **pure** and unit-tested on the workstation
-by ``tests/harness/test_deck_lib.py``. A harness whose helpers can only be exercised on hardware is
-a harness nobody can debug.
+Use CDP for "does Leanback do X"; use uinput for "does the launcher's evdev path notice Y". Steam
+Input may double-deliver a new pad's presses, so assert that focus moved, not how many times.
 """
 
 from __future__ import annotations
@@ -48,8 +28,7 @@ ABS_MT_TRACKING_ID = 0x39
 
 ABS_CNT = 64
 
-# ioctl request numbers. _IO('U', n) and _IOW('U', n, int) expanded, because computing them at
-# runtime needs the kernel's _IOC macros and this is the whole set we use.
+# ioctl request numbers: _IO('U', n) and _IOW('U', n, int) expanded.
 UI_DEV_CREATE = 0x5501
 UI_DEV_DESTROY = 0x5502
 UI_SET_EVBIT = 0x40045564  # _IOW('U', 100, int)
@@ -63,18 +42,12 @@ EV_FF = 0x15
 FF_RUMBLE = 0x50
 
 # `struct input_event` on 64-bit Linux: struct timeval {long, long}, __u16, __u16, __s32.
-#
-# `q` and not `l`: with the `=` prefix struct uses *standard* sizes, where `l` is 4 bytes. The Deck's
-# time_t is 8. The wrong format silently packs 16-byte events that the kernel reads as garbage, and
-# the only symptom on hardware is "the device exists but nothing happens" — which is why
-# INPUT_EVENT_SIZE is asserted against the struct in tests/harness/test_deck_lib.py.
+# `q`, not `l`: with the `=` prefix `l` is 4 bytes, but time_t is 8.
 _INPUT_EVENT = struct.Struct("=qqHHi")
 INPUT_EVENT_SIZE = 24
 
 # ---- ioctl encoding -----------------------------------------------------------------------------
-# The kernel's _IOC macro. Deriving the numbers rather than pasting them means the UI_* constants
-# above are checkable against it (tests/harness/test_deck_lib.py does exactly that) — a transposed
-# digit in an ioctl number fails as EINVAL at runtime, on hardware, with no clue why.
+# The kernel's _IOC macro; the UI_* constants above are checked against it.
 
 _IOC_NRBITS, _IOC_TYPEBITS, _IOC_SIZEBITS = 8, 8, 14
 _IOC_NRSHIFT = 0
@@ -111,11 +84,8 @@ UINPUT_USER_DEV_SIZE = 1116
 class DeviceSpec:
     """A uinput device to create. `abs_axes` maps code -> (min, max, fuzz, flat).
 
-    `props` is the list of INPUT_PROP_* the device advertises. It matters for touch: libinput
-    classifies an absolute-multitouch device WITHOUT INPUT_PROP_DIRECT as a touchpad and WITH it as a
-    touchscreen, and the two get very different pointer handling. (On this Deck's gamescope a synthetic
-    panel is not routed to the page either way — durable/touch-lock.md — but a panel that lies about
-    being a touchpad could never be, so we do not add that confound.)
+    `props` lists the INPUT_PROP_* it advertises; libinput treats multitouch without
+    INPUT_PROP_DIRECT as a touchpad, with it as a touchscreen.
     """
 
     def __init__(self, name, keys=(), abs_axes=None, props=(), vendor=0x1234, product=0x5678,
@@ -129,15 +99,7 @@ class DeviceSpec:
         self.version = version
 
     def ev_bits(self):
-        """The EV_* types to enable.
-
-        **Never EV_SYN.** Enabling it makes UI_DEV_CREATE fail with EINVAL, and the failure surfaces
-        much later as "the device exists but nothing reads it" (TEST-PLAN §3, listed as a gotcha
-        because it costs a day). That is guaranteed here by construction rather than by a check in
-        `validate()`: only EV_KEY and EV_ABS can ever be returned, so a guard against EV_SYN could
-        never fire, and a check that cannot fail is not a check. `test_ev_syn_is_never_enabled`
-        pins the contract.
-        """
+        """The EV_* types to enable: only EV_KEY/EV_ABS, never EV_SYN (UI_DEV_CREATE fails with it)."""
         bits = []
         if self.keys:
             bits.append(EV_KEY)
@@ -166,12 +128,7 @@ def pack_input_event(ev_type, code, value):
 
 
 def pack_user_dev(spec):
-    """`struct uinput_user_dev` for the legacy device-setup path.
-
-    Legacy (write the struct, then UI_DEV_CREATE) rather than UI_DEV_SETUP/UI_ABS_SETUP, because the
-    legacy path has been stable since 2.6 and needs no per-axis ioctls — and SteamOS's kernel is not
-    ours to assume things about.
-    """
+    """`struct uinput_user_dev` for the legacy setup path (write it, then UI_DEV_CREATE)."""
     spec.validate()
     absmax = [0] * ABS_CNT
     absmin = [0] * ABS_CNT
@@ -196,9 +153,7 @@ def pack_user_dev(spec):
 def gamepad_spec(name="deckback-test-pad"):
     """An Xbox-shaped pad: exactly the controls `launcher/src/input.cpp` reads.
 
-    The axis ranges mirror the real virtual pad Steam Input exposes (sticks ±32767, triggers 0..255,
-    hats ±1), because `fast_scroll()` normalises against that range and a test pad with a different
-    range would exercise a code path no user has.
+    Axis ranges mirror Steam Input's virtual pad (sticks ±32767, triggers 0..255, hats ±1).
     """
     return DeviceSpec(
         name,
@@ -228,11 +183,7 @@ def gamepad_spec(name="deckback-test-pad"):
 
 
 def touchscreen_spec(name="deckback-test-touch", width=1280, height=800):
-    """A multitouch panel shaped like the FTS3528, for driving synthetic taps at the compositor.
-
-    Matches the panel by capability (ABS_MT_POSITION_X + ABS_MT_SLOT) rather than by the real USB
-    id, so nothing can mistake it for the physical panel.
-    """
+    """A multitouch panel shaped like the FTS3528 by capability, not by its USB id."""
     return DeviceSpec(
         name,
         keys=(BTN_TOUCH,),
@@ -244,9 +195,7 @@ def touchscreen_spec(name="deckback-test-touch", width=1280, height=800):
             ABS_MT_POSITION_Y: (0, height - 1, 0, 0),
             ABS_MT_TRACKING_ID: (0, 65535, 0, 0),
         },
-        # Without this, libinput sees a touchpad, not a touchscreen. It is not what unblocks routing
-        # on this Deck (durable/touch-lock.md), but a panel that omits it is not a faithful stand-in
-        # for the FTS3528 and could never route even on a compositor that honours synthetic panels.
+        # Without this, libinput sees a touchpad, not a touchscreen.
         props=(INPUT_PROP_DIRECT,),
     )
 
@@ -256,11 +205,7 @@ def syn():
 
 
 def press(code):
-    """Press and release one button, each with its own SYN_REPORT.
-
-    Two reports, not one: a press and a release inside a single report is a zero-duration press, and
-    what a consumer makes of it is undefined.
-    """
+    """Press and release one button, each with its own SYN_REPORT (one report = zero-length press)."""
     return [(EV_KEY, code, 1)] + syn() + [(EV_KEY, code, 0)] + syn()
 
 
@@ -455,17 +400,8 @@ print(json.dumps(devices))
 
 
 def capabilities_program():
-    """A program that dumps every /dev/input node's name, ids, EV_* types, ABS axes and FF effects.
-
-    This single probe settles three separately-registered unknowns, all of which are currently
-    "unverified" in TEST-PLAN §2 and all of which are one `evtest` away:
-
-      * Does Steam Input's virtual pad expose **ABS_RX/ABS_RY**?  (right-stick fast scroll, §15)
-      * Does it expose **ABS_Z/ABS_RZ** analog triggers, or did `steam_input.vdf`'s `"click"` binding
-        turn them into buttons?  (the L2/R2 hazard, §12)
-      * Does it expose **EV_FF / FF_RUMBLE**?  (touch-lock haptics, §14)
-
-    Reading is enough; nothing here needs to write, so it needs no udev rule.
+    """A program that prints every /dev/input node's name, ids, EV_* types, ABS axes and FF effects
+    as JSON. Read-only, so it needs no udev rule.
     """
     return _CAPS.format(
         gname=eviocgname(256),
@@ -477,11 +413,7 @@ def capabilities_program():
 
 
 def find_device(devices, *, name_contains=None, needs_abs=(), needs_ev=()):
-    """Pick devices out of `capabilities_program()`'s JSON by capability, never by `eventN`.
-
-    Node numbers are unstable across boots and resume (input-ux §1), so every lookup here is by
-    identity or capability. A test that hardcodes `/dev/input/event10` passes until the next reboot.
-    """
+    """Pick devices out of `capabilities_program()`'s JSON by name/capability (eventN is unstable)."""
     out = []
     for d in devices:
         if name_contains and name_contains.lower() not in d["name"].lower():

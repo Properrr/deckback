@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
 # L0 tests for scripts/lib/flatpak_channel.sh — the pure decisions behind `just deck-install-dev` /
-# `deck-use-repo` / `deck-channel` (scripts/deck-flatpak.sh).
-#
-# The load-bearing one is data_preserved(): it is the gate that turns "the reinstall wiped the
-# YouTube sign-in" from a silent surprise into a failed run (harness §6.4 "verify what you claim").
-# A gate that cannot fail is not a gate, so the wiped-data case is asserted explicitly here.
-#
-# Needs no Deck, no flatpak, no container. Run: tests/harness/test_flatpak_channel.sh
+# `deck-use-repo` / `deck-channel`. data_preserved() must fail when a reinstall wiped the sign-in.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 
@@ -29,13 +23,11 @@ eq  "channel: not installed"          none     "$(channel_of_origin '')"
 eq  "channel: flathub is unknown"     unknown  "$(channel_of_origin flathub)"
 eq  "channel: stray remote unknown"   unknown  "$(channel_of_origin some-other-remote)"
 
-# flatpak DISAMBIGUATES a bundle's origin with a digit when the canonical name is already taken, and
-# a leftover origin remote is `noenumerate` so it is invisible to `flatpak remotes`. Treating the
-# numbered form as "not our dev channel" reported a healthy deploy as a failed one (2026-07-31), and
-# the exact-name assertion fired instead of the install error that would have explained anything.
+# flatpak disambiguates a bundle's origin with a digit when the canonical name is taken (a leftover
+# origin remote is `noenumerate`, invisible to `flatpak remotes`); numbered forms are still dev.
 eq  "channel: numbered dev origin"    dev      "$(channel_of_origin deckback2-origin)"
 eq  "channel: twice-numbered origin"  dev      "$(channel_of_origin deckback17-origin)"
-# The family must not swallow a lookalike, or a hand-added remote would read as our own sideload.
+# A lookalike remote must not read as our own sideload.
 eq  "channel: lookalike is unknown"   unknown  "$(channel_of_origin deckback-origin-backup)"
 eq  "channel: prefix is unknown"      unknown  "$(channel_of_origin deckbackfoo)"
 

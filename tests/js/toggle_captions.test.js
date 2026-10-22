@@ -1,8 +1,5 @@
-// Node fuzz/combinatorial test for config/scripts/toggle_captions.js — the caption pick/toggle/apply
-// logic, exercised against a MOCK YouTube player so every op/mode/state/track scenario is covered
-// off-device (the launcher's C++ side is covered by caption_fuzz_test.cpp; this covers the JS the
-// launcher only evaluates on the Deck).
-//
+// Node fuzz/combinatorial test for config/scripts/toggle_captions.js against a mock YouTube player:
+// every op/mode/state/track scenario, off-device.
 // Run: node tests/js/toggle_captions.test.js   (also wired into ctest when node is present).
 'use strict';
 const fs = require('fs');

@@ -1,11 +1,7 @@
-"""L2 fixtures: SSH to the Deck, a CDP tunnel, and artifacts on failure (TEST-PLAN §3).
+"""L2 fixtures: SSH to the Deck, a CDP tunnel, and artifacts on failure.
 
-Topology: the workstation is the test runner, the Deck is a dumb target. Nothing is installed there.
-
-A word about skipping. With no Deck reachable this whole suite skips, and **a suite that skips proves
-nothing**. That is acceptable only because the pure helpers under `lib/` are separately unit-tested
-by `tests/harness/test_deck_lib.py`, which CI *does* run. Never let a skip stand in for a pass: `just
-test-deck` prints how many tests ran, and zero is not success.
+The workstation runs the tests; nothing is installed on the Deck. With no Deck reachable the suite
+skips, and zero tests run is not success.
 """
 
 from __future__ import annotations
@@ -60,12 +56,7 @@ def deck_host(request):
 
 @pytest.fixture(scope="session")
 def deck(request, deck_host):
-    """An `Ssh` to the Deck, or a clean skip.
-
-    Unreachable is an ENVIRONMENT condition (exit 3 in the harness taxonomy), never a product
-    failure. `--no-skip` turns it into an error, for the unattended runner where a missing Deck IS
-    the bug.
-    """
+    """An `Ssh` to the Deck, or a skip when unreachable (an error under `--no-skip`)."""
     port = sshlib.deck_port()
     if not sshlib.reachable(deck_host, port):
         msg = f"no Deck reachable at {deck_host or '<unset DECK_HOST>'}:{port}"
@@ -77,13 +68,9 @@ def deck(request, deck_host):
 
 @pytest.fixture(scope="session")
 def tunnel(deck, deck_host):
-    """`ssh -N -L 9222:localhost:9222`.
+    """`ssh -N -L 9222:localhost:9222`; yields the local CDP port.
 
-    Chrome >= 111 requires `Host: localhost` on the /json endpoints, so we must never talk to the
-    Deck's IP directly — the tunnel makes `127.0.0.1` correct by construction (TEST-PLAN §3).
-
-    Shared with `scripts/deckctl.py`, which `just power` and `just soak` drive. One implementation,
-    so the two cannot disagree about what "the app is not running" looks like.
+    Chrome >= 111 requires `Host: localhost` on the /json endpoints, so never talk to the Deck's IP.
     """
     try:
         with sshlib.Tunnel(deck_host, deck.port, CDP_PORT) as tun:
@@ -103,10 +90,7 @@ def cdp(tunnel):
 
 @pytest.fixture()
 def leanback(cdp):
-    """A CDP client that has confirmed the TV app is loaded.
-
-    Every test starts from a known state (TEST-PLAN §3), never "whatever the last test left behind".
-    """
+    """A CDP client that has confirmed the TV app is loaded."""
     from lib import probes
 
     if not cdp.wait_for(probes.ON_LEANBACK_EXPR, timeout=45):
@@ -138,8 +122,7 @@ def _dump_artifacts(item):
         if d is not None:
             _, out, _ = d.run("journalctl --user -n 400 --no-pager 2>/dev/null", check=False)
             (Path(str(base) + ".journal.txt")).write_text(out)
-            # The Flatpak's XDG_STATE_HOME is under ~/.var/app; the host path holds only a stale log
-            # from the pre-Flatpak raw-binary runs, which every dump used to attach instead.
+            # The Flatpak's XDG_STATE_HOME is under ~/.var/app; the host path is only a fallback.
             _, log, _ = d.run(
                 "tail -n 400 ~/.var/app/io.github.properrr.deckback/.local/state/deckback/logs/"
                 "deckback.log 2>/dev/null || tail -n 400 ~/.local/state/deckback/logs/deckback.log "

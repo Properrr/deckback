@@ -1,20 +1,8 @@
 #!/usr/bin/env python3
-"""L0 coverage of the L2 harness's pure helpers (`tests/deck/lib/`).
+"""L0 coverage of the L2 harness's pure helpers (`tests/deck/lib/`), which skip without a Deck.
 
-Why this file exists at all. With no Deck attached, the whole `tests/deck/` suite skips — and **a
-suite that skips proves nothing**. Every helper it depends on would be untested, and the first time
-anyone plugs in a Deck they would be debugging the harness and the product at once, unable to tell
-which is lying.
-
-So the parts that can be checked without hardware are checked here, and CI runs them on every push.
-The two that have already bitten:
-
-  * `struct input_event` is 24 bytes on x86-64. With struct's `=` prefix, `l` is **4** bytes, so the
-    obvious `=llHHi` silently packs 16-byte events the kernel reads as garbage. The only symptom on
-    hardware is "the device exists but nothing happens".
-  * `parse_power_now("")` must raise, not return 0.0. The shell one-liner it replaces averaged an
-    empty field to `mean 0.00 W` and printed `PASS` against a "<= 9 W" budget — a perfect score from
-    zero data, on a Deck with no battery telemetry.
+E.g. `struct input_event` is 24 bytes on x86-64 (`=llHHi` packs 16), and `parse_power_now("")` must
+raise, not return 0.0.
 """
 
 import os
@@ -35,10 +23,7 @@ from lib import uinput as u  # noqa: E402
 
 
 class TestIoctlEncoding(unittest.TestCase):
-    """The hardcoded UI_* numbers must agree with the kernel's _IOC macro.
-
-    A transposed digit here fails as EINVAL on hardware with no clue why, and only on hardware.
-    """
+    """The hardcoded UI_* numbers must agree with the kernel's _IOC macro."""
 
     def test_ui_constants_match_the_ioc_macro(self):
         self.assertEqual(u.ioc(u.IOC_NONE, ord("U"), 1, 0), u.UI_DEV_CREATE)
@@ -91,9 +76,7 @@ class TestStructLayouts(unittest.TestCase):
 
 class TestDeviceSpecValidation(unittest.TestCase):
     def test_ev_syn_is_never_enabled(self):
-        # UI_DEV_CREATE rejects EV_SYN, and the failure surfaces much later as "the device exists
-        # but nothing reads it". `ev_bits()` guarantees this by construction, so this test is the
-        # only thing standing between us and a future edit that adds it back.
+        # UI_DEV_CREATE rejects EV_SYN; `ev_bits()` must never include it.
         for spec in (u.gamepad_spec(), u.touchscreen_spec(), u.DeviceSpec("k", keys=(u.BTN_SOUTH,))):
             self.assertNotIn(u.EV_SYN, spec.ev_bits())
             self.assertTrue(set(spec.ev_bits()) <= {u.EV_KEY, u.EV_ABS})
@@ -122,8 +105,7 @@ class TestDeviceSpecValidation(unittest.TestCase):
         spec = u.gamepad_spec()
         for code in (u.BTN_SOUTH, u.BTN_EAST, u.BTN_THUMBL, u.BTN_THUMBR):
             self.assertIn(code, spec.keys)
-        # The right stick and the analog triggers: the two capabilities whose existence on the real
-        # Steam virtual pad is still unverified. A test pad missing them could never expose that.
+        # Right stick and analog triggers: their presence on the real Steam pad is unverified.
         for axis in (u.ABS_RX, u.ABS_RY, u.ABS_Z, u.ABS_RZ, u.ABS_HAT0X, u.ABS_HAT0Y):
             self.assertIn(axis, spec.abs_axes)
         self.assertEqual(spec.abs_axes[u.ABS_X], (-32768, 32767, 0, 0))
@@ -186,8 +168,7 @@ class TestRemotePrograms(unittest.TestCase):
         self.assertEqual(a, b)
 
     def test_remote_program_exits_3_on_a_missing_uinput(self):
-        # Exit 3 is ENV in the harness taxonomy (.internal/HARNESS.md). A missing udev rule is not a
-        # product defect and must never be reported as one.
+        # Exit 3 is ENV: a missing udev rule is not a product defect.
         src = u.remote_program(u.gamepad_spec())
         self.assertIn("sys.exit(3)", src)
         self.assertIn("/dev/uinput", src)
@@ -233,7 +214,7 @@ class TestFindDevice(unittest.TestCase):
 
 
 class TestPowerTelemetry(unittest.TestCase):
-    """The bug this class exists to keep dead: a gate that cannot fail."""
+    """Missing power telemetry raises; it never reads as 0 W."""
 
     def test_empty_reading_raises_instead_of_reading_zero(self):
         for bad in ("", "   ", "\n", None, "-", "n/a", "abc"):
@@ -241,8 +222,7 @@ class TestPowerTelemetry(unittest.TestCase):
                 probes.parse_power_now(bad)
 
     def test_zero_watts_is_a_valid_reading(self):
-        # On mains the Deck genuinely draws 0 from the battery. "0" is a number; "" is not. That
-        # distinction is the whole point of the parser.
+        # On mains the Deck genuinely draws 0 from the battery. "0" is a number; "" is not.
         self.assertEqual(probes.parse_power_now("0"), 0.0)
 
     def test_microwatts_to_watts(self):
@@ -262,7 +242,7 @@ class TestPowerTelemetry(unittest.TestCase):
             probes.parse_current_voltage("1200000", "0")
 
     def test_summarize_refuses_to_average_nothing(self):
-        # `mean 0.00 W over 0 samples -> PASS` is the exact bug. An empty sample list must raise.
+        # An empty sample list must raise, never average to 0 W.
         with self.assertRaises(probes.NoTelemetry):
             probes.summarize_power([], 9.0)
 
@@ -296,9 +276,7 @@ class TestHardwareDecodeVerdict(unittest.TestCase):
         self.assertFalse(probes.hardware_decode_verdict("VaapiVideoDecoder", None)[0])
 
     def test_a_missing_probe_and_a_false_flag_give_different_reasons(self):
-        # "the Media domain never reported kIsPlatformVideoDecoder" is a broken probe; "the decoder
-        # says it is not a platform decoder" is a product fact. Whoever reads the failure has to fix
-        # different things, so the two must not collapse into one message.
+        # A missing flag is a broken probe; a false flag is a product fact. Different fixes.
         _, missing = probes.hardware_decode_verdict("VaapiVideoDecoder", None)
         _, false_flag = probes.hardware_decode_verdict("VaapiVideoDecoder", False)
         self.assertNotEqual(missing, false_flag)
@@ -334,8 +312,7 @@ class TestCodecSupportParsing(unittest.TestCase):
         self.assertEqual(probes.parse_codec_support(""), (None, None))
 
     def test_absent_apis_are_unknown_not_false(self):
-        # A page with no MediaSource, or a <video> with no canPlayType, reports null. Reading that
-        # as "unsupported" would make the AV1 assertion pass on a page where nothing was measured.
+        # An absent API reports null; "unsupported" would pass the AV1 assertion unmeasured.
         self.assertEqual(probes.parse_codec_support('{"mse":null,"canPlay":null}'), (None, None))
         self.assertEqual(probes.parse_codec_support('{"mse":true,"canPlay":null}'), (True, None))
 
@@ -348,13 +325,7 @@ class TestCodecSupportParsing(unittest.TestCase):
 
 
 class TestSshHostname(unittest.TestCase):
-    """DECK_HOST is an ssh destination, not a hostname.
-
-    `reachable()` used to hand it straight to `socket.create_connection`, which cannot parse a
-    `user@` prefix. It therefore answered False for every Deck ever configured. The suite above it
-    had exactly three assertions, all `assertFalse` -- a function hardcoded to `return False` passed
-    all of them. A check that cannot fail is not a check (F1), including in the tests.
-    """
+    """DECK_HOST is an ssh destination (`user@host`), not a hostname."""
 
     def test_strips_the_user_prefix(self):
         self.assertEqual(sshlib.ssh_hostname("deck@192.168.1.10"), "192.168.1.10")
@@ -378,23 +349,13 @@ class TestSshHostname(unittest.TestCase):
 
 
 class TestDeckAddressDerivation(unittest.TestCase):
-    """`deck_host()`/`deck_port()` must find the Deck that `scripts/lib.sh` finds.
-
-    `.steamdeck_auth` (STEAMDECK_USER + STEAMDECK_IP) is the documented place for the Deck's address.
-    Python read only `$DECK_HOST` and a `DECK_HOST=` line in `.env`, so it saw no Deck at all unless
-    a shell recipe had already sourced lib.sh and exported one. That is invisible while every entry
-    point is a `scripts/*.sh`, and `just touch-probe` -- the first recipe to run a Python entry point
-    directly -- printed "no Deck reachable at <unset DECK_HOST>:22" against a Deck answering SSH on
-    the previous line. Third instance of one bug (harness.md F14, the lib.sh export), so the tests
-    pin the *agreement* between the two implementations, not just this one's behaviour.
-    """
+    """`deck_host()`/`deck_port()` must find the same Deck as `scripts/lib.sh`."""
 
     def setUp(self):
         self._tmp = tempfile.mkdtemp()
         self._cwd = os.getcwd()
         os.chdir(self._tmp)
-        # Point the derivation at the scratch repo: otherwise the developer's own .steamdeck_auth
-        # answers every one of these, and the suite passes on this machine and nowhere else.
+        # Point the derivation at the scratch repo, not the developer's own .steamdeck_auth.
         self._root = sshlib._REPO_ROOT
         sshlib._REPO_ROOT = self._tmp
         self._env = {k: os.environ.pop(k) for k in ("DECK_HOST", "DECK_PORT") if k in os.environ}
@@ -410,7 +371,6 @@ class TestDeckAddressDerivation(unittest.TestCase):
             f.write(text)
 
     def test_composes_the_host_from_steamdeck_auth(self):
-        # The regression: this returned None, and every caller reported an unreachable Deck.
         self._write(".steamdeck_auth", "STEAMDECK_USER=deck\nSTEAMDECK_IP=192.168.128.229\n")
         self.assertEqual(sshlib.deck_host(), "deck@192.168.128.229")
 
@@ -459,10 +419,9 @@ class TestDeckAddressDerivation(unittest.TestCase):
         self.assertEqual(sshlib.deck_port(), 2200)
 
     def test_agrees_with_lib_sh_on_the_same_fixture(self):
-        """The parity check. Either implementation may change; they may not disagree.
+        """Parity with lib.sh on the same fixture.
 
-        Same scratch-repo trick as tests/harness/test_deck_env.sh: lib.sh derives its repo root from
-        its own path, so the copy has to sit at <tmp>/scripts/lib.sh for <tmp> to be that root.
+        lib.sh derives its repo root from its own path, so the copy sits at <tmp>/scripts/lib.sh.
         """
         if not shutil.which("bash"):
             self.skipTest("no bash")
@@ -486,15 +445,11 @@ class TestSshHelpers(unittest.TestCase):
     def test_unreachable_host_is_false_not_an_exception(self):
         self.assertFalse(sshlib.reachable(None))
         self.assertFalse(sshlib.reachable("", 22))
-        # 0.0.0.0:9 (discard) refuses fast on every platform we run on.
+        # 127.0.0.1:9 (discard) refuses fast on every platform we run on.
         self.assertFalse(sshlib.reachable("127.0.0.1", 9, timeout=0.5))
 
     def test_a_listening_port_is_reachable_through_a_user_at_destination(self):
-        """The positive control the old suite lacked.
-
-        This is the assertion that fails against the pre-fix `reachable()`: a real listening socket,
-        addressed the way lib.sh actually builds DECK_HOST (`${STEAMDECK_USER}@${STEAMDECK_IP}`).
-        """
+        """Positive control: a listening socket, addressed as lib.sh builds DECK_HOST (user@ip)."""
         with socket.socket() as srv:
             srv.bind(("127.0.0.1", 0))
             srv.listen(1)
@@ -520,12 +475,7 @@ class TestSshHelpers(unittest.TestCase):
 
 
 class PlaybackAdvanced(unittest.TestCase):
-    """`just power` and `just soak` are meaningless without this (T5).
-
-    A 300-second battery average over a PAUSED video passes the 9 W budget effortlessly and describes
-    nothing. It is the same defect as averaging an empty battery field to 0.00 W, one layer up: a
-    measurement of the absence of the thing being measured.
-    """
+    """Playback must really advance, or a `just power`/`just soak` sample measures nothing."""
 
     def _st(self, t, **kw):
         base = {"video": True, "t": t, "paused": False, "ended": False, "ready": 4}
@@ -542,16 +492,13 @@ class PlaybackAdvanced(unittest.TestCase):
         self.assertIn("stalled", why)
 
     def test_a_paused_video_never_passes(self):
-        # THE bug this function exists to prevent. currentTime does not advance, and the naive read of
-        # that is "stalled" — but the operator simply never pressed play, and calling it a product
-        # defect sends the next person to debug the decoder.
+        # Paused is not "stalled": the operator never pressed play.
         ok, why = probes.playback_advanced(self._st(10.0), self._st(10.0, paused=True), 10.0)
         self.assertFalse(ok)
         self.assertIn("paused", why)
 
     def test_backwards_is_reported_as_a_restart_not_a_stall(self):
-        # Across a suspend/resume this is the "position correct" clause of the P6 gate failing. It is
-        # not a stall, and describing it as one costs an hour of looking for a hang.
+        # Across a suspend/resume this is the P6 "position correct" clause failing, not a stall.
         ok, why = probes.playback_advanced(self._st(90.0), self._st(0.5), 10.0)
         self.assertFalse(ok)
         self.assertIn("BACKWARDS", why)
@@ -570,16 +517,14 @@ class PlaybackAdvanced(unittest.TestCase):
         self.assertIn("ended", why)
 
     def test_a_slow_but_real_advance_passes_and_a_token_one_does_not(self):
-        # min_fraction exists because a resume, a rebuffer, or an ad break legitimately costs a beat.
-        # It must not become a licence to accept 0.1s of advance over 10s of wall clock.
+        # min_fraction lets a resume, rebuffer or ad break cost a beat, not accept 0.4s over 10s.
         ok, _ = probes.playback_advanced(self._st(0.0), self._st(6.0), 10.0, min_fraction=0.5)
         self.assertTrue(ok)
         ok, why = probes.playback_advanced(self._st(0.0), self._st(0.4), 10.0, min_fraction=0.5)
         self.assertFalse(ok, why)
 
     def test_parse_playback_state_rejects_an_empty_reply(self):
-        # An empty Runtime.evaluate result is "the probe broke", never "no video". json.loads("")
-        # would raise something opaque; NoTelemetry says which of the two happened.
+        # An empty Runtime.evaluate result means the probe broke, never "no video".
         with self.assertRaises(probes.NoTelemetry):
             probes.parse_playback_state("")
         self.assertEqual(probes.parse_playback_state('{"video":false}'), {"video": False})
@@ -600,8 +545,7 @@ class Epp(unittest.TestCase):
         self.assertEqual(epp, {0: "balance_performance", 7: "performance"})
 
     def test_no_nodes_raises_rather_than_reporting_an_empty_agreement(self):
-        # {} == {} would make epp_report say "unchanged across all 0 cores", which is a perfect score
-        # from zero data — F1 again.
+        # {} == {} would make epp_report say "unchanged across all 0 cores".
         with self.assertRaises(probes.NoTelemetry):
             probes.parse_epp("")
         with self.assertRaises(probes.NoTelemetry):
@@ -624,8 +568,7 @@ class Epp(unittest.TestCase):
         self.assertIn("unchanged", summary)
 
     def test_a_core_that_vanished_is_reported_not_intersected_away(self):
-        # Silently intersecting the two readings would hide a core that stopped reporting, and
-        # "fewer cores than before" is not something to learn about by not learning about it.
+        # Intersecting the two readings would hide a core that stopped reporting.
         before = probes.parse_epp(self._grep((0, "power"), (1, "power")))
         after = probes.parse_epp(self._grep((0, "power")))
         changed, _ = probes.epp_report(before, after)

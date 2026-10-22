@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""L0 coverage of the unattended on-Deck runner's judgement (`scripts/lib/deckci.py`).
+"""L0 coverage of the unattended on-Deck runner's decisions (`scripts/lib/deckci.py`).
 
-There is no Deck here, and there will not be one in CI. So the runner is split in two: a process
-driver that cannot be tested without hardware, and the decisions — what to retry, when to stop, what
-a mixed bag of exit codes means — which can be tested completely, and are the only part that can be
-wrong in a way nobody notices.
-
-The test that matters most is `test_a_run_that_adjudicated_nothing_is_not_a_pass`. Every other bug in
-this file makes CI red for the wrong reason. That one makes it green for no reason.
+What to retry, when to halt, what a mix of exit codes means. A run that adjudicated nothing never
+passes.
 """
 
 import os
@@ -47,8 +42,7 @@ class Classify(unittest.TestCase):
              deckci.EX_TRANSPORT, deckci.EX_USAGE), (0, 1, 2, 3, 4, 5))
 
     def test_they_agree_with_scripts_lib_sh(self):
-        """Two copies of the taxonomy exist; they must not drift. `deck-ci.py` aggregates exit codes
-        produced by shell scripts, so a mismatch would silently reclassify a regression."""
+        """The taxonomy must match scripts/lib.sh's, whose scripts produce the exit codes."""
         text = (_REPO / "scripts" / "lib.sh").read_text()
         m = re.search(r"readonly EX_OK=(\d) EX_FAIL=(\d) EX_ASSERT=(\d) EX_ENV=(\d) "
                       r"EX_TRANSPORT=(\d) EX_USAGE=(\d)", text)
@@ -56,7 +50,6 @@ class Classify(unittest.TestCase):
         self.assertEqual([int(g) for g in m.groups()], [0, 1, 2, 3, 4, 5])
 
     def test_an_unknown_exit_code_is_a_failure_not_a_pass(self):
-        # The one place guessing is dangerous in exactly one direction.
         self.assertEqual(deckci.classify(137), deckci.FAIL)   # SIGKILL via shell
         self.assertEqual(deckci.classify(-9), deckci.FAIL)
         self.assertNotEqual(deckci.classify(99), deckci.OK)
@@ -69,8 +62,7 @@ class Retry(unittest.TestCase):
             self.assertFalse(deckci.retryable(outcome), outcome)
 
     def test_a_failing_test_is_never_retried(self):
-        """TEST-PLAN §0: retry transport, never adjudication. Re-running a red test until it goes
-        green is how a suite stops meaning anything."""
+        """Retry transport, never adjudication."""
         self.assertFalse(deckci.should_retry(deckci.ASSERT, attempt=1, max_attempts=5))
 
     def test_env_is_not_retried_either(self):
@@ -89,12 +81,7 @@ class TheVerdict(unittest.TestCase):
         self.assertTrue(v.passed)
 
     def test_a_run_that_adjudicated_nothing_is_not_a_pass(self):
-        """THE test this module exists for.
-
-        Deploy worked. Launch worked. No gate ran. Every stage that ran, passed — and the run has no
-        opinion whatsoever about the product. `just power` once answered this question with
-        `mean 0.00 W ... PASS` (F1); `just test-deck` answers it with 23 skips and exit 0.
-        """
+        """Deploy and launch passed but no gate ran: the run says nothing about the product."""
         v = deckci.verdict([R(DEPLOY, 0), R(LAUNCH, 0)])
         self.assertEqual(v.exit_code, deckci.EX_ENV)
         self.assertIn("proves nothing", v.reason)
@@ -102,21 +89,16 @@ class TheVerdict(unittest.TestCase):
     def test_no_stages_at_all_is_not_a_pass(self):
         v = deckci.verdict([])
         self.assertEqual(v.exit_code, deckci.EX_ENV)
-        # Pin the REASON, not just the code. "nothing ran" and "nothing judged" both exit 3, so an
-        # assertion on the code alone cannot tell whether the empty-run branch exists at all — the
-        # mutation that deletes it survives, and the operator loses the one sentence that says which
-        # of the two happened.
+        # Pin the REASON: "nothing ran" and "nothing judged" both exit 3.
         self.assertIn("no stages ran", v.reason)
 
     def test_a_gate_that_skipped_the_whole_suite_is_env_not_ok(self):
-        # test-deck.sh --no-skip turns "no Deck" into an error; if it ever exits 3 anyway, the run
-        # must not be green.
+        # test-deck.sh --no-skip makes "no Deck" an error; if it exits 3 anyway, it is not green.
         v = deckci.verdict([R(DEPLOY, 0), R(LAUNCH, 0), R(GATE, deckci.EX_ENV)])
         self.assertEqual(v.exit_code, deckci.EX_ENV)
 
     def test_a_regression_outranks_a_later_transport_drop(self):
-        """If `gate` says the product is wrong and then SSH dies during `cert`, the answer is 2.
-        Answering 4 invites a retry, and the retry buries the defect."""
+        """A regression then an SSH drop is 2, not 4: a 4 invites a retry that buries the defect."""
         v = deckci.verdict([R(GATE, deckci.EX_ASSERT), R(CERT, deckci.EX_TRANSPORT)])
         self.assertEqual(v.exit_code, deckci.EX_ASSERT)
         self.assertIn("gate", v.reason)
@@ -130,8 +112,7 @@ class TheVerdict(unittest.TestCase):
         self.assertEqual(v.exit_code, deckci.EX_TRANSPORT)
 
     def test_a_probe_failure_is_reported_but_never_fails_the_build(self):
-        """conftest.py: 'probe: a failure is a FINDING to register, not a regression — but it is
-        still reported, never silently swallowed.'"""
+        """A probe failure is a finding, not a regression — but it is still reported."""
         v = deckci.verdict([R(GATE, 0), R(PROBE, deckci.EX_ASSERT)])
         self.assertEqual(v.exit_code, deckci.EX_OK)
         probe = [r for r in v.results if r.stage.name == "probe"][0]
@@ -195,31 +176,22 @@ class Plan(unittest.TestCase):
 
 
 class TheRunnerScript(unittest.TestCase):
-    """Two things about scripts/deck-ci.{sh,py} that no amount of pure-logic testing would catch."""
+    """Checks on scripts/deck-ci.{sh,py} that pure-logic tests cannot make."""
 
     def test_the_shim_exports_deck_host_so_teardown_is_not_a_no_op(self):
-        """lib.sh SETS DECK_HOST; it does not export it.
-
-        Without the export, `deck-ci.py`'s teardown reads DECK_HOST from an environment that does not
-        have it, returns immediately, and leaves the app running on the Deck — where the next
-        `just power` samples a video the previous run started. A cleanup step that silently no-ops is
-        worse than none, because you stop looking for the mess.
-        """
+        """Without the export, `deck-ci.py`'s teardown sees no DECK_HOST and leaves the app up."""
         text = (_REPO / "scripts" / "deck-ci.sh").read_text()
-        # re.M: the line is not at the start of the file. Without it this passed only because
-        # assertRegex searches, and it searched for something that could never match.
+        # re.M: the line is not at the start of the file.
         self.assertIsNotNone(re.search(r"^export DECK_HOST DECK_PORT\b", text, re.M),
                              "scripts/deck-ci.sh must export DECK_HOST (lib.sh only sets it)")
 
     def test_teardown_goes_through_deck_ssh(self):
-        """`ssh $DECK_HOST` would ignore DECK_PORT and the optional sshpass, and would silently
-        connect to the wrong port on any Deck that is not on 22."""
+        """`ssh $DECK_HOST` would ignore DECK_PORT and the optional sshpass."""
         text = (_REPO / "scripts" / "deck-ci.py").read_text()
         self.assertIn("deck_ssh", text)
 
     def test_a_mistyped_flag_is_usage_not_a_regression(self):
-        """argparse exits 2, and 2 is EX_ASSERT — the one code that fails a build. This runner is the
-        thing that decides whether to page someone at 3 a.m."""
+        """argparse exits 2, which is EX_ASSERT — the code that fails a build."""
         r = subprocess.run([sys.executable, "-B", str(_REPO / "scripts" / "deck-ci.py"), "--bogus"],
                            capture_output=True, text=True)
         self.assertEqual(r.returncode, deckci.EX_USAGE, r.stderr)

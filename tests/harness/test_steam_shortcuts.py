@@ -1,13 +1,7 @@
 #!/usr/bin/env python3
-"""L0 tests for scripts/steam_shortcuts.py `add` — the binary-VDF write path behind the one-line
-installer (findings/durable/one-line-install.md).
+"""L0 tests for scripts/steam_shortcuts.py `add` — the installer's binary-VDF write path.
 
-The load-bearing invariant: `add` writes an explicit `appid = grid_id(exe, appname)` so that `art`
-(and Steam) name the grid files with the SAME id — without that, artwork applied in the same run
-can't match the tile. So we assert the round-trip AND `art_id(entry) == grid_id(exe, appname)`, plus
-idempotency (re-running doesn't duplicate the tile) and fresh-file creation.
-
-No Deck, no Steam. Run: tests/harness/test_steam_shortcuts.py
+`add` must store `appid = grid_id(exe, appname)` so `art` and Steam name the grid files alike.
 """
 import argparse
 import importlib.util
@@ -54,8 +48,7 @@ class Add(unittest.TestCase):
             self.assertEqual(ss._entry_field(entry, "LaunchOptions"),
                              "run io.github.properrr.deckback")
             want_id = ss.grid_id("/usr/bin/flatpak", "Deckback")
-            # The stored appid AND art_id() both resolve to grid_id — that is what makes the tile's
-            # artwork land on the right files.
+            # The stored appid AND art_id() both resolve to grid_id.
             self.assertEqual(ss._entry_field(entry, "appid"), want_id & 0xFFFFFFFF)
             self.assertEqual(ss.art_id(entry, "/usr/bin/flatpak", "Deckback"), want_id)
 

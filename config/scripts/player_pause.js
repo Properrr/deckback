@@ -1,5 +1,5 @@
-// Suspend checkpoint (player.cpp on_suspend): pause and return the current position so we can log a
-// checkpoint; -1 when there is no video. Contains `pause()`, which the test double keys on. No params.
+// Suspend checkpoint: pause and return currentTime, or -1 when there is no video. No params.
+// Contains `pause()`, which the test double keys on.
 (function (p) {
   var v = document.querySelector('video');
   if (!v) return -1;

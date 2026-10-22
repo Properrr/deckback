@@ -1,11 +1,8 @@
-// Fixed-interval player seek (findings input-ux §18), the fallback for chapter_seek.js. Bound to
-// L2/R2 via the keymap actions skip_back/skip_fwd; p.delta is the signed jump in seconds. Uses the
-// player's own public seekBy() and falls back to the raw <video>, clamped at 0.
+// Fixed-interval seek, the fallback for chapter_seek.js. p.delta is the signed jump in seconds. Uses
+// the player's seekBy(), else the raw <video> clamped at 0. Returns false when nothing was seeked.
 (function (p) {
-  // Only seek while the watch view is the foreground route. Off it (e.g. back on the home screen)
-  // the last video's player still lives in the DOM but is backgrounded, and seeking it RESUMES that
-  // hidden playback — the previous video plays audibly out of view. Mirror player_state.js's own
-  // "player open" signal (location.hash contains '/watch') so the seek and the layer poll agree.
+  // Off the watch route the last video's player is still in the DOM, backgrounded; seeking it would
+  // resume playback out of view.
   if (location.hash.indexOf('/watch') < 0) return false;
   var d = p.delta;
   // On TVHTML5 the player is `.html5-video-player`, NOT the desktop-only `#movie_player`.

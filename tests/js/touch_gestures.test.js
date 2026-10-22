@@ -1,11 +1,5 @@
-// Node test for config/scripts/touch_gestures.js — the gesture recogniser, driven by synthetic
-// touch streams so every gesture, boundary and rejection is covered off-device.
-//
-// The recogniser is the one part of P12.4 that can be wrong in a way hardware will not reveal
-// quickly: a threshold that makes a tap read as a drag, or an edge swipe as a scroll, produces "the
-// touchscreen feels wrong" rather than a failure. Coordinates and timestamps are fed directly
-// through the `_feed` seam, so this needs no DOM and no Deck.
-//
+// Node test for config/scripts/touch_gestures.js: the gesture recogniser driven by synthetic touch
+// streams through the `_feed` seam (no DOM, no Deck).
 // Run: node tests/js/touch_gestures.test.js   (also wired into ctest when node is present).
 'use strict';
 const fs = require('fs');
@@ -98,24 +92,16 @@ function tap(g, x, y, atMs) {
 
 function dirs(q) { return q.filter(e => e.g === 'arrow').map(e => e.dir); }
 
-// THE DIRECTION CONVENTION, stated once because it is the easiest thing here to get backwards:
-// content follows the finger, exactly as on mobile. Dragging the finger UP pulls the content up,
-// which moves the selection DOWN the list — so a finger-up drag emits Down arrows. The arrow names
-// the list movement, never the finger movement.
+// Direction convention: content follows the finger, so a finger-up drag emits Down arrows. The
+// arrow names the list movement, never the finger movement.
 const OPPOSITE = {up: 'down', down: 'up', left: 'right', right: 'left'};
 
 // ---- tests ----
 
-// ---- the two hardware complaints, as regressions -------------------------------------------
-//
-// Tuned against a real panel on 2026-07-31. Both of these are about ONE number being asked to do
-// two jobs: the stepPx that stops a normal swipe double-stepping is the same stepPx that makes a
-// short swipe do nothing. The min-one-move rule splits the jobs, and these pin both halves.
+// ---- one move per swipe, and at least one ----------------------------------------------------
 
 function testOneSwipeIsExactlyOneMoveAtEveryDistance() {
-  // "still some times it scroll x2, some times x1. We need to take action as x1."
-  // Every distance a finger can travel on an 800px panel, fast and slow. There is no length of
-  // swipe, and no speed, that produces two moves.
+  // No swipe length or speed on an 800px panel produces two moves.
   for (const px of [22, 70, 120, 200, 340, 500, 720]) {
     for (const ms of [90, 220, 600, 1600]) {
       const {g} = load();
@@ -135,7 +121,7 @@ function testHorizontalSwipesAreAlsoExactlyOne() {
 }
 
 function testProportionalScrollingIsStillAvailable() {
-  // The mechanism is not deleted, only defaulted off: maxSteps > 1 restores it.
+  // maxSteps > 1 restores proportional scrolling.
   const {g} = load();
   g.configure({maxSteps: 5, stepPx: 100});
   drag(g, 640, 780, 640, 80, 1200, 12);   // 700 px
@@ -145,8 +131,7 @@ function testProportionalScrollingIsStillAvailable() {
 }
 
 function testAShortFlickStillMoves() {
-  // "on iphone it's more sensitive" — raising stepPx to fix the double-step made short swipes emit
-  // NOTHING, which reads as a dead panel. Any deliberate swipe past the slop is worth one move.
+  // Any swipe past the tap slop moves once, even if shorter than stepPx.
   for (const px of [22, 40, 70]) {
     const {g} = load();
     drag(g, 640, 500, 640, 500 - px, 120, 3);
@@ -167,8 +152,7 @@ function testMovementUnderTheSlopIsStillATap() {
 }
 
 function testTheFirstMoveLandsBeforeTheFingerLifts() {
-  // One move per gesture must not mean "wait for release": on a long drag the move fires as soon
-  // as the finger passes stepPx, so the panel answers immediately.
+  // On a long drag the move fires as soon as the finger passes stepPx, not on release.
   const {g} = load();
   g._feed(evt('touchstart', 640, 700, 1000));
   g._feed(evt('touchmove', 640, 560, 1120, 1));   // 140 px, still down
@@ -212,8 +196,7 @@ function testMomentumCannotExceedTheGestureBudget() {
 }
 
 function testMomentumIsOffByDefault() {
-  // A discrete-focus UI cannot glide: Leanback moves selection per key, so a momentum burst
-  // overshoots. The mechanism stays, the default does not.
+  // Momentum ships off: Leanback moves selection per key, so a burst overshoots.
   const {g} = load();
   check(g._config().flickMaxArrows === 0, 'momentum ships off');
   drag(g, 640, 750, 640, 150, 120, 4);   // 600 px in 120 ms = 5 px/ms, a hard flick
@@ -312,8 +295,7 @@ function testTapsTooFarApartInTimeOrSpaceDoNotPair() {
 }
 
 function testHoldDirectionComesFromTheZone() {
-  // Mobile: hold the right third to run forward, the left to rewind. Taken from where the finger
-  // went DOWN -- a hold does not move, but reading it at release would be a second source of truth.
+  // The hold's zone is taken from where the finger went down.
   for (const [x, zone] of [[200, 'left'], [640, 'center'], [1100, 'right']]) {
     const {win, g} = load();
     g._feed(evt('touchstart', x, 400, 1000));
@@ -341,7 +323,7 @@ function testTheRunResetsOnTheOtherSideAndOnTime() {
   let t = 1000;
   tap(g, 1100, 400, t); tap(g, 1100, 400, t + 100);
   g.drain();
-  // Other side: a new run, not a continuation -- otherwise a correction would jump 20s the wrong way.
+  // The other side starts a new run.
   t += 400;
   tap(g, 200, 400, t); tap(g, 200, 400, t + 100);
   eq(g.drain().q.filter(e => e.g === 'seek').map(e => e.n), [1], 'the other side starts a new run');

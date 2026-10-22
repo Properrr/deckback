@@ -1,19 +1,6 @@
-// The on-screen indicator for touch gestures: mobile YouTube's "10 seconds" ripple and its "2x"
-// pill, in one node. A one-shot — ScriptLibrary.render() appends {"text":...,"side":...,"ms":...};
-// `ms` of 0 pins it until something hides it (what a press-and-hold needs), and an empty `text`
-// hides it.
-//
-// Why a gesture needs one at all: touch has no key to look at and no button to feel. A seek that
-// lands with no indicator is indistinguishable from a mis-tap, and a hold that changes the rate is
-// invisible until the audio pitches. input-ux §4 makes this policy for the touch LOCK; the same
-// argument covers every touch action, which is why the toggle already toasts.
-//
-// The three page constraints, all learned the hard way (m114.md, self-update.md):
-//   * textContent, never innerHTML — youtube.com/tv enforces Trusted Types, and a bare innerHTML
-//     assignment is a SILENT no-op there;
-//   * CSSOM (.style.setProperty), never a style attribute — its CSP style-src has no
-//     'unsafe-inline', so an inline style is dropped and the node renders unstyled;
-//   * documentElement, not body — Leanback swaps body content on navigation.
+// Touch-gesture indicator (seek ripple / rate pill). One-shot params {"text","side","ms"}: side is
+// left|right|center; ms 0 pins it until hidden; empty text hides it. textContent and CSSOM only
+// (Trusted Types, CSP style-src), on documentElement because Leanback swaps body content.
 (function (p) {
   var id = '__deckback_gesture_hud';
   var d = document.getElementById(id);
@@ -26,7 +13,7 @@
   if (window.__deckbackHudT) { clearTimeout(window.__deckbackHudT); window.__deckbackHudT = null; }
 
   var text = p && p.text ? String(p.text) : '';
-  if (!text) {                       // hide
+  if (!text) {
     d.style.setProperty('opacity', '0');
     return true;
   }
@@ -35,11 +22,9 @@
   var s = d.style;
   s.setProperty('position', 'fixed');
   s.setProperty('top', '50%');
-  s.setProperty('z-index', '2147483646');   // just under the toast, which is a higher-priority say
+  s.setProperty('z-index', '2147483646');   // just under the toast
   s.setProperty('transform', 'translateY(-50%)');
-  // Mobile puts the indicator over the half you touched, which is most of what makes it readable at
-  // a glance: you already know which side you pressed, so the position confirms the direction
-  // before you have read the number.
+  // Sit over the side that was touched.
   var side = p && p.side ? p.side : 'center';
   s.setProperty('left', side === 'left' ? '12%' : (side === 'right' ? 'auto' : '50%'));
   s.setProperty('right', side === 'right' ? '12%' : 'auto');

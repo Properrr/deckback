@@ -1,17 +1,6 @@
-// Set the playback rate. Used by the touch gesture router's press-and-hold (mobile's
-// hold-anywhere-for-2x) and available to any future speed binding.
-//
-// What P12.0b measured on-Deck (2026-07-31, feature-landscape §8.1), and what it did not:
-//
-//   * `<video>.playbackRate = 1.25` HELD through 3 s of real playback — the element is the proven
-//     lever, so it is the one applied last and the one whose result is reported;
-//   * the player exposes `setPlaybackRate` and `getAvailablePlaybackRates() -> [0.25 .. 2]`, but
-//     `setPlaybackRate` was only shown to EXIST (a no-arg call throws). It is called first, so the
-//     player's own state follows the rate where that works, and the element assignment still wins
-//     if it does not.
-//
-// The rate is clamped to the ladder the player advertises where there is one: asking for a rate
-// outside it is how you get a silently ignored call or a stall.
+// Set the playback rate to p.rate, snapped to the player's advertised ladder (a rate outside it is
+// ignored or stalls). Calls the player's setPlaybackRate, then assigns <video>.playbackRate, which
+// wins. Returns the resulting rate, or false.
 (function (p) {
   var rate = Number(p && p.rate);
   if (!isFinite(rate) || rate <= 0) return false;

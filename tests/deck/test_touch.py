@@ -1,31 +1,15 @@
-"""`disable_touch`: is the touchscreen actually inert on the shipped app?
+"""Touch policy on the deployed app: page events swallowed, gamescope touch mode held.
 
-On the Deck under gamescope the panel arrives as synthetic MOUSE events — a finger moves the cursor
-and a tap clicks, navigating YouTube by accident. The app cannot take the panel away from the
-compositor: an `EVIOCGRAB` lock was tried, proven non-functional on SteamOS (the launcher cannot
-even open the panel node), and has since been deleted rather than shipped disabled — see
-`.internal/findings/durable/touch-lock.md`. The tests that re-proved that negative on every run are
-gone with it.
-
-What ships instead makes touch inert two independent ways, and this file asserts BOTH actually
-engage on the deployed app:
-
-    Option A  the launcher injects config/no_pointer.js at document start, swallowing every
-              pointer/mouse/touch event in the page before a Leanback listener sees it.
-    Option B  TouchModeGuard holds gamescope's global STEAM_TOUCH_CLICK_MODE at hover (0) while our
-              window is focused, so a stray finger cannot even generate a click at the compositor.
-
-The observable is Leanback's own state and gamescope's own property, never our bookkeeping
-(TEST-PLAN §0).
+Option A: no_pointer.js (or touch_gestures.js) swallows in-page pointer events. Option B:
+TouchModeGuard holds STEAM_TOUCH_CLICK_MODE while our window is focused.
 """
 
 from __future__ import annotations
 
 import pytest
 
-# Self-validating probe for Option A. A DETACHED node's own listener still fires (proving the event
-# machinery works, so a 0 below means 'swallowed', not 'dispatch is broken'); an IN-TREE dispatch must
-# be eaten by the launcher's window-capture swallow (no_pointer.js) before any page listener sees it.
+# Self-validating probe for Option A -> {control, seen}. control: a DETACHED node's listener fires
+# (1 = dispatch works). seen: IN-TREE events that reached page capture listeners (0 = swallowed).
 _DISABLE_TOUCH_PROBE = r"""(function(){
   var d = document.createElement('div'); var control = 0;
   d.addEventListener('click', function(){ control++; });
@@ -41,10 +25,7 @@ _DISABLE_TOUCH_PROBE = r"""(function(){
 })()"""
 
 
-# Which touch policy the app is actually running. There are two, they are mutually exclusive, and
-# they want OPPOSITE gamescope modes — so a test that hardcodes either one reports a failure on a
-# healthy Deck running the other. The page answers this itself: the gesture router installs a global,
-# the lock does not.
+# The running touch policy: 'gestures' if the router's global exists, else 'lock'.
 _TOUCH_POLICY_PROBE = """(function(){
   return window.__deckbackGestures ? 'gestures' : 'lock';
 })()"""
@@ -56,19 +37,7 @@ def touch_policy(cdp_session):
 
 @pytest.mark.gate
 def test_touch_cannot_navigate_leanback_under_either_policy(leanback):
-    """A finger must never navigate Leanback by accident, whichever touch policy is configured.
-
-    BOTH policies swallow in-tree pointer events, for different reasons, and this gate is about the
-    user-visible invariant rather than the mechanism:
-
-      disable_touch   no_pointer.js swallows every pointer/mouse/touch event at document-start;
-      touch_gestures  touch_gestures.js recognises the gesture and then swallows the event, so
-                      Leanback cannot ALSO act on it (a double actuation).
-
-    Self-validating via the detached-node control, so `seen == 0` means swallowed, not that event
-    dispatch is broken. The policy is reported in the failure message because "events reached the
-    page" has a different cause under each, and naming the wrong one sends the reader to the wrong
-    file — the whole reason this test used to say `disable_touch` unconditionally."""
+    """In-tree pointer events never reach the page under either touch policy."""
     import json
 
     policy = touch_policy(leanback)
@@ -94,21 +63,9 @@ def test_touch_cannot_navigate_leanback_under_either_policy(leanback):
 
 @pytest.mark.probe
 def test_gamescope_touch_mode_matches_the_configured_policy(deck_host, leanback):
-    """TouchModeGuard holds gamescope's STEAM_TOUCH_CLICK_MODE at the mode the CONFIGURED POLICY
-    needs, while OUR window is focused. Skips — never fails — when our app is not the focused
-    window, because the guard deliberately leaves the mode alone then.
-
-    The two policies want opposite modes, and this test asserted 0 unconditionally until
-    2026-07-31 — so the day the gesture router shipped, `just test-deck` began reporting a product
-    failure against a perfectly healthy Deck:
-
-      disable_touch   0 (hover)        a finger moves the cursor and generates no click;
-      touch_gestures  4 (passthrough)  real wl_touch reaches Blink, no pointer emulation at all,
-                                       which is the only mode the router can read.
-
-    gamescope runs several Xwayland servers (--xwayland-count 2): Steam on :0, a Steam-launched game
-    on :1. Our app — and the touch mode the guard manages — live on whichever display our
-    content_shell is FOCUSED on, which is why a naive :0 check always sees 'steam' and skips."""
+    """STEAM_TOUCH_CLICK_MODE is 0 (hover) under the lock or 4 (passthrough) under gestures while
+    our window is focused; skips when it is not focused on any Xwayland display (:0-:2).
+    """
     from lib import ssh as sshlib
 
     sh = sshlib.Ssh(deck_host, sshlib.deck_port())

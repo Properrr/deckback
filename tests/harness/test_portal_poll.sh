@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-# L0 tests for scripts/lib/portal_poll.sh — the pure decisions behind `just portal-poll`
-# (scripts/portal-poll.sh): what --poll-timeout value is acceptable, the exact drop-in text systemd
-# will accept, and reading the effective poll back out of a `systemctl show` line.
-#
-# The load-bearing ones: valid_poll_seconds() is the gate that stops a bad value producing a drop-in
-# systemd silently refuses; portal_dropin_content() must emit the empty `ExecStart=` reset (without
-# it systemd APPENDS a second ExecStart, which a Type=dbus unit rejects) and must never compound
-# --poll-timeout onto a base that already has one.
-#
-# Needs no Deck, no systemd, no container. Run: tests/harness/test_portal_poll.sh
+# L0 tests for scripts/lib/portal_poll.sh — the pure decisions behind `just portal-poll`.
+# The drop-in must reset `ExecStart=` first (else systemd appends a second one, which a Type=dbus
+# unit rejects) and must never compound --poll-timeout onto a base that already has one.
 set -uo pipefail
 cd "$(dirname "$0")/../.." || exit 1
 
