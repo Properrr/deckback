@@ -208,12 +208,14 @@ deck_or_skip() {
 # neither write the bind mounts nor pass git's ownership check on them ("dubious ownership"): run as
 # root instead (it IS the host user), and make archive extraction ignore the foreign uids that user
 # namespace cannot map — GNU tar via TAR_OPTIONS, Python's tarfile via
-# docker/rootless/sitecustomize.py.
+# docker/rootless/sitecustomize.py. FLATPAK_BWRAP routes flatpak's icon validator around a nested
+# network namespace rootless Docker cannot set up (docker/rootless/bwrap).
 compose_rootless_args() {
   COMPOSE_ROOTLESS=()
   if [ "$CONTAINER_ENGINE" = docker ] \
       && docker info -f '{{.SecurityOptions}}' 2>/dev/null | grep -q rootless; then
-    COMPOSE_ROOTLESS=(--user 0:0 -e TAR_OPTIONS=--no-same-owner -e PYTHONPATH=/work/docker/rootless)
+    COMPOSE_ROOTLESS=(--user 0:0 -e TAR_OPTIONS=--no-same-owner -e PYTHONPATH=/work/docker/rootless
+      -e FLATPAK_BWRAP=/work/docker/rootless/bwrap)
   fi
 }
 

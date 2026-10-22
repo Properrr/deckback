@@ -1,0 +1,15 @@
+#!/bin/sh
+# Used via FLATPAK_BWRAP only under rootless Docker (scripts/lib.sh: compose_rootless_args).
+# flatpak's icon validator runs itself under `bwrap --unshare-net`, and bwrap cannot bring up
+# loopback in a namespace nested under rootlesskit's ("loopback: Failed RTM_NEWADDR"), so
+# build-export rejects every icon as invalid. The validator only parses one image file, so give
+# it the container's network namespace; every other bwrap call is passed through untouched.
+case " $* " in
+*/flatpak-validate-icon\ *)
+  for a in "$@"; do
+    shift
+    [ "$a" = --unshare-net ] || set -- "$@" "$a"
+  done
+  ;;
+esac
+exec /usr/bin/bwrap "$@"
