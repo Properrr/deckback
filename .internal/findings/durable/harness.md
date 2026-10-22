@@ -178,8 +178,8 @@ Three fixes, and the general shape is worth keeping: **a formatter's blast radiu
 
 - Unknown arguments now exit 5 (usage). Rejecting what you do not implement beats doing the opposite.
 - Every step formats only files `git` reports as modified or untracked.
-- `shfmt` gets `-i 2` (the repo indents shell with two spaces; shfmt defaults to tabs) and the host
-  `clang-format` is v20 against CI's v18 — never wholesale-format a file you did not touch.
+- `shfmt` gets `-i 2` (the repo indents shell with two spaces; shfmt defaults to tabs); clang-format
+  is the pinned one CI uses (`scripts/lib.sh`).
 
 ### `in_container bash -lc` + `set -e` + `exit` destroys the exit code
 

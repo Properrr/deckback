@@ -1,37 +1,20 @@
 #!/usr/bin/env bash
-# Rewrite sources in place: clang-format over launcher/, shfmt over scripts/, and the tree's own
-# clang-format + `gn format` inside the container.
-#
-# THIS SCRIPT TAKES NO ARGUMENTS AND HAS NO CHECK MODE. It used to accept and silently ignore them,
-# so `scripts/fmt.sh check` — which reads as "tell me what is unformatted" — instead reformatted the
-# whole world, including 148 .gn/.gni files in the Cobalt checkout, leaving a dirty tree that
-# `just sync` then refuses. Reject what we do not implement rather than doing the opposite of it.
-#
-# Every step is scoped to files `git` reports as modified or untracked. It used to format everything
-# it could reach — all of launcher/, all of scripts/, every .gn/.gni in cobalt/src — which meant one
-# run rewrote ~160 files nobody had opened and left the Cobalt tree dirty enough that `just sync`
-# refuses to run. A formatter whose blast radius is the whole tree is a formatter nobody dares run.
-#
-# clang-format is PINNED to 18 (via lib.sh's pinned_tool), the same version preflight/CI check, so
-# `just fmt` can never write a style the gate then rejects. A host v20/v21 disagrees with v18 and
-# would put you in an endless fmt→preflight loop.
+# Format, in place, only the files git reports as modified or untracked: launcher C++ with the
+# pinned clang-format (lib.sh), and patch-touched tree files with the tree's own clang-format and
+# `gn format` inside the container. No arguments, no check mode (`just preflight` checks).
 . "$(dirname "$0")/lib.sh"
 
 if [ "$#" -gt 0 ]; then
   die_usage "fmt.sh takes no arguments (got: $*). It formats in place; there is no check mode."
 fi
 
-# Launcher: LLVM-style clang-format (out-of-tree code), pinned to 18 to match preflight/CI exactly.
-#
-# Only files you TOUCHED. Formatting the whole of launcher/ would rewrite ten files you never opened
-# and hide your actual change inside the churn.
-cf="$(pinned_tool clang-format-18 clang-format clang-format==18.1.8)"
+cf="$(clang_format_bin)"
 changed=$(
   git diff --name-only -- 'launcher/*.cpp' 'launcher/*.hpp'
   git ls-files --others --exclude-standard -- 'launcher/*.cpp' 'launcher/*.hpp'
 )
 if [ -n "$changed" ]; then
-  info "clang-format-18 on modified launcher/ files ..."
+  info "clang-format $CLANG_FORMAT_VERSION on modified launcher/ files ..."
   printf "%s\n" "$changed" | xargs -r "$cf" -i --style=file
 else
   info "no modified launcher/*.{cpp,hpp} — nothing for clang-format to do."

@@ -38,14 +38,14 @@ Docker.
 | target | mirrors CI job | checks |
 |---|---|---|
 | `shell` | `shell` | `shellcheck` (scripts + harness) + `tests/harness/run.sh` |
-| `launcher` | `launcher` | clang-format-18 `--Werror` + gcc `Release` build & `ctest` + clang build |
+| `launcher` | `launcher` | clang-format `--Werror` + gcc `Release` build & `ctest` + clang build |
 | `gn` | `gn-format` | `args/*.gn` are overrides only |
 | `all` | (all three) | everything above |
 
 Exit `2` = a check failed (the tree is wrong); `3` = a required tool/lib is missing. **Run
 `just hooks` once per clone** so the pre-push hook enforces it. **Local tool requirements:**
-`clang-format-18` and `shellcheck` are auto-bootstrapped into a cached venv when absent (pinned:
-clang-format **18** — v20 differs and CI stays red); the launcher build needs `cmake ninja g++
+clang-format (pinned **23.1.3**, `CLANG_FORMAT_VERSION` in `scripts/lib.sh`) always comes from a
+cached PyPI venv, locally and in CI; `shellcheck` is bootstrapped there when absent; the launcher build needs `cmake ninja g++
 clang++` and `libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev`; the harness suite needs
 Python 3 + Pillow (`python3-pil`). And **`just release` refuses to build unless the tagged commit is
 green in CI** (`FORCE=1` overrides).

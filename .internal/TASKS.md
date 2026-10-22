@@ -950,7 +950,8 @@ before the grab test passes: it is built entirely on the assumption that grabbin
       `2808:1015` (FTS3528) comes from a **blog post about an LCD Deck**, not from our unit — dropping
       LCD concentrates this risk rather than removing it (`findings/durable/hardware.md`).
 - [ ] Small beta group before Flathub; fix window.
-- [ ] **Migrate the pinned clang-format 18 → 21 (tree-wide).** Our own pin, not forced by GitHub
+- [x] **Migrate the pinned clang-format 18 → 21 (tree-wide).** → done as **23.1.3** from PyPI, the same
+      wheel locally and in CI (no apt package); launcher reformatted in its own commit. Our own pin, not forced by GitHub
       (CI `apt-get install clang-format-18` explicitly; `preflight-parity.md`). Bump it *everywhere*
       in one change so local and CI can't drift: `.github/workflows/lint.yml` (apt pkg),
       `scripts/preflight.sh`, `scripts/fmt.sh`, `scripts/lib.sh` (`pinned_tool` refs + the pip

@@ -86,13 +86,12 @@ with no battery telemetry, because a check that cannot fail is not a check.
 
 **Never push without `just preflight` green; never release from a commit that is not green in CI.**
 `scripts/preflight.sh` (`just preflight`) is the ONE definition of the pre-push / pre-release gate —
-shellcheck + the harness suite + clang-format-18 + the launcher gcc/clang builds + gn-args. Both
+shellcheck + the harness suite + clang-format + the launcher gcc/clang builds + gn-args. Both
 `.githooks/pre-push` and CI (`.github/workflows/lint.yml`) call it, so local and CI cannot drift;
 `just release` refuses to build unless the tagged commit's CI is green (`FORCE=1` overrides). Run
-`just hooks` once per clone — it is mandatory, not optional. This exists because three consecutive
-red pushes (a stale test, unformatted C++, a clang-only `-Werror`) each slipped through a hook that
-mirrored only *part* of CI. Pinned clang-format **18** matters (v20 formats differently); the
-launcher build needs `libxcb1-dev`/`libpulse-dev` to match CI. See
+`just hooks` once per clone — it is mandatory, not optional. clang-format is pinned to **23.1.3**
+(PyPI, `CLANG_FORMAT_VERSION` in `scripts/lib.sh`, used by preflight, `just fmt` and CI alike;
+releases format differently); the launcher build needs `libxcb1-dev`/`libpulse-dev` to match CI. See
 `.internal/findings/durable/preflight-parity.md`.
 
 **Before claiming anything works, check `.internal/TEST-PLAN.md` §2.** Unit tests here prove pure

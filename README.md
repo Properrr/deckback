@@ -244,7 +244,7 @@ LCD are some of the most valuable things you can send.
 - **Build & test** — see [Quick start](#quick-start) above. The launcher builds standalone with no
   Chromium checkout, so most launcher and config work needs only `just launcher`.
 - **Run `just hooks` once after cloning.** It enables a pre-push hook that runs `just preflight` —
-  the exact checks CI runs (shellcheck, the harness suite, clang-format-18, and the launcher
+  the exact checks CI runs (shellcheck, the harness suite, clang-format, and the launcher
   gcc/clang builds) — so your push won't land red. `just preflight` needs no Chromium checkout and
   runs anywhere; it bootstraps the pinned lint tools itself.
 - **Report a bug or request a feature** — open an issue with your SteamOS version, Deck model

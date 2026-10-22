@@ -33,7 +33,7 @@ hooks:
     @echo "git hooks enabled — .githooks/pre-push runs 'just preflight' before every push."
 
 # The pre-push / pre-release gate: the SAME checks CI runs (.github/workflows/lint.yml), one script.
-# shellcheck + harness suite + clang-format-18 + launcher gcc/clang builds + gn-args sanity. Needs no
+# shellcheck + harness suite + clang-format + launcher gcc/clang builds + gn-args sanity. Needs no
 # Chromium tree, no Deck, no Docker — run it anywhere before you push. target: shell|launcher|gn|all.
 preflight target="all":
     ./scripts/preflight.sh "{{target}}"

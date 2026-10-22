@@ -25,16 +25,16 @@ override for an offline/emergency build).
 | target | checks |
 |---|---|
 | `shell` | `shellcheck -S warning scripts/*.sh tests/harness/*.sh` + `tests/harness/run.sh` |
-| `launcher` | clang-format-18 `--dry-run --Werror` + gcc `Release` build & `ctest` + clang build (`-Wall -Wextra -Werror`) |
+| `launcher` | clang-format `--dry-run --Werror` + gcc `Release` build & `ctest` + clang build (`-Wall -Wextra -Werror`) |
 | `gn` | `args/*.gn` contain overrides only (no `target_os`/`target_cpu`/`is_debug`/`is_official_build`) |
 
 No Chromium checkout, no Deck, no Docker — it runs on any contributor's machine.
 
 ## Local tool requirements (for CI-equivalent results)
 
-- **Pinned lint tools** are auto-bootstrapped: if the system has no `clang-format-18` or `shellcheck`,
-  preflight drops the exact versions (`clang-format==18.1.8`, `shellcheck-py`) into a cached venv.
-  clang-format **18** is load-bearing — v20 reformats differently and CI (v18) stays red.
+- **Pinned lint tools**: clang-format always comes from a cached venv at exactly
+  `CLANG_FORMAT_VERSION` (`scripts/lib.sh`, 23.1.3), in CI too, because releases format
+  differently; `shellcheck` is bootstrapped there (`shellcheck-py`) when the system has none.
 - **Launcher toolchain** (must be installed; preflight errors with `EX_ENV` if absent):
   `cmake`, `ninja`, `g++`, `clang++`, and the dev libs `libsystemd-dev libcurl4-openssl-dev
   libpulse-dev libxcb1-dev` — install these so the local build matches CI's fully-featured one.

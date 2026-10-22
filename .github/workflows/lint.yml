@@ -1,9 +1,5 @@
-# Free-runner-safe checks only. Chromium-scale builds run on the self-hosted runner (doc §14.3).
-#
-# Every job here just installs its deps and calls scripts/preflight.sh <target>. That script is the
-# SAME one .githooks/pre-push runs locally, so CI and a contributor's push execute identical checks —
-# they cannot drift. (They did drift once: the old pre-push mirrored only clang-format + shellcheck,
-# so a stale test and a clang-only -Werror sailed past it into a red CI. See the preflight finding.)
+# Free-runner checks. Each job installs its deps and runs scripts/preflight.sh <target>, the same
+# script .githooks/pre-push runs locally.
 name: lint
 on:
   push:
@@ -14,48 +10,30 @@ jobs:
   shell:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          # check-permissions.sh compares the manifest against every release tag, so the tags and
-          # their trees must be present. The default shallow, tagless checkout would leave it with
-          # nothing to compare and it refuses to pass vacuously. The repo is ~14 MB of history.
+          # check-permissions.sh compares the manifest against every release tag.
           fetch-depth: 0
       - name: install deps
-        # test_video_corruption.py exercises the green-band pixel verdict and needs Pillow; without it
-        # the test ERRORs on import instead of running.
         run: sudo apt-get update && sudo apt-get install -y shellcheck python3-pil
-      # shellcheck (scripts + harness) + the L0 harness suite (power-gate adjudication, exit-code
-      # taxonomy, cdp_lib, video-corruption). preflight prefers the system shellcheck installed above.
       - name: preflight (shell)
         run: ./scripts/preflight.sh shell
 
   launcher:
-    # The launcher builds anywhere — no Chromium checkout needed (doc §14.3).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: install toolchain
-        # Pin clang-format to a major version: an unpinned `clang-format` tracks the runner image's
-        # default, so a future ubuntu-latest bump would silently reformat the tree and turn this job
-        # red on unchanged code. The tree is formatted with clang-format 18 (preflight prefers this
-        # system clang-format-18 over its pinned-pip fallback).
-        # The launcher's system deps are optional (pkg_check_modules, not REQUIRED), but install them
-        # so CI builds the real, fully-featured configuration — otherwise DECKBACK_HAVE_CURL=0 and the
-        # CDM download path (plus its tests) never compile.
-        # dbus-daemon: platform_test stands up a private bus to drive the logind backend's reconnect
-        # for real; without it that test SKIPs.
-        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang-format-18 clang
+        # clang-format is not installed here: preflight bootstraps the pinned version (lib.sh) into a
+        # venv. The optional dev libs make CI build every feature; dbus-daemon runs platform_test.
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build clang python3-venv
           libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev dbus-daemon
-      # clang-format-18 check + gcc build & ctest + clang build (-Wall -Wextra -Werror).
       - name: preflight (launcher)
         run: ./scripts/preflight.sh launcher
 
   gn-format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      # args/*.gn are EXTRAS layered on Cobalt's chromium_linux-x64x11 config (gen.sh), not standalone
-      # arg sets. Codec overrides (proprietary_codecs/ffmpeg_branding) legitimately live in
-      # args/common.gn. preflight guards only against re-introducing platform/build_type base args.
+      - uses: actions/checkout@v5
       - name: preflight (gn)
         run: ./scripts/preflight.sh gn

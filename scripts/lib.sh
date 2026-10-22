@@ -74,16 +74,15 @@ die_transport() { fail "$EX_TRANSPORT" "$@"; } # the wire is wrong
 die_usage() { fail "$EX_USAGE" "$@"; }
 info() { echo ">> $*" >&2; }
 
-# ---- pinned-tool bootstrap (shared by preflight.sh and fmt.sh so the two cannot drift) -----------
-# CI pins clang-format 18; a different local version reformats differently, so `just fmt` writing v20
-# style while preflight checks v18 is an endless fmt→preflight loop (exactly the drift preflight-parity
-# exists to kill). Prefer a system-installed pinned tool (what CI's apt provides); otherwise drop the
-# exact version into a cached venv so a fresh clone still gets parity with one command.
-DECKBACK_PREFLIGHT_VENV="${DECKBACK_PREFLIGHT_VENV:-${TMPDIR:-/tmp}/deckback-preflight-venv}"
+# ---- pinned lint tools (preflight.sh, fmt.sh and CI all resolve them here) -----------------------
+# clang-format comes from PyPI at exactly this version, locally and in CI; formatting differs between
+# releases. The venv is keyed by the version, so a bump bootstraps a fresh one.
+CLANG_FORMAT_VERSION=23.1.3
+DECKBACK_PREFLIGHT_VENV="${DECKBACK_PREFLIGHT_VENV:-${TMPDIR:-/tmp}/deckback-lint-cf${CLANG_FORMAT_VERSION}}"
 _pinned_bootstrapped=0
-pinned_tool() { # pinned_tool <preferred-system-name> <venv-binary> <pip-spec...>
-  local sys
-  sys="$(command -v "$1" 2>/dev/null || true)"
+pinned_tool() { # pinned_tool <system-name, or "" for venv only> <venv-binary> <pip-spec...>
+  local sys=""
+  [ -n "$1" ] && sys="$(command -v "$1" 2>/dev/null || true)"
   if [ -n "$sys" ]; then
     echo "$sys"
     return
@@ -97,6 +96,7 @@ pinned_tool() { # pinned_tool <preferred-system-name> <venv-binary> <pip-spec...
   fi
   echo "$DECKBACK_PREFLIGHT_VENV/bin/$2"
 }
+clang_format_bin() { pinned_tool "" clang-format "clang-format==$CLANG_FORMAT_VERSION"; }
 
 # Does this `flatpak info --show-permissions` output grant evdev access?
 #
