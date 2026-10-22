@@ -6,16 +6,8 @@
 
 namespace deckback {
 
-// The launcher's one outbound HTTP client. Two callers exist — the CDM fetcher (a large binary, on
-// the startup path) and the update prompt's changelog fetch (a small JSON body, on a worker thread)
-// — and they used to carry a libcurl wrapper each: two `__has_include(<curl/curl.h>)` guards, two
-// write callbacks, two `curl_easy_setopt` lists that had already drifted apart on timeout and
-// User-Agent. Transport policy (redirects, TLS, timeouts, what counts as failure) belongs in one
-// place.
-//
-// NOTE: this is deliberately NOT the CDP transport. devtools.cpp speaks raw sockets + its own
-// RFC 6455 WebSocket to loopback, because libcurl's WS support is experimental and the launcher
-// must work without libcurl at all.
+// The launcher's one outbound HTTP client (libcurl, optional at build time). Not used for CDP,
+// which devtools.cpp speaks over raw sockets.
 
 struct HttpRequest {
   std::string url;
@@ -30,14 +22,12 @@ struct HttpRequest {
 // empty body, or when this build has no libcurl. Blocking; the caller owns which thread it runs on.
 std::optional<std::string> http_get(const HttpRequest& req);
 
-// Convenience for the common case.
 inline std::optional<std::string> http_get(std::string_view url, long timeout_seconds,
                                            std::string_view user_agent) {
   return http_get(HttpRequest{std::string(url), timeout_seconds, std::string(user_agent), {}});
 }
 
-// Whether this build can make HTTP requests at all (libcurl present at compile time). False makes
-// every http_get() return nullopt — the CDM fetch and the changelog both degrade to a log line.
+// Whether this build has libcurl. When false, every http_get() returns nullopt.
 bool http_available();
 
 }  // namespace deckback

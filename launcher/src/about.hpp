@@ -6,10 +6,8 @@
 
 namespace deckback {
 
-// The "About" tab's content, extracted from the AppStream metainfo — the single source of truth the
-// Flathub listing already maintains, so the in-app tab can never drift from the store page. All
-// fields are best-effort: a missing file or tag yields empty strings, and the tab degrades to
-// whatever it has (at minimum the compiled-in version).
+// The "About" tab's content, extracted from the AppStream metainfo. Best-effort: a missing file or
+// tag yields empty strings.
 struct AboutInfo {
   std::string name;
   std::string summary;
@@ -20,8 +18,8 @@ struct AboutInfo {
   std::vector<std::string> features;  // the <li> bullets
 };
 
-// Pure: extract AboutInfo from an AppStream metainfo XML string. Tolerant string-scan, not a real
-// XML parser — the file is ours and lint-validated, and the fields are simple, flat tags.
+// Pure: extract AboutInfo from an AppStream metainfo XML string. A tolerant string scan, not an XML
+// parser: only valid for our own lint-validated file with flat tags.
 AboutInfo parse_metainfo(std::string_view xml);
 
 // Read the installed metainfo. Tries $DECKBACK_METAINFO, then the flatpak install path, then the

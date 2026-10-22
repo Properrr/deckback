@@ -10,8 +10,7 @@ namespace deckback {
 namespace json {
 namespace {
 
-// Depth cap: JSON nesting is recursive, and a hostile/corrupt file of 100k open braces would
-// otherwise smash the stack before any validation ran. app.json nests two levels.
+// Depth cap: the parser is recursive, so deep nesting in a corrupt file would overflow the stack.
 constexpr int kMaxDepth = 64;
 
 class Parser {
@@ -117,7 +116,7 @@ class Parser {
       skip_ws();
       Value v;
       if (!parse_value(v, depth + 1)) return false;
-      // Last duplicate wins, as every mainstream parser does.
+      // Last duplicate wins.
       bool replaced = false;
       for (Member& m : members)
         if (m.first == key) {
@@ -278,9 +277,7 @@ class Parser {
     const size_t start = p_;
     if (peek() == '-') ++p_;
     if (eof() || !(peek() >= '0' && peek() <= '9')) return err("invalid number");
-    // JSON forbids leading zeros: `0` and `0.5` are numbers, `01` is not. Accepting it would let a
-    // zero-padded value parse as something other than it looks (and `0755` is a plausible typo in a
-    // config file).
+    // JSON forbids leading zeros: `0` and `0.5` are numbers, `01` is not.
     if (s_[p_] == '0') {
       ++p_;
       if (p_ < s_.size() && s_[p_] >= '0' && s_[p_] <= '9') return err("leading zero in a number");

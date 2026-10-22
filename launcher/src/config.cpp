@@ -11,16 +11,8 @@
 namespace deckback {
 namespace {
 
-// ---- the schema ---------------------------------------------------------------------------------
-//
-// One table, one row per setting: the JSON path it lives at, and the Config member it fills. This
-// is the whole binding layer; adding a setting is one row. It also doubles as the list of keys the
-// launcher understands, which is what makes unknown-key reporting possible.
-//
-// Paths are REAL. app.json nests (`power.devtools_poll_ms`, `log.log_max_bytes`), and the old
-// extractor reached into those sections only by accident: it searched the raw bytes for the leaf
-// name anywhere in the file, so the nesting was decorative and two sections could never share a
-// key name. Binding the documented path makes the file's structure mean what it looks like.
+// The schema: one row per setting, binding an exact dotted JSON path to the Config member it fills.
+// The tables are also the list of known keys used for unknown-key reporting.
 
 template <typename T>
 struct Field {
@@ -28,10 +20,7 @@ struct Field {
   T Config::* member;
 };
 
-// Ranges are enforced, not assumed. There was no validation at all before, so `devtools_poll_ms: 0`
-// meant a busy-loop poll and `log_max_files: 0` silently kept no history. Out-of-range values are
-// clamped with a warning rather than rejected: a bad number in a hot-swapped config should degrade
-// to something sane and say so, not take the app down.
+// Inclusive bounds. Out-of-range values are clamped with a warning rather than rejected.
 struct Range {
   long min;
   long max;
@@ -83,12 +72,10 @@ constexpr IntField kIntFields[] = {
     {"right_stick_slow_ms", &Config::right_stick_slow_ms, {10, 5'000}},
     {"right_stick_fast_ms", &Config::right_stick_fast_ms, {10, 5'000}},
     {"skip_seconds", &Config::skip_seconds, {1, 600}},
-    // Touch gestures. The poll IS the input latency budget, so the floor is low; 0 would busy-loop
-    // the poll thread against the engine, and anything above ~250 ms feels broken to a finger.
+    // The poll is the touch input latency; 0 would busy-loop the poll thread against the engine.
     {"touch_poll_ms", &Config::touch_poll_ms, {10, 1'000}},
-    // Below ~20 px a drag would fire arrows faster than Leanback can move focus; above the panel
-    // width it could never fire one. touch_max_steps caps moves per GESTURE (1 = one swipe, one
-    // move); 50 is far past useful and exists only to bound a typo.
+    // Below ~20 px a drag fires arrows faster than Leanback can move focus; above the panel width
+    // it never fires.
     {"touch_step_px", &Config::touch_step_px, {20, 1'280}},
     {"touch_max_steps", &Config::touch_max_steps, {1, 50}},
     {"touch_edge_px", &Config::touch_edge_px, {4, 400}},
@@ -120,8 +107,8 @@ struct RealField {
   double min, max;
 };
 
-// The player advertises [0.25 .. 2] (P12.0b) and hold_scrub.js snaps to the nearest advertised
-// value, so the bounds here only have to keep a typo from producing a stalled or inaudible video.
+// hold_scrub.js snaps to the nearest rate the player advertises; these bounds only keep a typo
+// from producing a stalled or inaudible video.
 constexpr RealField kRealFields[] = {
     {"touch_hold_rate", &Config::touch_hold_rate, 0.1, 4.0},
     {"touch_hold_slow_rate", &Config::touch_hold_slow_rate, 0.1, 4.0},
@@ -139,11 +126,7 @@ constexpr std::string_view kKnownExtraPaths[] = {
     "power.self_update_mode",
     "self_update_mode",  // accepted at top level too
     "self_update",       // deprecated legacy boolean
-    // REMOVED, still accepted silently. These configured the EVIOCGRAB touchscreen lock, which was
-    // proven non-functional on SteamOS (durable/touch-lock.md) and is now deleted rather than
-    // shipped disabled; `disable_touch` replaces it. Kept here — and only here — so an older
-    // hot-swapped app.json does not spray unknown-key warnings for settings that were never load
-    // bearing. Do not reintroduce the fields without a hardware retest of the grab.
+    // Removed touch-lock keys, still accepted so older app.json files don't warn.
     "block_touchscreen",
     "touch_lock_enabled",
     "touch_lock_chord",
@@ -152,17 +135,15 @@ constexpr std::string_view kKnownExtraPaths[] = {
     "touch_lock_haptic",
 };
 
-// Sections the launcher deliberately does not consume: they document intent for humans and for the
-// engine's own GN args, and are not launcher settings. Reporting them as unknown would train the
-// user to ignore the warning.
+// Sections the launcher deliberately does not consume (documentation for humans and the engine's GN
+// args); not reported as unknown.
 constexpr std::string_view kIgnoredPrefixes[] = {
     "quality.max_height",
     "quality.prefer_codecs",
     "render.",
 };
 
-// The config schema this launcher understands. A file declaring a NEWER major version is refused:
-// silently ignoring settings we cannot honour is how a hot-swapped emergency fix does nothing.
+// The config schema this launcher understands. A file declaring a newer version is refused.
 constexpr int kSupportedSchemaVersion = 1;
 
 bool is_comment_key(std::string_view leaf) { return !leaf.empty() && leaf[0] == '$'; }
@@ -180,10 +161,8 @@ bool any_segment_is_comment(std::string_view path) {
   return false;
 }
 
-// A typed read that distinguishes absent from present-but-wrong-type. The old reader collapsed
-// both into "keep the default, say nothing", so `"remote_debugging_port": "9222"` (quoted) left the
-// port at 0 -- which disables the navigator, gamepad, OSD and onboarding -- from one pair of
-// quotes.
+// Typed reads: an absent key keeps the default silently; a present key of the wrong type warns and
+// keeps the default.
 void bind_string(const json::Value& root, std::string_view path, std::string& out) {
   const json::Value* v = root.find(path);
   if (!v) return;
@@ -229,8 +208,7 @@ std::optional<long> bind_number(const json::Value& root, std::string_view path, 
   return static_cast<long>(*n);
 }
 
-// A fractional setting. Separate from bind_number because that one REJECTS a non-integer, which is
-// the right behaviour for a pixel count and the wrong one for a playback rate: 0.5 is the point.
+// Like bind_number, but accepts non-integers.
 std::optional<double> bind_real(const json::Value& root, std::string_view path, double min,
                                 double max) {
   const json::Value* v = root.find(path);
@@ -274,7 +252,7 @@ std::vector<std::string> bind_string_array(const json::Value& root, std::string_
 }
 
 // A flat object of "key": "value" string pairs, in written order. `$`-prefixed keys are
-// documentation (`$comment`). Nested values are not supported — the keymap is deliberately flat.
+// documentation (`$comment`) and skipped. Nested values are not supported.
 std::vector<std::pair<std::string, std::string>> bind_string_object(const json::Value& root,
                                                                     std::string_view path) {
   std::vector<std::pair<std::string, std::string>> out;
@@ -315,9 +293,7 @@ bool path_is_known(std::string_view path) {
   return false;
 }
 
-// app.json is the surface for fixing production without a rebuild. A key the launcher does not
-// understand used to be silently ignored, so a typo in an emergency push did nothing, quietly. Say
-// so instead.
+// Warns about every leaf path no table knows (`$`-prefixed segments excluded).
 void report_unknown_keys(const json::Value& root) {
   for (const std::string& p : root.leaf_paths()) {
     if (any_segment_is_comment(p)) continue;
@@ -358,9 +334,6 @@ std::optional<Config> Config::load(const std::string& path) {
 
   json::ParseResult parsed = json::parse(*text);
   if (!parsed.ok()) {
-    // This is the branch that did not exist. The old reader had no way to represent a parse
-    // failure, so a truncated/corrupt app.json loaded as ALL DEFAULTS — including
-    // remote_debugging_port 0, i.e. no CDP, i.e. no input at all — behind one warning line.
     error("config: " + path + ":" + std::to_string(parsed.error.line) + ": " +
           parsed.error.message + " (offset " + std::to_string(parsed.error.offset) + ")");
     return std::nullopt;
@@ -378,8 +351,6 @@ std::optional<Config> Config::load(const std::string& path) {
       return std::nullopt;
     }
     if (*n > kSupportedSchemaVersion) {
-      // Refusing is the point: a file written for a newer launcher may rely on settings this build
-      // cannot honour, and half-applying it is worse than not starting.
       error("config: " + path + ": schema_version " + std::to_string(*n) +
             " is newer than this launcher supports (" + std::to_string(kSupportedSchemaVersion) +
             ")");
@@ -405,8 +376,8 @@ std::optional<Config> Config::load(const std::string& path) {
   c.keymap_lt = bind_string_object(root, "keymap_lt");
   c.keymap_rt = bind_string_object(root, "keymap_rt");
 
-  // Update policy: the tri-state `self_update_mode` wins (accepted under `power` or at top level);
-  // a bare legacy `self_update` boolean maps for configs written before the split.
+  // The tri-state `self_update_mode` (under `power` or at top level) wins over the legacy
+  // `self_update` boolean.
   const json::Value* mode = root.find("power.self_update_mode");
   if (!mode) mode = root.find("self_update_mode");
   if (mode && mode->as_string()) {

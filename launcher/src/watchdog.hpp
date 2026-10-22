@@ -6,9 +6,7 @@ namespace deckback {
 
 struct Config;
 
-// Spawns the Cobalt binary with flags from config and restarts it on crash (Leanback expects
-// TV-style app-restart semantics, doc §2 P2). Rate-limited to avoid crash loops. Blocks until a
-// clean exit or a shutdown signal.
+// Runs the engine binary and restarts it on crash, at most max_restarts_per_minute times a minute.
 class Watchdog {
  public:
   Watchdog(std::string cobalt_bin, std::vector<std::string> args, const Config& cfg);

@@ -21,31 +21,20 @@ constexpr const char* kDown = "ArrowDown";
 constexpr const char* kLeft = "ArrowLeft";
 constexpr const char* kRight = "ArrowRight";
 
-// Analog trigger thresholds (Xbox pad reports 0..255). Hysteresis keeps a half-pulled trigger from
-// chattering a key press on every jittering report.
+// Analog trigger thresholds (Xbox pad reports 0..255), with hysteresis.
 constexpr int kTriggerPress = 192;
 constexpr int kTriggerRelease = 64;
 
-// Semantic action -> DOM key, for the doc §6 P3 table. Actions absent here have no DOM key we can
-// synthesise yet (voice_search, player_menu, scan_rewind, scan_forward): Leanback's bindings for
-// them are not established, so we refuse to guess and report them as unmapped at startup instead of
-// dispatching a key that silently does nothing. `navigate` is handled by the D-pad/stick path.
-//
-// `replaced_by` marks a deprecated name that still resolves. `seek_back_10`/`seek_fwd_10` were
-// misnamed: they dispatch ArrowLeft/ArrowRight, which *scrub* the progress bar (the console model),
-// never a fixed 10 s jump. They keep working for one release so a remotely hot-swapped app.json
-// written against the old names does not silently lose its bindings (doc §6 R1).
+// Semantic action -> DOM key. Actions with no known Leanback key (voice_search, player_menu,
+// scan_rewind, scan_forward) are absent and get reported as unmapped. `navigate` is handled by the
+// D-pad/stick path. `replaced_by` marks a deprecated name that still resolves.
 struct ActionAlias {
   std::string_view action;
   std::string_view key;
   std::string_view replaced_by;  // "" = current name
 };
-// `toggle_captions` is deliberately ABSENT: it once resolved to `c`, the desktop youtube.com
-// caption hotkey, which youtube.com/tv (Leanback) receives and ignores — Google publishes no key
-// contract for the TV app (findings input-ux.md §8.1). It is now a launcher action
-// (captions_action), driven through the player's caption module over CDP like the chapter/skip
-// seeks, so it has no DOM key. `toggle_gestures` (gestures_action) is absent for the same reason:
-// it switches the touch gesture router on and off inside the launcher.
+// The launcher actions toggle_captions and toggle_gestures have no DOM key and are absent here
+// (youtube.com/tv ignores the desktop `c` caption hotkey).
 constexpr ActionAlias kActionAliases[] = {
     {"select", "Enter", ""},
     {"back", "Escape", ""},
@@ -56,13 +45,9 @@ constexpr ActionAlias kActionAliases[] = {
     {"seek_fwd_10", "ArrowRight", "scrub_fwd"},
 };
 
-// Deck control name -> evdev EV_KEY code. Use the LABELLED codes BTN_X/BTN_Y, not the positional
-// BTN_NORTH/BTN_WEST: on the Deck's Steam Input virtual xpad the face buttons report by their label
-// (physical X -> BTN_X = 0x133, physical Y -> BTN_Y = 0x134), and in <linux/input-event-codes.h>
-// BTN_NORTH *is* BTN_X (0x133) while BTN_WEST *is* BTN_Y (0x134). The old
-// {"x",BTN_WEST},{"y",BTN_NORTH} therefore SWAPPED them — physical Y hit the "x" action
-// (play/pause), voice bound to physical X. Confirmed on-Deck 2026-07-10: log showed `btn 308 ->
-// MediaPlayPause` while the user pressed Y.
+// Deck control name -> evdev EV_KEY code. Use the labelled codes BTN_X/BTN_Y: the Steam Input
+// virtual pad reports face buttons by label, and in <linux/input-event-codes.h> BTN_NORTH is BTN_X
+// while BTN_WEST is BTN_Y, so the positional names would swap X and Y.
 struct ControlCode {
   std::string_view name;
   int code;
@@ -121,7 +106,7 @@ const KeyLayer* context_layer(const Keymaps& m, Layer layer) {
 // The active modifier layer, or nullptr when no trigger is acting as a modifier right now. An empty
 // modifier layer is not a modifier at all — the trigger keeps its own binding.
 const KeyLayer* active_modifier(const Keymaps& m, bool lt_held, bool rt_held) {
-  if (lt_held && !m.lt_mod.empty()) return &m.lt_mod;  // LT wins over RT: deterministic, documented
+  if (lt_held && !m.lt_mod.empty()) return &m.lt_mod;  // LT wins over RT
   if (rt_held && !m.rt_mod.empty()) return &m.rt_mod;
   return nullptr;
 }
@@ -130,7 +115,7 @@ const KeyLayer* active_modifier(const Keymaps& m, bool lt_held, bool rt_held) {
 
 std::string resolve_binding(std::string_view value) {
   if (value.empty()) return {};
-  // A DOM key value wins: that is what lets app.json rebind a control without a launcher rebuild.
+  // A DOM key value wins over an action name.
   if (DevToolsClient::key_supported(value)) return std::string(value);
   for (const ActionAlias& a : kActionAliases)
     if (a.action == value) return std::string(a.key);
@@ -162,9 +147,7 @@ std::vector<ButtonBinding> build_button_map(
   std::vector<ButtonBinding> out;
   for (const auto& [name, value] : keymap) {
     if (name == "dpad" || name == "lt" || name == "rt") continue;  // not EV_KEY buttons
-    // Launcher actions have no DOM key by design and must not be reported as unmapped: they are
-    // handled by input.cpp, not dispatched. Reporting them would train the reader to ignore the
-    // unmapped list, which is the one place a genuinely dead binding shows up.
+    // Launcher actions are handled by input.cpp, not dispatched; not reported as unmapped.
     if (captions_action(value) || gestures_action(value)) continue;
     const ControlCode* cc = nullptr;
     for (const ControlCode& c : kControlCodes)
@@ -282,13 +265,8 @@ std::string caption_language_subtag(std::string_view locale) {
 FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg) {
   if (!cfg.enabled) return {nullptr, 0};
 
-  // We normalise against the Xbox-pad range, which is what Steam Input's virtual pad reports
-  // (input-ux §1). A pad with a narrower range would scroll slower than intended, never faster —
-  // and on a Deck in Game Mode there is only ever the one virtual pad. Not read from `absinfo`
-  // because the merged-device path has no single authoritative range.
-  //
-  // Saturate before taking |v|: the axis minimum is -32768, one past the maximum, so an unclamped
-  // full down-left push would compare |x| > |y| and resolve horizontally at the physical corner.
+  // Axes are in the Xbox-pad range. Saturate before taking |v|: the minimum -32768 is one past the
+  // maximum, so an unclamped full down-left push would compare |x| > |y| and resolve horizontally.
   auto mag = [](int v) {
     if (v < -kAxisMax) v = -kAxisMax;
     if (v > kAxisMax) v = kAxisMax;
@@ -297,14 +275,11 @@ FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg) {
   const int ax = mag(rx), ay = mag(ry);
   const int dz = cfg.deadzone < 0 ? 0 : cfg.deadzone;
 
-  // Vertical takes the tie, so a perfectly diagonal push resolves the way rails run. This is why
-  // the clamp above matters: unclamped, |-32768| > |32767| and a full down-left push would resolve
-  // left.
+  // Vertical takes the tie, so a perfectly diagonal push resolves the way rails run.
   const bool vertical = ay >= ax;
   const int m = vertical ? ay : ax;
-  // Also the guard for a degenerate deadzone: with dz >= kAxisMax no `m` can exceed it, so the
-  // division below never sees a zero (or negative) span. No separate check is needed, and one that
-  // could never fire would only look like safety.
+  // Also guards a degenerate deadzone: with dz >= kAxisMax no `m` can exceed it, so the division
+  // below never sees a zero (or negative) span.
   if (m <= dz) return {nullptr, 0};
 
   const char* key;
@@ -313,23 +288,18 @@ FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg) {
   else
     key = (rx < 0) ? kLeft : kRight;
 
-  // Linear in deflection past the deadzone: slow_ms at the edge, fast_ms at full travel. Linear and
-  // not curved, because the curve belongs to the user's thumb.
+  // Linear in deflection past the deadzone: slow_ms at the edge, fast_ms at full travel.
   const double t = static_cast<double>(m - dz) / static_cast<double>(kAxisMax - dz);
   long interval = cfg.slow_ms + static_cast<long>(t * (cfg.fast_ms - cfg.slow_ms));
-  // An inverted config (fast_ms > slow_ms) is a preference, not an error. Clamp into the interval's
-  // own range either way, so it can never go negative and busy-loop the poll.
+  // An inverted config (fast_ms > slow_ms) is allowed. Clamp into the interval's own range so it
+  // can never go negative and busy-loop the poll.
   const long lo = cfg.fast_ms < cfg.slow_ms ? cfg.fast_ms : cfg.slow_ms;
   const long hi = cfg.fast_ms < cfg.slow_ms ? cfg.slow_ms : cfg.fast_ms;
   if (interval < lo) interval = lo;
   if (interval > hi) interval = hi;
-  // Each arrow costs two CDP round trips (keyDown + keyUp, both awaited). Below this the input
-  // thread would spend all its time in the socket and stop reading the pad.
   if (interval < kMinScrollMs) interval = kMinScrollMs;
   return {key, interval};
 }
-
-// ---- layered keymaps ---------------------------------------------------------------------------
 
 KeyLayer build_layer(const std::vector<std::pair<std::string, std::string>>& keymap,
                      std::string_view label, std::vector<std::string>* unmapped) {
@@ -348,8 +318,7 @@ KeyLayer build_layer(const std::vector<std::pair<std::string, std::string>>& key
     button_entries.emplace_back(name, value);
   }
 
-  // build_button_map reports its own unmapped entries without the layer label; collect and
-  // re-prefix so a warning names the layer that is broken rather than just the control.
+  // build_button_map's unmapped entries lack the layer label; re-prefix them.
   std::vector<std::string> raw;
   out.buttons = build_button_map(button_entries, &raw);
   if (unmapped)
@@ -360,7 +329,7 @@ KeyLayer build_layer(const std::vector<std::pair<std::string, std::string>>& key
 Keymaps build_keymaps(const KeymapConfig& cfg, std::vector<std::string>* unmapped) {
   Keymaps m;
   auto base = cfg.base;
-  if (base.empty()) base = {{"a", "select"}, {"b", "back"}};  // the M1 set, before keymaps existed
+  if (base.empty()) base = {{"a", "select"}, {"b", "back"}};
   m.base = build_layer(base, "keymap", unmapped);
   m.player = build_layer(cfg.player, "keymap_player", unmapped);
   m.osk = build_layer(cfg.osk, "keymap_osk", unmapped);
@@ -370,8 +339,7 @@ Keymaps build_keymaps(const KeymapConfig& cfg, std::vector<std::string>* unmappe
 }
 
 std::string resolve_button(const Keymaps& maps, int code, Layer layer, bool lt_held, bool rt_held) {
-  // A modifier layer absorbs: an unbound control under a held modifier dispatches nothing, rather
-  // than falling through and firing the normal action the user was trying not to fire.
+  // A modifier layer absorbs: an unbound control under a held modifier dispatches nothing.
   if (const KeyLayer* mod = active_modifier(maps, lt_held, rt_held)) return find_button(*mod, code);
 
   // A context layer only overrides: unbound controls fall through to base.

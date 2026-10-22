@@ -6,9 +6,8 @@
 
 namespace deckback {
 
-// CLOCK_MONOTONIC in milliseconds. The launcher's timers all use this clock: it never jumps with
-// wall-clock changes. Note it does NOT advance across system suspend — durations that must span a
-// suspend (player.cpp's reload-after-sleep) use CLOCK_BOOTTIME instead.
+// CLOCK_MONOTONIC in milliseconds. Does NOT advance across system suspend; durations that must
+// span a suspend use CLOCK_BOOTTIME instead.
 inline long mono_ms() {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -20,8 +19,7 @@ inline bool test_bit(int bit, const unsigned long* arr) {
   return (arr[bit / (8 * sizeof(long))] >> (bit % (8 * sizeof(long)))) & 1UL;
 }
 
-// ASCII-only lowercase copy. Deliberately not locale-aware: every caller compares against fixed
-// ASCII tokens (HTTP header names, evdev device names, WM_CLASS values).
+// ASCII-only lowercase copy, deliberately not locale-aware.
 inline std::string ascii_lower(std::string_view s) {
   std::string out(s);
   for (char& c : out)
@@ -29,10 +27,8 @@ inline std::string ascii_lower(std::string_view s) {
   return out;
 }
 
-// Escape for embedding in a double-quoted JS string literal — which is the same escape set a JSON
-// string needs, so the CDP client uses it for JSON params and json::dump uses it for documents.
-// The one escaper: a second copy in json.cpp handled control characters and this one did not, so a
-// page script carrying a raw \x01 became an invalid CDP message rather than an escaped one.
+// Escape for a double-quoted JS string literal; the same escape set is valid for a JSON string.
+// Control characters become \u00XX.
 inline std::string js_string_escape(std::string_view s) {
   static constexpr char kHex[] = "0123456789abcdef";
   std::string out;

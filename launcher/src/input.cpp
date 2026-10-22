@@ -27,8 +27,7 @@ namespace {
 
 constexpr long kInitialDelayMs = 350;  // hold-to-repeat: delay before the first auto-repeat
 
-// Exit hold completed. A single firm pulse: it is the only confirmation the hold took, and the app
-// is about to disappear.
+// Rumble for a completed Exit hold (also reused to confirm the gesture toggle).
 constexpr uint16_t kExitRumbleStrong = 0xE000;
 constexpr uint16_t kExitRumbleWeak = 0x6000;
 constexpr uint16_t kExitRumbleMs = 220;
@@ -80,9 +79,8 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
       osd_(opts.osd),
       fast_cfg_(opts.fast_scroll) {
   KeymapConfig& keymap = opts.keymap;
-  // Menu is the OSD's fixed physical entry point, not a `show_controls` keymap action. The OSD
-  // must remain reachable after a hot-swapped keymap removes or repurposes that legacy action.
-  // Drop the old action anywhere it occurs so it can neither dispatch nor be reported as unmapped.
+  // Menu is the OSD's fixed physical entry point; drop the legacy `show_controls` action so it can
+  // neither dispatch nor be reported as unmapped.
   if (osd_) {
     menu_code_ = control_code("start");
     info(std::format("input: Menu (code {}) opens the settings menu", menu_code_));
@@ -104,9 +102,8 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     if (name != "lt" && name != "rt") continue;
     const bool is_mod = (name == "lt") ? !maps_.lt_mod.empty() : !maps_.rt_mod.empty();
     if (is_mod) continue;
-    // A seek action is not a DOM key: prebuild its eval expression from config/scripts/
-    // (ScriptLibrary, hot-swappable) so the press edge is a single eval_void (input-ux §18).
-    // Checked before resolve_binding so it never falls through to "no DOM key". Two kinds:
+    // A seek action is not a DOM key: prebuild its eval expression from config/scripts/ so the
+    // press edge is a single eval_void. Checked before resolve_binding.
     //   skip_back/skip_fwd       -> skip.js: a fixed ±skip_seconds seek.
     //   chapter_back/chapter_fwd -> chapter_seek.js: jump to the prev/next chapter boundary,
     //                               falling back to a fixed skip when the video has no chapters.
@@ -133,9 +130,7 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
 
   gestures_code_ = find_control_for(keymap.base, gestures_action);
   if (gestures_code_ >= 0 && !gestures_) {
-    // Bound but with no router: touch_gestures is off (the shipped default), or disable_touch won
-    // the exclusion in main() — which warns loudly on its own. The binding ships bound so enabling
-    // the feature is one config key rather than two, so this is the normal state, not a fault.
+    // Bound but with no router: the normal state while touch_gestures is off.
     info("input: touch-gesture toggle bound but gestures are off (config touch_gestures) — inert");
     gestures_code_ = -1;
   } else if (gestures_code_ >= 0) {
@@ -174,7 +169,6 @@ GamepadInput::GamepadInput(std::string host, int port, GamepadOptions opts)
     }
   }
   if (!unmapped.empty()) {
-    // One warning at startup beats a silent no-op on every press.
     std::string list;
     for (const std::string& u : unmapped) list += (list.empty() ? "" : ", ") + u;
     warn(std::format("input: {} keymap entries unmapped and will do nothing: {}", unmapped.size(),
@@ -249,8 +243,8 @@ void GamepadInput::dispatch_key(const char* base_arrow) {
     if (const char* c = arrow_focus_cmd(base_arrow)) osd_->exec(c);
     return;
   }
-  // Resolved per dispatch, not once per press: releasing a modifier or opening the player mid-hold
-  // takes effect on the next repeat without the user re-pressing the stick.
+  // Resolved per dispatch, not once per press, so a modifier or layer change mid-hold applies on
+  // the next repeat.
   const std::string key = resolve_direction_key(maps_, base_arrow, layer(), axes_.lt, axes_.rt);
   if (key.empty()) return;  // absorbed by a held modifier layer that does not bind this direction
   client_.dispatch_key(key);
@@ -295,16 +289,14 @@ void GamepadInput::set_direction(const char* key) {
       next_repeat_ms_ = mono_ms() + kInitialDelayMs;
     }
   }
-  // Unconditional, even when the direction did not change: the D-pad/left stick own the direction
-  // while they hold one, and clearing it (a release, or a lost device) must hand the right stick
-  // back. Cheap — update_fast_scroll() no-ops unless the resolved direction moved.
+  // Unconditional: clearing the direction must hand the right stick back. update_fast_scroll()
+  // no-ops unless the resolved direction moved.
   update_fast_scroll();
 }
 
 void GamepadInput::update_fast_scroll() {
-  // A held D-pad/left-stick direction suppresses the right stick entirely — and so does the modal
-  // first-run card, which would otherwise scroll Leanback's focus behind itself. The OSD is NOT
-  // blocked here: while it is open the right stick scrolls the menu (dispatch_scroll routes it).
+  // A held D-pad/left-stick direction or the modal first-run card suppresses the right stick. The
+  // OSD does not: while it is open the right stick scrolls the menu (dispatch_scroll routes it).
   const bool blocked = dir_key_ || (onboarding_ && onboarding_->visible());
   const FastScrollTick t =
       blocked ? FastScrollTick{nullptr, 0} : fast_scroll(axes_.rstick_x, axes_.rstick_y, fast_cfg_);
@@ -317,8 +309,7 @@ void GamepadInput::update_fast_scroll() {
 
 void GamepadInput::ensure_haptic() {
   if (haptic_tried_) return;
-  // Deferred to the first pulse: at construction no pad has been discovered yet. Once only — a pad
-  // without FF must not re-open a device on every toggle.
+  // Once only, so a pad without FF is not re-opened on every pulse.
   haptic_tried_ = true;
   for (const std::string& p : paths_)
     if (haptic_.attach(p)) break;
@@ -329,8 +320,7 @@ void GamepadInput::toggle_gestures() {
   if (!gestures_) return;
   const bool on = gestures_->toggle();
   info(std::format("input: touch gestures -> {}", on ? "on" : "off"));
-  // input-ux §4: never a silent change. Two channels, because either alone can be missed -- a toast
-  // is invisible to someone looking at their hand, and a rumble is ambiguous on its own.
+  // Confirm on two channels: toast and rumble.
   show_toast(client_, on ? "Touch gestures on" : "Touch gestures off", 1400);
   ensure_haptic();
   haptic_.rumble(kExitRumbleStrong, kExitRumbleWeak, kExitRumbleMs);
@@ -406,10 +396,8 @@ void GamepadInput::osd_event(int type, int code, int value) {
       else if (code == osd_x_ && osd_x_ >= 0)
         osd_->exec("delete");
       else if (code == osd_y_ && osd_y_ >= 0) {
-        // Y is tap-vs-hold: hold exits, tap keeps its existing "ignore this update" meaning (which
-        // is consumed with no effect anywhere else). Exit is a GLOBAL gesture, deliberately not a
-        // focusable control — in the Keys sub-tab focus cannot leave `subsel`, so a focusable Exit
-        // is unreachable there. The tap fires from the release edge below.
+        // Y is tap-vs-hold: hold exits the app, a tap means "ignore this update" and fires from the
+        // release edge below.
         if (parse_verdict(osd_->exec("hold_start")).kind == OsdVerdict::Kind::Hold)
           exit_hold_deadline_ = mono_ms() + osd_->exit_hold_ms();
       } else if (code == osd_lb_ && osd_lb_ >= 0)
@@ -417,9 +405,6 @@ void GamepadInput::osd_event(int type, int code, int value) {
       else if (code == osd_rb_ && osd_rb_ >= 0)
         osd_->exec("tab_next");
     }
-    // Modal capture must not freeze physical state machines that started before the menu opened:
-    // swallowing a trigger release leaves its next press dead or its modifier layer stuck. Presses
-    // still stay modal — only release bookkeeping is allowed through.
     if (value == 0 && code == osd_y_ && osd_y_ >= 0 && exit_hold_deadline_ != 0) {
       exit_hold_deadline_ = 0;  // released before the hold completed — no exit
       osd_->exec("hold_cancel");
@@ -432,8 +417,8 @@ void GamepadInput::osd_event(int type, int code, int value) {
   // it swallowed would leave the next press dead or a modifier layer stuck.
   switch (track_axes(axes_, code, value)) {
     case AxisEvent::Direction:
-      // dispatch_key / dispatch_scroll are OSD-aware, so this drives menu focus + scroll with the
-      // same auto-repeat machinery Leanback navigation uses.
+      // dispatch_key / dispatch_scroll are OSD-aware, so this drives menu focus with the same
+      // auto-repeat machinery.
       set_direction(resolve_direction(axes_.hat_x, axes_.hat_y, axes_.stick_x, axes_.stick_y));
       return;
     case AxisEvent::RightStick:
@@ -447,11 +432,8 @@ void GamepadInput::osd_event(int type, int code, int value) {
 bool GamepadInput::osd_open_edge(int type, int code, int value) {
   if (!osd_ || osd_->open()) return false;
   if (type == EV_KEY && value == 1 && code == menu_code_ && menu_code_ >= 0) {
-    // Menu opens the OSD during playback too. It has nothing else to do there: `show_controls` is
-    // stripped from the keymap in the ctor and resolves to no DOM key, so Menu was simply dead on
-    // the watch screen — and mid-video is exactly when Exit and the settings are wanted. The
-    // on-screen Settings button stays hidden on watch (tick(): want = !on_watch); only the physical
-    // button reaches the menu there.
+    // Menu opens the OSD during playback too; on the watch screen it is the only route in (the
+    // on-screen Settings button is hidden there).
     osd_->open_menu();
     return true;
   }
@@ -460,8 +442,7 @@ bool GamepadInput::osd_open_edge(int type, int code, int value) {
 
 bool GamepadInput::handle_onboarding(int type, int code, int value) {
   if (!onboarding_ || !onboarding_->visible()) return false;
-  // Modal first-run card: any button press dismisses it; sticks/D-pad are swallowed (a resting
-  // thumb must not dismiss it, and the D-pad must not move focus behind it). Axes are still
+  // Modal first-run card: any button press dismisses it; sticks/D-pad are swallowed but still
   // tracked, so a direction released under the card is not still "held" once it goes.
   if (type == EV_KEY && value == 1) onboarding_->hide();
   if (type == EV_ABS) track_axes(axes_, code, value);
@@ -496,9 +477,7 @@ void GamepadInput::handle_event(int type, int code, int value) {
     return;
   }
   if (type != EV_ABS) return;
-  // Analog triggers: when a modifier layer is configured the trigger dispatches nothing itself —
-  // holding it only changes what the *other* controls mean (lt_key_/rt_key_ stay empty in that
-  // case, so the press-edge dispatch below is naturally skipped).
+  // A trigger acting as a modifier dispatches nothing itself (its lt_key_/rt_key_ stay empty).
   switch (track_axes(axes_, code, value)) {
     case AxisEvent::Direction:
       set_direction(resolve_direction(axes_.hat_x, axes_.hat_y, axes_.stick_x, axes_.stick_y));
@@ -531,8 +510,8 @@ void GamepadInput::handle_event(int type, int code, int value) {
 }
 
 void GamepadInput::process_event(int type, int code, int value) {
-  // The kernel overflowed this device's queue (the thread was blocked on CDP) and discarded events,
-  // releases included: nothing held can be trusted until it is pressed again.
+  // SYN_DROPPED: the kernel overflowed this device's queue and discarded events, releases included,
+  // so nothing held can be trusted until it is pressed again.
   if (type == EV_SYN && code == SYN_DROPPED)
     drop_held_state();
   else
@@ -552,8 +531,6 @@ void GamepadInput::loop() {
       if (d < 0) d = 0;
       if (d < timeout) timeout = d;
     };
-    // Directional auto-repeat, then the timers that mature with no further evdev event coming: the
-    // right stick held at a constant deflection, and the Exit hold.
     if (dir_key_) consider(next_repeat_ms_);
     if (fast_key_) consider(fast_next_ms_);
     if (caption_apply_pending_) consider(caption_next_ms_);
@@ -562,8 +539,7 @@ void GamepadInput::loop() {
     std::vector<pollfd> pfds;
     pfds.reserve(fds_.size());
     for (int fd : fds_) pfds.push_back(pollfd{fd, POLLIN, 0});
-    // With no pad open, poll() on an empty set returns at once and would spin this thread between
-    // rescans; sleep on the worker instead, which stop() also wakes.
+    // poll() on an empty set returns at once; sleep on the worker instead, which stop() also wakes.
     if (pfds.empty())
       worker_.wait_or_stop(static_cast<int>(timeout));
     else
@@ -589,27 +565,21 @@ void GamepadInput::loop() {
       }
     }
 
-    // Feed the OSD update state, then reconcile the Settings button (drawn off playback). Cheap on
-    // every tick (atomic reads + change-gated CDP). The raw watch signal is video_up, not
-    // `layer() == Layer::Player`, because the OSK outranks the player while a video plays
-    // underneath.
+    // The watch signal is video_up, not `layer() == Layer::Player`: the OSK outranks the player
+    // while a video plays underneath.
     const bool on_watch = layers_ && layers_->video_up();
     if (update_prompt_) update_prompt_->tick(on_watch);
     if (osd_) osd_->tick(on_watch);
     tick_caption_apply(on_watch);
 
-    // Health-check the first-run card BEFORE acting on its visibility: a reload deletes it without
-    // telling us, and both effects below are gated on believing it is still up.
+    // Health-check the first-run card before acting on its visibility: a reload deletes it
+    // silently.
     if (onboarding_) onboarding_->tick();
-    // The first-run card is modal; a direction held when it appeared would keep auto-repeating into
-    // the page behind it. Not the OSD: while it is open a held direction drives the menu.
+    // Stop a held direction auto-repeating into the page behind the modal first-run card.
     if (onboarding_ && onboarding_->visible()) set_direction(nullptr);
 
-    // Hold-to-confirm completed on the OSD's Exit row. Rumble first: it is the only feedback that
-    // the hold took, and the app is about to go away.
-    // The hold belongs to the open menu. Closed under it (B or Menu mid-hold, a page reload), the
-    // Y release never reaches osd_event, so cancel here -- or the app quits after the user backs
-    // out.
+    // The Exit hold belongs to the open menu: if the menu closed under it, the Y release never
+    // reaches osd_event, so cancel here. On completion, rumble before exiting.
     if (exit_hold_deadline_ != 0 && !(osd_ && osd_->open())) exit_hold_deadline_ = 0;
     if (exit_hold_deadline_ != 0 && mono_ms() >= exit_hold_deadline_) {
       exit_hold_deadline_ = 0;
@@ -627,8 +597,7 @@ void GamepadInput::loop() {
       next_repeat_ms_ = mono_ms() + interval;
     }
 
-    // Right-stick repeat. The interval is re-read from the *current* deflection every step, so
-    // easing off the stick slows the scroll on the next arrow rather than at the next event.
+    // Right-stick repeat. The interval is re-read from the current deflection every step.
     if (fast_key_ && mono_ms() >= fast_next_ms_) {
       const FastScrollTick t = fast_scroll(axes_.rstick_x, axes_.rstick_y, fast_cfg_);
       if (t.key != fast_key_) {
@@ -643,14 +612,12 @@ void GamepadInput::loop() {
       rescan_devices();
       last_scan = mono_ms();
       drop_held_state();  // with the pad gone, no release event is coming
-      // Steam re-creates its virtual pad under a new node (e.g. across resume): let the next pulse
-      // re-attach rumble instead of writing to the dead node for the rest of the session.
+      // Steam re-creates its virtual pad under a new node (e.g. across resume): re-attach rumble on
+      // the next pulse.
       haptic_.detach();
       haptic_tried_ = false;
     } else if (mono_ms() - last_scan >= kHotplugScanMs) {
-      // Hotplug: a pad attached while another is already open would otherwise never be seen,
-      // because neither `lost` nor `fds_.empty()` ever becomes true. Non-destructive — held keys
-      // survive.
+      // Hotplug while another pad is open. Non-destructive: held keys survive.
       discover_new_devices();
       last_scan = mono_ms();
     }

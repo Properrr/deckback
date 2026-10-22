@@ -27,18 +27,15 @@ constexpr std::string_view kReleaseNotesFallback =
     "Release notes: github.com/properrr/deckback/releases";
 constexpr std::string_view kOffStatus = "Updates are off.";
 
-// Deploy-phase copy. Every one of these is only ever shown after the portal actually said so — the
-// bug this replaces was announcing success at the moment the button was pressed, which is before
-// anything is known.
+// Deploy-phase copy, each shown only after the portal has actually reported it.
 constexpr std::string_view kCheckingStatus = "Checking for updates\xE2\x80\xA6";
 constexpr std::string_view kRequestedStatus = "Updating\xE2\x80\xA6 this can take a minute.";
 constexpr std::string_view kDoneStatus =
     "Update installed. Restart Deckback to start using it: choose Close now, then open it again "
     "from your Library.";
 constexpr std::string_view kEmptyStatus = "You are on the latest version.";
-// The refusal a user cannot retry their way out of, so the text is the workaround rather than an
-// apology. The command is the same one-liner the README documents for installing; run from the host
-// it updates through flatpak directly, which is not subject to the portal's permission rule.
+// The text is the workaround: the README's install one-liner, run on the host, updates through
+// flatpak directly and is not subject to the portal's permission rule.
 constexpr std::string_view kPermissionBlockedStatus =
     "This version needs new system permissions, so Deckback cannot install it by itself. In "
     "Desktop "
@@ -286,7 +283,7 @@ UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool
   UpdatesView v;
   switch (phase) {
     case DeployPhase::Checking:
-      // A read of the published ref, a second or two; nothing to press until it answers.
+      // Nothing to press until the ref read answers.
       v.status = std::string(kCheckingStatus);
       return v;
     case DeployPhase::Requested:
@@ -295,20 +292,18 @@ UpdatesView updates_view(DeployPhase phase, std::string_view error_message, bool
           progress_status.empty() ? std::string(kRequestedStatus) : std::string(progress_status);
       return v;
     case DeployPhase::Done:
-      // The new commit binds on the next launch, not on another press, so the one useful action is
-      // leaving. Deckback cannot start itself again from Game Mode; the Library tile does that.
+      // The new commit binds on the next launch, so the only useful action is to close; Deckback
+      // cannot relaunch itself from Game Mode.
       v.status = std::string(kDoneStatus);
       v.can_quit = true;
       return v;
     case DeployPhase::Empty:
-      // The portal really did compare against the remote, so this is the one place we may say
-      // "latest" outright.
+      // A real comparison with the remote found nothing newer, so "latest" is earned.
       v.status = std::string(kEmptyStatus);
       v.can_check = updater_present;
       return v;
     case DeployPhase::PermissionBlocked:
-      // Deliberately offers nothing: every button here would fail identically, and an enabled
-      // control that cannot work is worse than none.
+      // No buttons: every action here would fail the same way.
       v.status = std::string(kPermissionBlockedStatus);
       return v;
     case DeployPhase::Failed:
@@ -343,10 +338,7 @@ std::string deploy_toast(DeployPhase phase) {
       return std::string(kPermissionBlockedToast);
     case DeployPhase::Failed:
       return std::string(kFailedToast);
-    // Empty answers a question the user explicitly asked, so it needs an answer. It was silent at
-    // first on the reasoning that the Updates tab would show it — but a check used to close the
-    // menu, so the reply arrived with nothing on screen and the button looked inert. The menu now
-    // stays open and this only fires when it is NOT (see the caller): the panel says it otherwise.
+    // Empty answers a question the user explicitly asked, so it gets a toast too.
     case DeployPhase::Empty:
       return std::string(kEmptyStatus);
     // Never terminal, nothing to announce.
@@ -377,8 +369,7 @@ std::string update_dot_marker_path(std::string_view state_dir) {
 std::string read_update_marker(const std::string& path) { return read_marker(path); }
 
 bool write_update_marker(const std::string& path, const std::string& value) {
-  // A read-only state dir must not crash and must not nag every launch (the mild failure: the card
-  // may auto-show / the dot may reappear again next boot).
+  // A read-only state dir warns but never crashes; the dot may just reappear next launch.
   return write_marker(path, value, "the update prompt state was not saved");
 }
 
@@ -399,11 +390,10 @@ bool UpdatePromptController::update_available() const {
 void UpdatePromptController::tick(bool on_watch) {
   (void)on_watch;
   if (!cfg_.osd) return;
-  // Unconditional: the changelog is now "what's new", not just "what you'd be getting", so it must
-  // be there whether or not an update is pending. One fetch per process (kick_changelog CASes).
+  // Unconditional: the notes double as "what's new" in the running build. One fetch per process.
   kick_changelog();
-  // One probe per launch, so a release published since the last session is announced now rather
-  // than whenever the portal's shared timer next fires (0–30 min, never on a metered network).
+  // One probe per launch, so a new release is announced without waiting for the portal's own timer
+  // (0–30 min, never on a metered network).
   if (!launch_probed_ && probe_configured()) {
     launch_probed_ = true;
     kick_probe();
@@ -421,16 +411,15 @@ void UpdatePromptController::tick(bool on_watch) {
     progress = deploy_progress_;
     fresh = std::exchange(deploy_fresh_, false);
     if (phase == DeployPhase::Requested && mono_ms() - requested_at_ms_ >= cfg_.deploy_timeout_ms) {
-      // No verdict ever came (see deploy_timeout_ms). Report it now, and toast it next tick.
+      // No verdict within deploy_timeout_ms; toasted on the next tick.
       phase = deploy_phase_ = DeployPhase::Failed;
       deploy_error = deploy_error_ = std::string(kNoAnswerError);
       deploy_fresh_ = true;
       warn("update: no answer from the update service — giving up on this request");
     }
   }
-  // Exactly once per verdict, and only from here: this is the input thread, which owns client_.
-  // A toast is the fallback surface: when the menu is open the Updates panel is patched in place
-  // and a toast on top of it would just be the same sentence twice.
+  // One toast per verdict, from the input thread (which owns client_), and only with the menu
+  // closed: an open Updates panel already shows it.
   if (fresh && !(cfg_.osd && cfg_.osd->open())) {
     if (const std::string t = deploy_toast(phase); !t.empty())
       show_toast(client_, t, kDeployToastMs);
@@ -447,8 +436,8 @@ void UpdatePromptController::tick(bool on_watch) {
     const std::string commit = cfg_.state->commit();
     if (!commit.empty() && commit != last_commit_) {
       last_commit_ = commit;
-      // A newer commit makes an earlier "latest" / failed / blocked verdict stale (a later release
-      // can be the very fix for a blocked one); a staged deploy or one in flight still stands.
+      // A newer commit makes an earlier "latest" / failed / blocked verdict stale; a staged deploy
+      // or one in flight still stands.
       if (phase == DeployPhase::Empty || phase == DeployPhase::Failed ||
           phase == DeployPhase::PermissionBlocked) {
         std::lock_guard lk(deploy_mu_);
@@ -471,9 +460,8 @@ void UpdatePromptController::tick(bool on_watch) {
   const UpdatesView v = updates_view(phase, deploy_error, announce, cv.available_version,
                                      cfg_.local_version, idle, cfg_.updater != nullptr, progress);
 
-  // Prefer the pending release's notes; fall back to the running version's, so the tab is never
-  // empty. Only link out when the fetch produced nothing at all. installed_notes_ is written by the
-  // fetch thread, so it is read only once the fetch has published.
+  // Prefer the pending release's notes, then the running version's, then the releases link.
+  // installed_notes_ is written by the fetch thread, so read it only once the fetch has published.
   std::string notes = cv.notes;
   if (notes.empty() && fetch_done()) notes = installed_notes_;
   if (notes.empty() && fetch_done()) notes = std::string(kReleaseNotesFallback);
@@ -541,9 +529,7 @@ void UpdatePromptController::request_deploy(const char* why) {
   info(std::string("update: ") + why + " — deploy requested");
 }
 
-// Deliberately says nothing about the outcome. The portal has not answered yet, and claiming
-// success here is exactly the bug a user hit on v0.0.7: a "will apply after restart" toast over a
-// deploy the portal had already refused. The verdict arrives via on_deploy_result.
+// Says nothing about the outcome: the verdict arrives later via on_deploy_result.
 void UpdatePromptController::confirm_update() { request_deploy("user confirmed"); }
 
 void UpdatePromptController::check_now() {
@@ -581,9 +567,8 @@ void UpdatePromptController::kick_probe() {
   });
 }
 
-// Input thread, once the probe has published. The probe only ever ADDS availability: the ref is
-// cached by the CDN for up to 10 min, so the portal can know about a release before the probe does,
-// and an "up to date" read must never hide what the portal announced.
+// Input thread, once the probe has published. The probe only ever ADDS availability: the CDN may
+// cache the ref for 10 min, so an "up to date" read must never hide a portal announcement.
 void UpdatePromptController::consume_probe() {
   if (probe_thread_.joinable()) probe_thread_.join();
   RefCheck result = probe_result_;
@@ -595,10 +580,8 @@ void UpdatePromptController::consume_probe() {
     info("update: the published repo has a newer commit (" + commit + ")");
     probe_announced_ = commit;
     if (cfg_.state) cfg_.state->set_available(true, commit);
-    // Re-run the announcement logic even when this is the commit already announced: after a failed
-    // or timed-out deploy nothing else re-offers it (the portal does not re-announce), and the
-    // Failed text tells the user to check again. The markers still apply — an ignored commit stays
-    // hidden and the one-time card is not shown twice.
+    // Re-run the announcement even for an already-announced commit: after a failed deploy nothing
+    // else re-offers it (the portal does not re-announce). The markers still apply.
     last_commit_.clear();
   }
   // An announcement of the commit the portal refused does not count: nothing can install it.
@@ -620,8 +603,7 @@ void UpdatePromptController::consume_probe() {
       fall_back = checking;
     }
   }
-  // The portal path is the one verified on hardware: when the ref cannot be read, let the portal
-  // check by deploying, exactly as a check did before the probe existed.
+  // When the ref cannot be read, let the portal check by deploying.
   if (fall_back)
     request_deploy(
         "user asked to check; the published repo was unreadable, falling back to the portal");

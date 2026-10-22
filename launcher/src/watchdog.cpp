@@ -20,7 +20,7 @@ namespace {
 std::atomic<bool> g_shutdown{false};
 std::atomic<pid_t> g_child{-1};
 
-// Wall-clock seconds via CLOCK_MONOTONIC — Date.now-free and immune to clock jumps mid-loop.
+// Monotonic seconds, immune to wall-clock jumps.
 long mono_seconds() {
   timespec ts{};
   clock_gettime(CLOCK_MONOTONIC, &ts);
@@ -58,19 +58,16 @@ int Watchdog::run() {
       return 1;
     }
     if (pid == 0) {
-      // Die with the launcher. Killed outright (OOM, kill -9) it runs no shutdown path, and an
-      // orphaned engine would keep the debugging port and the profile in use, so the next launch
-      // could not start cleanly. The getppid() check covers a launcher that died before prctl().
+      // Die with the launcher: a killed launcher runs no shutdown path, and an orphaned engine
+      // would keep the debugging port and profile in use. getppid() covers a launcher that died
+      // before prctl().
       prctl(PR_SET_PDEATHSIG, SIGTERM);
       if (getppid() != launcher) _exit(0);
-      // The engine inherits only stdio. Everything else the launcher has open -- the log file, CDP
-      // sockets, bus connections -- is ours; marking it here covers fds a std::ofstream cannot open
-      // with O_CLOEXEC, and any added later.
+      // The engine inherits only stdio; this also covers fds opened without O_CLOEXEC.
       close_range(3, ~0U, CLOSE_RANGE_CLOEXEC);
       execv(cobalt_bin_.c_str(), argv.data());
       // Only reached if execv fails. write(), not perror(): after fork() in a threaded process, a
-      // stdio lock held by another thread at fork time would deadlock the child, and the launcher
-      // with it in waitpid().
+      // stdio lock held by another thread at fork time would deadlock the child.
       constexpr char kMsg[] = "deckback: execv of the engine failed\n";
       [[maybe_unused]] const ssize_t n = write(STDERR_FILENO, kMsg, sizeof kMsg - 1);
       _exit(127);

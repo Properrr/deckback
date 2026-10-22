@@ -9,9 +9,8 @@
 namespace deckback {
 namespace {
 
-// The page's drain entry point. Guarded because a reload can land between our poll and the
-// document-start injection, and calling through a missing object would throw in the page and come
-// back as an evaluation failure indistinguishable from a dead engine.
+// The page's drain entry point. Guarded so a poll that lands before the document-start injection
+// returns '' rather than an evaluation failure indistinguishable from a dead engine.
 constexpr const char* kDrainExpr =
     "(function(){var g=window.__deckbackGestures;"
     "return g?JSON.stringify(g.drain()):'';})()";
@@ -47,9 +46,9 @@ std::string gesture_key(std::string_view kind, std::string_view dir) {
     if (dir == "right") return "ArrowRight";
     return {};
   }
-  // No touch Back path exists otherwise (input-ux §7); the left-edge swipe is the only one.
+  // The left-edge swipe.
   if (kind == "back") return "Escape";
-  // A tap activates the focused tile / toggles the player chrome, exactly as the A button does.
+  // A tap acts exactly as the A button does.
   if (kind == "tap") return "Enter";
   return {};
 }
@@ -74,7 +73,7 @@ std::string seek_hud_text(int seconds) {
 }
 
 std::string hold_hud_text(double rate) {
-  // Trailing zeros read badly at 34px: "0.5x", not "0.500000x".
+  // "0.5x", not "0.500000x".
   return std::format("{:g}x", rate);
 }
 
@@ -103,8 +102,7 @@ GestureBatch parse_drain(std::string_view json_text) {
     if (g.kind.empty()) continue;
     if (const json::Value* v = member(*eo, "dir")) {
       if (const std::string* s = v->as_string()) g.dir = *s;
-      // `dir` is a string for arrows and a signed number for seeks. Same key, two types, because
-      // that is what reads naturally in the page; decoding both here keeps that from leaking.
+      // `dir` is a string for arrows and a signed number for seeks.
       else if (auto n = v->as_number())
         g.seek_dir = *n > 0 ? 1 : (*n < 0 ? -1 : 0);
     }
@@ -155,14 +153,11 @@ void GestureRouter::act(DevToolsClient& client, const Gesture& g) {
     return;
   }
   if (int sign = gesture_seek_sign(g.kind, g.seek_dir); sign != 0) {
-    // Mobile's accumulating seek. Each double-tap jumps a CONSTANT skip_seconds; what accumulates
-    // is the indicator, which shows the running total for the whole burst (10, 20, 30, 40) so the
-    // user reads where they have got to rather than a "+10 s" that says nothing about the four
-    // taps before it. Seeking the total instead would jump 10+20+30+40 = 100s for four taps.
+    // Accumulating seek: each double-tap jumps a constant skip_seconds; only the indicator shows
+    // the running total for the burst (10, 20, 30, 40).
     const int steps = g.n < 1 ? 1 : g.n;
     ScriptParams p;
-    // The same player call the trigger bindings use, so touch and the controller cannot drift into
-    // two different seek behaviours (input-ux §12 is about exactly that kind of split).
+    // The same player call the trigger bindings use.
     p.set("delta", static_cast<long>(sign * cfg_.skip_seconds));
     ScriptLibrary::instance().invoke(client, "skip", p);
     show_hud(client, seek_hud_text(sign * cfg_.skip_seconds * steps), sign > 0 ? "right" : "left",
@@ -170,8 +165,7 @@ void GestureRouter::act(DevToolsClient& client, const Gesture& g) {
     return;
   }
   if (int phase = gesture_hold_phase(g.kind, g.on); phase != 0) {
-    // Mobile's hold-to-scrub. Unblocked by P12.0b, which measured <video>.playbackRate holding
-    // through real playback and the player advertising [0.25 .. 2].
+    // Hold-to-scrub: set the playback rate on press, stop the scrub on release.
     const double rate = hold_rate_for_zone(g.zone, cfg_.hold_rate, cfg_.hold_slow_rate);
     ScriptParams p;
     if (phase > 0) {
@@ -188,8 +182,7 @@ void GestureRouter::act(DevToolsClient& client, const Gesture& g) {
       show_hud(client, "", "center", 0);
     return;
   }
-  // A script newer than this binary can emit a gesture we have no action for. Ignoring it is the
-  // designed outcome (scripts are hot-swappable, doc §6); misfiring on it would not be.
+  // A script newer than this binary can emit a gesture we have no action for: ignore it.
   static bool warned = false;
   if (!warned) {
     warn(std::format(
@@ -206,11 +199,8 @@ void GestureRouter::loop() {
       const bool on = enabled_.load(std::memory_order_acquire);
       client.eval_void(set_enabled_expr(on));
       if (!on) {
-        // Turning the router off DISCARDS its queue, so a hold in progress would never deliver its
-        // release and the video would stay at 2x (or 0.5x) for good -- pressing Y to stop touch
-        // doing things would leave the most visible thing touch had done. Stop unconditionally: the
-        // script is a no-op when nothing is held, and this path must not depend on the queue it
-        // just threw away.
+        // Turning the router off discards its queue, so a held scrub would never see its release.
+        // Stop unconditionally; the script is a no-op when nothing is held.
         ScriptParams stop;
         stop.set("stop", true);
         ScriptLibrary::instance().invoke(client, "hold_scrub", stop);
@@ -226,16 +216,14 @@ void GestureRouter::loop() {
           info("gestures: touch gesture router connected to the page");
           announced = true;
         }
-        // A reload reinstalls the script with its built-in defaults, and there is no reload signal
-        // the poll thread can trust (the same reason PageOverlay re-probes rather than remembers).
-        // The answer rides along with every drain instead.
+        // A reload reinstalls the script with its built-in defaults; every drain reports whether
+        // the page is configured.
         if (!batch.configured) {
           configure_page(client);
           if (!enabled_.load(std::memory_order_acquire)) client.eval_void(set_enabled_expr(false));
         }
-        // The page and enabled_ can disagree when the push above failed: push again, and act as
-        // enabled_ says. Behind a modal surface a tap must not become an Enter on the video under
-        // it. Either way a hold RELEASE still applies, or a hold begun earlier stays at 2x.
+        // If the page and enabled_ disagree (a failed push), push again and act as enabled_ says.
+        // While disabled or behind a modal surface gestures are dropped, except a hold release.
         if (batch.enabled != enabled_.load(std::memory_order_acquire))
           push_enabled_.store(true, std::memory_order_release);
         const bool drop = !enabled_.load(std::memory_order_acquire) || (cfg_.modal && cfg_.modal());

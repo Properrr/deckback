@@ -7,9 +7,7 @@
 
 namespace deckback {
 
-// The stoppable-background-thread lifecycle shared by every polling subsystem (input, navigator,
-// player, touch-mode guard, audio repair). One implementation so the subtle parts — notify outside
-// the lock, idempotent stop(), restartability after stop() — cannot drift between copies.
+// Stoppable background thread for the polling subsystems.
 //
 // The owner MUST call stop() in its own destructor (before its other members are torn down): this
 // class joins the thread on destruction too, but by then the loop's captured `this` has already

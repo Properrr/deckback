@@ -14,9 +14,8 @@
 namespace deckback {
 namespace {
 
-// Shown over Leanback when the keep-awake helper is missing. Kept short: toast.js centres one line
-// and only wraps at 76vw, and a toast cannot be acted on — the log line and SUPPORT.md carry the
-// how-to-fix detail. Names no shell command: installing it is a Desktop-Mode step.
+// Shown when the keep-awake helper is missing. One short line: the how-to-fix detail is in the log
+// line and SUPPORT.md.
 constexpr const char* kKeepAwakeToast =
     "Keep-awake helper not running \xE2\x80\x94 screen may dim during video";
 constexpr int kKeepAwakeToastMs = 9000;
@@ -29,11 +28,8 @@ long boottime_ms() {
   return ts.tv_sec * 1000L + ts.tv_nsec / 1'000'000L;
 }
 
-// The play-state poll, suspend checkpoint, and resume nudge now live in config/scripts/player_*.js
-// (ScriptLibrary). player_state.js packs three signals into a bitmask (see decode_play_state); its
-// `player_open` bit keys off Leanback's `#/watch` hash route — verified, not guessed (m114.md
-// deep-link test, readyState=4) — but a Leanback detail, so it is a layer-selection signal only and
-// falls back to Browse if the route changes.
+// player_state.js returns a bitmask (decode_play_state). `player_open` keys off Leanback's
+// `#/watch` route, so it only selects the input layer and falls back to Browse if that changes.
 std::string play_state_js() { return ScriptLibrary::instance().render("player_state"); }
 std::string pause_js() { return ScriptLibrary::instance().render("player_pause"); }
 std::string play_js() { return ScriptLibrary::instance().render("player_play"); }
@@ -155,7 +151,7 @@ void PlayerController::request_resume() {
 bool PlayerController::on_resume() { return resume(suspend_gen_.load()); }
 
 bool PlayerController::resume(unsigned gen) {
-  // Gives up early on stop() (shutdown no longer waits out the probe) or on a newer suspend.
+  // Gives up early on stop() or on a newer suspend.
   const auto superseded = [&] { return suspend_gen_.load() != gen; };
   if (resume_probe_.timeout_ms > 0) {
     if (wait_online(resume_probe_.host, resume_probe_.port, resume_probe_.timeout_ms,
@@ -171,9 +167,8 @@ bool PlayerController::resume(unsigned gen) {
     return false;
   }
 
-  // After a long sleep, YouTube's stream URLs / auth token may be stale — a bare play() nudge would
-  // just hit a dead <video>. Reload instead so Leanback re-fetches everything. Gated off by
-  // default.
+  // After a long sleep the stream URLs / auth token may be stale, so reload instead of nudging a
+  // dead <video>.
   if (const long at = suspend_boottime_ms_.load(); reload_after_suspend_ms_ > 0 && at > 0) {
     const long slept = boottime_ms() - at;
     if (slept >= reload_after_suspend_ms_) {

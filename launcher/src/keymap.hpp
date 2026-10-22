@@ -8,39 +8,31 @@
 
 namespace deckback {
 
-// Pure keymap/binding resolution — no evdev, no CDP, no threads. Unit-tested in
-// tests/input_test.cpp; the evdev/CDP consumer is GamepadInput (input.hpp), and the first-run
-// controls card (onboarding.cpp) reads the same resolution so the two can never disagree.
+// Pure keymap/binding resolution — no evdev, no CDP, no threads. Shared by GamepadInput (input.hpp)
+// and the first-run controls card (onboarding.cpp) so the two cannot disagree.
 
 // Resolve one `config/app.json:keymap` value to a DOM key. A value may be a DOM key value directly
-// ("Enter", "MediaPlayPause", "c") — which is what makes the keymap hot-swappable without a rebuild
-// — or one of the semantic actions from the design doc's P3 table ("select", "back", "playpause",
+// ("Enter", "MediaPlayPause", "c") or a semantic action ("select", "back", "playpause",
 // "scrub_back", "scrub_fwd"). Returns "" when the value cannot be mapped to a key this build can
 // synthesise — including the launcher actions (toggle_captions, chapter/skip seeks) driven over CDP
 // rather than by a DOM key.
 std::string resolve_binding(std::string_view value);
 
-// Whether `value` is the touch-gesture toggle action. input-ux §4 requires the touch state to be
-// user-controllable from the controller and never silent, which is why this is a binding and not a
-// settings-menu-only switch: the reason to turn touch off is usually a palm on the panel RIGHT NOW.
+// Whether `value` is the touch-gesture toggle action.
 bool gestures_action(std::string_view value);
 
-// Whether `value` is the caption-toggle launcher action ("toggle_captions"/"captions"). Like the
-// chapter/skip seeks it has no DOM key: youtube.com/tv ignores the desktop `c` hotkey, so the input
-// layer drives captions through the player's caption module over CDP (config/scripts/
-// toggle_captions.js) and intercepts the bound control by evdev code. build_button_map() skips it
-// so it is neither mapped to a key nor reported as an unmapped binding.
+// Whether `value` is the caption-toggle launcher action ("toggle_captions"/"captions"). It has no
+// DOM key (youtube.com/tv ignores the desktop `c` hotkey): the input layer intercepts the bound
+// control by evdev code and drives config/scripts/toggle_captions.js over CDP. build_button_map()
+// skips it so it is neither mapped to a key nor reported as an unmapped binding.
 bool captions_action(std::string_view value);
 
 // The primary language subtag of one locale token, lowercased: "en_US.UTF-8" -> "en", "pt-BR" ->
-// "pt", "" / "C" / "POSIX" -> "". Turns the SteamOS system locale (LANG/LC_*) into the preferred
-// caption language handed to config/scripts/toggle_captions.js. The caller splits a LANGUAGE
-// colon-list first.
+// "pt", "" / "C" / "POSIX" -> "". The caller splits a LANGUAGE colon-list first.
 std::string caption_language_subtag(std::string_view locale);
 
 // The current name for a deprecated action alias, or "" when `value` is not deprecated. Deprecated
-// names still resolve (a remotely hot-swapped app.json must not break); startup warns once per
-// entry.
+// names still resolve.
 std::string_view deprecated_action_replacement(std::string_view value);
 
 // Arrow key for a D-pad/stick state, or nullptr for "no direction". D-pad wins over stick; vertical
@@ -54,25 +46,22 @@ struct ButtonBinding {
   std::string key;
 };
 
-// Build the EV_KEY bindings from a config keymap. Control names are the doc's: a, b, x, y, lb, rb,
-// start, select. Triggers (lt/rt) are analog axes, not EV_KEY, so they are NOT returned here — ask
+// Build the EV_KEY bindings from a config keymap. Control names: a, b, x, y, lb, rb, start, select.
+// Triggers (lt/rt) are analog axes, not EV_KEY, so they are NOT returned here — ask
 // `resolve_binding` for them directly. Anything unrecognised or unmappable is appended to
-// `unmapped` as "name=value" instead of being silently dropped, so startup can warn about it once.
+// `unmapped` as "name=value".
 std::vector<ButtonBinding> build_button_map(
     const std::vector<std::pair<std::string, std::string>>& keymap,
     std::vector<std::string>* unmapped);
 
-// Analog trigger -> pressed, with hysteresis so a trigger resting near the threshold cannot
-// chatter. Xbox-pad triggers report 0..255. Press at >=192, release only below 64.
+// Analog trigger -> pressed, with hysteresis. Xbox-pad triggers report 0..255. Press at >=192,
+// release only below 64.
 bool trigger_pressed(int value, bool was_pressed);
 
-// ---- evdev axis bookkeeping ---------------------------------------------------------------------
-
 // Every axis the input layer reads, in its digital form: the D-pad and left stick quantized to
-// -1/0/1, the right stick raw (its deflection is the scroll rate, input-ux §7), and the two trigger
-// latches. One copy for every input path, so a modal surface (the OSD, the first-run card) keeps it
-// honest by tracking releases without acting on them. The card used to swallow axis events whole,
-// so a D-pad released under it stayed "held" and came back as a phantom direction afterwards.
+// -1/0/1, the right stick raw (its deflection is the scroll rate), and the two trigger latches. A
+// modal surface (the OSD, the first-run card) must keep tracking releases into it without acting on
+// them, or a direction released underneath stays "held".
 struct AxisState {
   int hat_x = 0, hat_y = 0;
   int stick_x = 0, stick_y = 0;
@@ -94,40 +83,25 @@ struct AxisRange {
 };
 
 // Map a raw axis value from its device's range into the Xbox 360 pad's, which every threshold here
-// was written for: sticks -32768..32767, triggers 0..255. Steam Input's virtual pad (Game Mode)
-// already reports exactly that and passes through unchanged, as does an unknown range. A pad that
-// reports, say, 0..32767 triggers or 0..255 sticks had a small push read as a full one.
+// assumes: sticks -32768..32767, triggers 0..255. Steam Input's virtual pad already reports that
+// and passes through unchanged, as does an unknown range.
 int normalize_axis(int code, int value, AxisRange range);
 
-// ---- trigger seek (findings input-ux §18) -------------------------------------------------------
-
-// A skip binding performs a fixed-interval jump through the Leanback player over CDP, NOT a DOM
-// key. Returns the sign of the jump (+1 forward, -1 back) for a skip action value, or 0 when
-// `value` is not one. Bound only to the analog triggers today; the input layer renders
-// config/scripts/skip.js (ScriptLibrary) with the signed interval and evaluates it on the press
-// edge.
+// The sign of a fixed-interval skip action (+1 forward, -1 back), or 0 when `value` is not one. The
+// jump goes through the player over CDP (config/scripts/skip.js), not a DOM key.
 int skip_action_sign(std::string_view value);
 
-// Like skip_action_sign, but for chapter-aware seek (chapter_back/chapter_fwd → -1/+1, else 0). The
-// input layer renders config/scripts/chapter_seek.js with the direction + the skip_seconds
-// fallback; that script jumps to the prev/next chapter boundary (TVHTML5 /next
-// macroMarkersListEntity) and degrades to a fixed skip when the video has no chapters.
+// Like skip_action_sign, but for chapter-aware seek (chapter_back/chapter_fwd → -1/+1, else 0),
+// done by config/scripts/chapter_seek.js, which degrades to a fixed skip when the video has no
+// chapters.
 int chapter_action_sign(std::string_view value);
 
-// ---- right-stick fast traversal (findings input-ux §7) -----------------------------------------
-
-// The right stick is otherwise unused (only its R3 click, as half the touch-lock chord), while
-// every console app puts fast list traversal on the second axis. Leanback rails are long and the
-// D-pad's time-based acceleration takes seconds to reach the end of one.
-//
-// The two sticks ramp differently, on purpose. The D-pad/left stick are digital: they know only
-// "held", so their repeat rate must accelerate over *time*. The right stick reports deflection, so
-// its rate is analog — **the user's thumb is the accelerator**, and a time ramp on top would fight
-// the thumb for control of the same variable.
+// Right-stick fast list traversal. Unlike the digital D-pad/left stick, whose repeat accelerates
+// over time, the right stick's rate is analog: deflection sets it directly.
 struct FastScrollConfig {
   bool enabled = true;
   int deadzone = 13000;  // |axis| beyond this scrolls (Xbox range ~32767)
-  long slow_ms = 200;    // repeat interval at the deadzone edge — a nudge steps deliberately
+  long slow_ms = 200;    // repeat interval at the deadzone edge
   long fast_ms = 45;     // repeat interval at full deflection. Each arrow is two CDP round trips,
                          // so this is a floor, not a target.
 };
@@ -139,13 +113,9 @@ struct FastScrollTick {
   long interval_ms;  // how long until this key should repeat
 };
 
-// Resolve raw right-stick axes to a direction and a repeat rate. The **dominant** axis wins (larger
-// deflection), with vertical taking a tie: unlike the digital resolve_direction, magnitude is
-// already meaningful here, so a diagonal push means whichever way the thumb pushed harder. The rate
-// comes from that same axis, so a hard push down scrolls fast and a nudge steps once.
+// Resolve raw right-stick axes to a direction and a repeat rate. The dominant (larger-deflection)
+// axis wins, vertical taking a tie, and the rate comes from that same axis.
 FastScrollTick fast_scroll(int rx, int ry, const FastScrollConfig& cfg);
-
-// ---- layered keymaps ----------------------------------------------------------------------------
 
 // One named set of bindings: the base map, a context layer ("player", "osk"), or a modifier layer
 // (held LT / RT). Directions are keyed by the *base* arrow they would otherwise produce, so a layer
@@ -157,8 +127,7 @@ struct KeyLayer {
 };
 
 // Raw (unresolved) keymap sections, straight from app.json. `base` is `keymap`; the rest are the
-// optional `keymap_player` / `keymap_osk` / `keymap_lt` / `keymap_rt` objects. All are
-// hot-swappable.
+// optional `keymap_player` / `keymap_osk` / `keymap_lt` / `keymap_rt` objects.
 struct KeymapConfig {
   std::vector<std::pair<std::string, std::string>> base, player, osk, lt_mod, rt_mod;
 };
@@ -168,10 +137,9 @@ struct Keymaps {
   KeyLayer base, player, osk, lt_mod, rt_mod;
 };
 
-// Resolve one section. Control names are the doc's (a, b, x, y, lb, rb, start, select, l3, r3) plus
-// the four directions (up, down, left, right). Unrecognised or unmappable entries are appended to
-// `unmapped` as "name=value" rather than silently dropped. `label` prefixes those messages so a
-// startup warning says *which* layer is broken.
+// Resolve one section. Control names are a, b, x, y, lb, rb, start, select, l3, r3 plus the four
+// directions (up, down, left, right). Unrecognised or unmappable entries are appended to `unmapped`
+// as "name=value", prefixed with `label`.
 KeyLayer build_layer(const std::vector<std::pair<std::string, std::string>>& keymap,
                      std::string_view label, std::vector<std::string>* unmapped);
 
@@ -181,25 +149,20 @@ Keymaps build_keymaps(const KeymapConfig& cfg, std::vector<std::string>* unmappe
 
 // Resolve a button press to the DOM key to dispatch, or "" for "dispatch nothing".
 //
-// Precedence: a held modifier layer, then the context layer, then base. The two kinds of layer
-// differ deliberately:
-//   * A **context** layer (player/osk) is an *override set* — an unbound control falls through to
-//     base, because browsing bindings mostly still make sense inside the player.
-//   * A **modifier** layer (LT/RT held) *absorbs* an unbound control. Falling through would mean
-//     LT+A silently fires a plain A, which is the classic modifier bug: the user holds a modifier
-//     precisely to signal "not the normal action".
+// Precedence: a held modifier layer, then the context layer, then base.
+//   * A context layer (player/osk) is an override set — an unbound control falls through to base.
+//   * A modifier layer (LT/RT held) absorbs an unbound control, so LT+A never fires a plain A.
 // A modifier layer is only active when it is non-empty; otherwise the trigger keeps its own binding
-// and is not a modifier at all. LT wins over RT when both are held, so the result is deterministic.
+// and is not a modifier at all. LT wins over RT when both are held.
 std::string resolve_button(const Keymaps& maps, int code, Layer layer, bool lt_held, bool rt_held);
 
 // Same precedence for a direction. `base_arrow` is what `resolve_direction()` produced. Falls back
-// to `base_arrow` itself when nothing rebinds it — a plain D-pad press stays a plain arrow key.
+// to `base_arrow` itself when nothing rebinds it.
 std::string resolve_direction_key(const Keymaps& maps, std::string_view base_arrow, Layer layer,
                                   bool lt_held, bool rt_held);
 
 // What a button press does. The launcher actions (captions, the touch-gesture toggle) are taken by
-// evdev code, but only when no modifier layer is held: a held LT/RT layer owns every button,
-// binding or absorbing it (resolve_button), and LT+View used to toggle captions straight past it.
+// evdev code, but only when no modifier layer is held: a held LT/RT layer owns every button.
 struct Press {
   enum class Kind { None, Key, Captions, Gestures } kind = Kind::None;
   std::string key;  // for Key
@@ -208,25 +171,22 @@ Press resolve_press(const Keymaps& maps, int code, Layer layer, bool lt_held, bo
                     int captions_code, int gestures_code);
 
 // The evdev EV_KEY code of the control bound to `action`, or -1 when nothing is. `voice_search` has
-// no DOM key by design and is intercepted by the launcher. `show_controls` remains supported here
-// solely to read old configs; the OSD uses the fixed physical Menu button instead.
+// no DOM key and is intercepted by the launcher. `show_controls` is accepted only to read old
+// configs.
 int find_control_for_action(const std::vector<std::pair<std::string, std::string>>& keymap,
                             std::string_view action);
 
 // The same lookup for an action with aliases, matched by its predicate (gestures_action,
-// captions_action). Looking up the alias names one by one is how `"y": "touch_gestures"` came to be
-// accepted by gestures_action yet bound to nothing: the lookup listed two of its three names.
+// captions_action), so every alias is found.
 int find_control_for(const std::vector<std::pair<std::string, std::string>>& keymap,
                      bool (*matches)(std::string_view));
 
 // The evdev EV_KEY code of a Deck control by name ("a", "b", "y", ...), or -1 if no such control.
-// Independent of the user's keymap, so a fixed-button UI (e.g. the update card's A/B/Y) resolves
-// the same physical buttons no matter how app.json is configured.
+// Independent of the user's keymap, for fixed-button UIs (e.g. the update card's A/B/Y).
 int control_code(std::string_view name);
 
 // Drop an entry so build_button_map() does not report it as an unmapped binding. Only correct when
-// the launcher really will handle that action — otherwise the startup warning is the honest output,
-// because the control genuinely does nothing.
+// the launcher really will handle that action.
 std::vector<std::pair<std::string, std::string>> without_action(
     const std::vector<std::pair<std::string, std::string>>& keymap, std::string_view action);
 

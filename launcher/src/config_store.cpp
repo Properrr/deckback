@@ -9,17 +9,8 @@
 namespace deckback {
 namespace {
 
-// `disable_touch` is here for a testability reason, not a settings one: the flag is baked into the
-// read-only /app/share/deckback/app.json, so on an installed Flatpak there was no way to turn it
-// off short of building and side-loading a whole bundle -- and `just touch-probe` REFUSES to run
-// with it on, because no_pointer.js would make it read zero for the wrong reason. P12.4 was gated
-// behind a full release build on every machine that ever wants to re-ask the question, including
-// after a Cobalt bump. One overlay key retires that.
-// `touch_hide_cursor` is the other half of the same bisect (touch-gestures.md §7.0): apply()
-// honoured it, but a key missing here is dropped by load() first, so the knob silently did nothing.
-//
-// ONE table drives both the allowlist (load/put) and apply(). They were two lists, and a key in one
-// but not the other is a knob that silently does nothing — `touch_hide_cursor` was exactly that.
+// The keys user.json may override. One table drives both the allowlist (load/put) and apply(). The
+// touch keys are here so an installed Flatpak (whose app.json is read-only) can toggle them.
 using OverlayMember =
     std::variant<bool Config::*, std::string Config::*, std::vector<std::string> Config::*>;
 struct OverlayKey {
@@ -144,8 +135,7 @@ bool ConfigStore::remove(std::string_view key) {
 }
 
 bool ConfigStore::save() const {
-  // Atomic (fileio write_file_atomic): a crash mid-save must leave the previous user.json, never a
-  // truncated one that load() would then reject wholesale.
+  // Atomic: a crash mid-save leaves the previous user.json, never a truncated one.
   if (write_file_atomic(path_, json::dump(json::Value::object(overlay_)))) return true;
   warn("config: could not save " + path_);
   return false;

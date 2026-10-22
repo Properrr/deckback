@@ -35,9 +35,7 @@ std::optional<std::string> http_get(const HttpRequest& req) {
   curl_easy_setopt(c, CURLOPT_FOLLOWLOCATION, 1L);
   curl_easy_setopt(c, CURLOPT_WRITEFUNCTION, sink);
   curl_easy_setopt(c, CURLOPT_WRITEDATA, &body);
-  // Turn a 4xx/5xx into a transport failure. Without it a 404 body — an HTML error page, or
-  // GitHub's rate-limit JSON — is returned as if it were the thing that was asked for, and the CDM
-  // fetcher would hash and install it.
+  // A 4xx/5xx is a failure: never return an error page body as the requested resource.
   curl_easy_setopt(c, CURLOPT_FAILONERROR, 1L);
   curl_easy_setopt(c, CURLOPT_TIMEOUT, req.timeout_seconds);
   curl_easy_setopt(c, CURLOPT_USERAGENT, req.user_agent.c_str());

@@ -15,8 +15,7 @@ namespace deckback {
 
 namespace {
 
-// Set by SIGINT/SIGTERM so the bounded watch loop stops promptly and cleanly (the sim harness ends
-// the drive with a signal once it has observed the reconnect it was testing).
+// Set by SIGINT/SIGTERM to end the watch loop early.
 volatile std::sig_atomic_t g_watch_stop = 0;
 void watch_on_signal(int) { g_watch_stop = 1; }
 
@@ -27,8 +26,7 @@ int run_selftest_watch(int secs) {
        (Updater::backend_available() ? "libsystemd" : "stub (no libsystemd)"));
   if (secs <= 0) secs = 1;
 
-  // Default config = notify mode with no consent: the loop watches but never deploys. The point is
-  // to keep the reconnect handling alive for the sim's case-A/case-B drive (durable/test-sim.md).
+  // Default config = notify mode with no consent: the loop watches but never deploys.
   auto up = Updater::create(UpdaterConfig{});
   if (!up->backend_live()) {
     error("selftest-watch: no live session bus (needs the Flatpak portal on the session bus)");

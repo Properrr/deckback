@@ -41,9 +41,7 @@ Haptic::~Haptic() { detach(); }
 
 bool Haptic::attach(const std::string& path) {
   detach();
-  // O_RDWR, unlike the input layer's O_RDONLY fds: uploading an effect is a write to the device.
-  // Failing here is ordinary — a pad without FF, or a node we may read but not write — so it is not
-  // an error, just no rumble.
+  // O_RDWR: uploading an effect is a write to the device. Failing here is ordinary, just no rumble.
   int fd = open(path.c_str(), O_RDWR | O_CLOEXEC);
   if (fd < 0) return false;
   if (!can_rumble(fd)) {
@@ -82,7 +80,7 @@ void Haptic::rumble(uint16_t strong, uint16_t weak, uint16_t duration_ms) {
   play.code = static_cast<uint16_t>(e.id);
   play.value = 1;  // play once
   if (write(fd_, &play, sizeof(play)) != static_cast<ssize_t>(sizeof(play))) {
-    // Best-effort by contract: the caller is locking a touchscreen, not driving a rumble motor.
+    // Best-effort: a failed play is ignored.
   }
 }
 

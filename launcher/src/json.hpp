@@ -8,26 +8,8 @@
 namespace deckback {
 namespace json {
 
-// A real JSON parser (RFC 8259), replacing the byte-scanning extractor config.cpp used to carry.
-//
-// That extractor found a key with an unanchored `s.find("\"key\"")` over the raw file and read
-// whatever followed the next colon. It could not represent a parse error, so a truncated or corrupt
-// app.json parsed "successfully" into all-defaults -- which includes remote_debugging_port 0, i.e.
-// no CDP, i.e. no navigator/gamepad/OSD at all. It ended an array at the first `]` BYTE, so the
-// shipped `voice_mic_selectors` yielded one truncated selector instead of five. It dropped escape
-// markers, so "a\nb" became "anb" on error_title/error_hint -- the designated R1 config-push
-// surface. It prefix-matched booleans (`truthy` -> true) and ran std::stol over the rest of the
-// file (`5e6` -> 5). And it ignored nesting entirely, so a nested key silently shadowed a top-level
-// one of the same name.
-//
-// app.json is HOT-SWAPPABLE by design (doc §6): it is the surface for fixing production without a
-// rebuild, and a partially-written file is a normal event on that path, not an exotic one. It has
-// to parse correctly or say so.
-//
-// Deliberately small: no allocation-heavy variant, no exceptions on the hot path, ~250 lines, and
-// object key ORDER is preserved because `keymap` is order-significant (startup logs and the
-// first-run card list bindings the way the user wrote them). Duplicate keys keep the LAST value,
-// matching every mainstream parser (the old extractor kept the first).
+// A small JSON parser and writer (RFC 8259). No exceptions. Object key ORDER is preserved
+// (`keymap` is order-significant); duplicate keys keep the LAST value.
 
 enum class Type { Null, Bool, Number, String, Array, Object };
 
@@ -52,9 +34,7 @@ class Value {
   bool is_array() const { return type_ == Type::Array; }
   bool is_object() const { return type_ == Type::Object; }
 
-  // Typed accessors. Each returns nullopt when this value is of another type, so a caller can
-  // distinguish "absent" from "present but the wrong type" -- the distinction the old reader
-  // collapsed into "keep the default, say nothing".
+  // Typed accessors. Each returns nullopt/nullptr when this value is of another type.
   std::optional<bool> as_bool() const;
   std::optional<double> as_number() const;
   const std::string* as_string() const;
@@ -67,8 +47,7 @@ class Value {
   const Value* find(std::string_view path) const;
 
   // Every leaf path in this document, dot-joined, in document order. Array values count as leaves.
-  // Used to report keys the launcher does not understand -- silence there means a typo in an
-  // emergency config push does nothing, quietly.
+  // Used to report unknown config keys.
   std::vector<std::string> leaf_paths() const;
 
  private:
@@ -98,11 +77,9 @@ struct ParseResult {
 // Never throws.
 ParseResult parse(std::string_view text);
 
-// Serialize a Value back to JSON text — the write half of the config overlay (user.json), this
-// codebase's first JSON *writer*. `indent >= 0` pretty-prints with that many spaces per level and a
-// trailing newline (2 = human-diffable, the default); `indent < 0` is compact. Object key ORDER is
-// preserved, so a hand-authored user.json keeps its shape across rewrites. Round-trips through
-// parse(): dump then parse yields an equal document.
+// Serialize a Value to JSON text. `indent >= 0` pretty-prints with that many spaces per level and a
+// trailing newline; `indent < 0` is compact. Key order is preserved, and dump then parse yields an
+// equal document.
 std::string dump(const Value& v, int indent = 2);
 
 }  // namespace json

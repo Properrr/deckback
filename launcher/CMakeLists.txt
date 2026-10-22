@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 project(deckback_launcher LANGUAGES CXX)
 
-# Out-of-tree code (doc §13.2): C++23, dual-clean on Clang >=18 and GCC 14, -Wall -Wextra -Werror.
+# C++23, clean on both Clang >=18 and GCC 14 with -Wall -Wextra -Werror.
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
@@ -11,22 +11,13 @@ endif()
 
 add_compile_options(-Wall -Wextra -Werror)
 
-# CMake >=3.28 scans every C++20+ TU for module imports by default. This project uses no modules, so
-# the scan is pure overhead: an extra preprocess of every file, whose .ddi.i output is larger than
-# the object it produces (enough to exhaust a 32G tmpfs on a sanitizer build).
+# No C++ modules are used, so skip CMake's per-TU module scan (an extra preprocess of every file).
 set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 
 set(DECKBACK_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
-# Embed a JS file as a C++ raw-string constant so a missing/unreadable file can NEVER silently
-# disable the behaviour on the Deck (it fails the build instead). Each script is the single source of
-# truth — the launcher compiles it in and `just smoke` injects the same file.
-#
-# The path is overridable because `launcher/` is not always built inside the repo. flatpak-builder
-# copies each module's sources FLAT into /run/build/<module>/, so `../config/` does not exist there
-# and `file(READ)` fails with CMake's own opaque "file failed to open for reading". The manifest
-# passes -D<cache_var>=<basename> and adds the script as a second source. Default stays the in-repo
-# layout, so `just launcher build` is unchanged.
+# Embed a JS file as a C++ raw-string constant; a missing file fails the build. flatpak-builder
+# copies module sources FLAT, so the manifest overrides the path with -D<cache_var>=<basename>.
 function(deckback_embed_js cache_var default_rel header symbol fail_msg)
   set("${cache_var}" "${default_rel}"
       CACHE FILEPATH "JS to embed as ${symbol}, relative to launcher/ unless absolute")
@@ -36,8 +27,7 @@ function(deckback_embed_js cache_var default_rel header symbol fail_msg)
       "Pass -D${cache_var}=<path>. ${fail_msg}")
   endif()
   file(READ "${_p}" _js)
-  # A `)JS"` inside the script would terminate the raw literal early and produce a nonsense
-  # diagnostic a hundred lines away. Refuse at configure time instead.
+  # A `)JS"` inside the script would end the raw literal early.
   string(FIND "${_js}" ")JS\"" _bad)
   if(NOT _bad EQUAL -1)
     message(FATAL_ERROR "${_p} contains the raw-string terminator )JS\" ")
@@ -49,17 +39,15 @@ namespace deckback {
 inline constexpr const char* ${symbol} = R\"JS(${_js})JS\";
 }  // namespace deckback
 ")
-  # COPYONLY only rewrites when the content differs, so a plain re-configure does not force a rebuild.
+  # COPYONLY only rewrites when the content differs, so a re-configure does not force a rebuild.
   configure_file("${DECKBACK_GENERATED_DIR}/${header}.in"
                  "${DECKBACK_GENERATED_DIR}/${header}" COPYONLY)
   set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_p}")
 endfunction()
 
-# Embed the whole config/scripts/ directory as a name->body registry (scripts_registry.hpp), the
-# single source of truth for every page-side script the launcher injects (ScriptLibrary, scripts.cpp).
-# Same fail-closed rationale as deckback_embed_js: a missing/unreadable script fails the build, never
-# silently ships a disabled behaviour. flatpak-builder copies the module's sources FLAT, so the dir is
-# a cache var the manifest overrides to the flat basename ("scripts") and adds as a `type: dir` source.
+# Embed config/scripts/*.js as a name->body registry (scripts_registry.hpp) for ScriptLibrary; a
+# missing script fails the build. The dir is a cache var because flatpak-builder copies sources
+# FLAT; the manifest overrides it to "scripts".
 set(DECKBACK_SCRIPTS_DIR "../config/scripts"
     CACHE PATH "Directory of page scripts to embed, relative to launcher/ unless absolute")
 get_filename_component(_scripts_dir "${DECKBACK_SCRIPTS_DIR}" ABSOLUTE
@@ -95,10 +83,8 @@ file(WRITE "${DECKBACK_GENERATED_DIR}/scripts_registry.hpp.in" "${_reg}")
 configure_file("${DECKBACK_GENERATED_DIR}/scripts_registry.hpp.in"
                "${DECKBACK_GENERATED_DIR}/scripts_registry.hpp" COPYONLY)
 
-# Compile the real version string in, from the repo's VERSION file (single source of truth), so
-# `--version` and the self-updater's logging report the truth. flatpak-builder copies the module FLAT
-# so `../VERSION` may be absent there — the manifest adds it as a `file` source at ./VERSION, and
-# -DDECKBACK_VERSION=<x> overrides. Falls back to a dev marker so a bare `just launcher` still builds.
+# Compile the version in from the repo VERSION file (./VERSION too, for flatpak-builder's FLAT copy).
+# -DDECKBACK_VERSION=<x> overrides; falls back to a dev marker.
 set(DECKBACK_VERSION "" CACHE STRING "Version to compile in (else read from the VERSION file)")
 if(NOT DECKBACK_VERSION)
   foreach(_vf "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" "${CMAKE_CURRENT_SOURCE_DIR}/../VERSION")
@@ -124,24 +110,17 @@ endif()
 find_package(Threads REQUIRED)
 
 # Optional deps are detected at compile time via __has_include and linked only when present, so the
-# launcher builds on a bare toolchain (CI free-runner) and gains D-Bus/HTTP on a full dev box.
-# Detected BEFORE deckback_core so the library can carry them PUBLIC to every dependent.
+# launcher builds on a bare toolchain. Detected before deckback_core so it can carry them PUBLIC.
 find_package(PkgConfig QUIET)
 if(PkgConfig_FOUND)
   pkg_check_modules(SYSTEMD IMPORTED_TARGET libsystemd)
   pkg_check_modules(CURL IMPORTED_TARGET libcurl)
   pkg_check_modules(PULSE IMPORTED_TARGET libpulse)
-  # libxcb powers Option B of disable_touch (holding gamescope's global touch mode at hover while our
-  # window is focused). Optional: without it, touchmode.cpp compiles to a no-op and the page-level
-  # pointer swallow still makes taps inert. Present in the freedesktop SDK the Flatpak builds against.
+  # libxcb sets gamescope's global touch mode (touchmode.cpp); without it that is a no-op.
   pkg_check_modules(XCB IMPORTED_TARGET xcb)
 endif()
 
-# Everything except main.cpp. ONE source list: the executable and all ~20 test binaries link this,
-# so adding a file, a dependency or a compile definition is a single edit. Previously each target
-# relisted the sources it needed by hand -- 122 listings of 29 files, log.cpp named 19 times -- which
-# meant a new dependency edge was a scavenger hunt across the whole file and test link lines drifted
-# from what the code actually needed.
+# Everything except main.cpp; the executable and every test binary link this one library.
 add_library(deckback_core STATIC
   src/log.cpp
   src/json.cpp
@@ -155,7 +134,7 @@ add_library(deckback_core STATIC
   src/busloop.cpp
   src/platform.cpp
   src/updater.cpp
-  src/simwatch.cpp  # sim-only: the --selftest-watch reconnect driver (isolated from updater.cpp)
+  src/simwatch.cpp  # --selftest-watch reconnect driver (test simulator only)
   src/updateprompt.cpp
   src/watchdog.cpp
   src/cdm_fetcher.cpp
@@ -199,22 +178,15 @@ endif()
 add_executable(deckback-launcher src/main.cpp)
 target_link_libraries(deckback-launcher PRIVATE deckback_core)
 
-# Install rule so `ninja install` works under flatpak-builder (buildsystem: cmake-ninja).
-# Installs to ${CMAKE_INSTALL_PREFIX}/bin -- flatpak-builder sets the prefix to /app.
+# `ninja install` for flatpak-builder (cmake-ninja), which sets the prefix to /app.
 include(GNUInstallDirs)
 install(TARGETS deckback-launcher RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
 include(CTest)
 if(BUILD_TESTING)
-  # Tests assert() their invariants. CI builds Release, which defines NDEBUG and would both compile
-  # the assertions out (tests silently pass) and trip -Werror=unused-variable. -UNDEBUG on the test
-  # TU keeps assertions live regardless of the build type; src/ contains no assert(), so building
-  # deckback_core with NDEBUG costs no coverage.
-  # Tests are GROUPED into a few binaries rather than one per file. Each was its own executable,
-  # statically linking the whole of deckback_core -- 25 link steps of a multi-megabyte archive.
-  # tests/harness.hpp explains the mechanism; what matters here is that grouping costs nothing in
-  # reporting or isolation: add_test still registers every case by NAME, and each invocation runs
-  # that one case in its own process.
+  # Tests assert() their invariants, so test TUs build with -UNDEBUG even in Release (src/ has no
+  # assert()). Cases are grouped into a few binaries (tests/harness.hpp); add_test still registers
+  # each case by name and runs it in its own process.
   #
   # deckback_test_group(<group> <case>...) builds tests/group_<group>.cpp plus each case's TU.
   function(deckback_test_group group)
@@ -225,8 +197,7 @@ if(BUILD_TESTING)
     target_link_libraries(${target} PRIVATE deckback_core)
     target_include_directories(${target} PRIVATE tests)
     target_compile_options(${target} PRIVATE -UNDEBUG)
-    # The two config-reading cases live in different groups, and the define is just a path, so it is
-    # simpler and harmless to give it to every group than to track which one needs it.
+    # Path of the shipped app.json, for the cases that read the real config.
     target_compile_definitions(${target} PRIVATE
       DECKBACK_APP_JSON="${CMAKE_CURRENT_SOURCE_DIR}/../config/app.json")
     foreach(case IN LISTS ARGN)
@@ -239,17 +210,12 @@ if(BUILD_TESTING)
 
   deckback_test_group(cdp devtools navigator player errorpage gestures)
 
-  # onboarding/input read the real shipped config, so a keymap change cannot make the launcher and
-  # the first-run card advertise a control that does not work.
-  # updateprompt pins the self-update notify UI off-Deck: semantic version compare, GitHub-releases
-  # parse, changelog summary, the show-card/show-dot decision, and the dismissal state files.
+  # onboarding/input read the real shipped config, so a keymap change cannot make the first-run card
+  # advertise a control that does not work.
   deckback_test_group(ui onboarding osdmenu overlay updateprompt input)
 
-  # The updater's portal path is NOT verified here -- that is a Deck job (durable/self-update.md:
-  # --selftest-update + a staging-repo round-trip). These pin what holds off-Deck: the pure
-  # Progress.status decode (2 == Done), the factory, and a crash-free / idempotent lifecycle.
-  # platform drives the logind backend's reconnect against a private dbus-daemon (SKIPs without
-  # one): a real bus drop and a re-subscribed PrepareForSleep, not a mock of either.
+  # The updater's portal path is not covered here (it needs a Deck). platform drives the logind
+  # backend's reconnect against a private dbus-daemon and SKIPs without one.
   deckback_test_group(sys watchdog updater cdm_fetcher touchmode platform)
 
   find_program(NODE_EXECUTABLE NAMES node nodejs)
@@ -257,19 +223,15 @@ if(BUILD_TESTING)
     add_test(NAME js_toggle_captions
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/toggle_captions.test.js)
-    # Drives the OSD Updates tab through a mock DOM. A source grep cannot tell you a key reaches
-    # the content; this presses the key and checks the notes actually moved.
+    # Drives the OSD Updates tab through a mock DOM.
     add_test(NAME js_osd_updates_nav
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/osd_updates_nav.test.js)
-    # The gesture recogniser, driven by synthetic touch streams. A threshold that reads a tap as a
-    # drag, or an edge swipe as a scroll, does not fail on hardware -- it just feels wrong, which is
-    # the hardest kind of bug to notice and the easiest to cover here.
+    # The gesture recogniser, driven by synthetic touch streams.
     add_test(NAME js_touch_gestures
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/touch_gestures.test.js)
-    # Separate from the router on purpose (touch-gestures.md §7.0): this pins that the cursor script
-    # hides the cursor and does NOTHING else -- in particular that it registers no input listeners.
+    # Pins that the cursor script only hides the cursor and registers no input listeners.
     add_test(NAME js_hide_cursor
              COMMAND ${NODE_EXECUTABLE}
                      ${CMAKE_CURRENT_SOURCE_DIR}/../tests/js/hide_cursor.test.js)

@@ -10,21 +10,11 @@
 namespace deckback {
 
 // The lifecycle every CDP-injected overlay shares: draw a node into the live Leanback document,
-// believe it is there, and notice when the page takes it away.
-//
-// The noticing is the part worth sharing. We do not own the document — Leanback navigates, reloads,
-// and rebuilds `documentElement` underneath us, and every such event silently deletes whatever we
-// appended. An overlay that only tracks its own draw/hide calls will therefore believe it is on
-// screen when it is not, and anything gated on that belief (modal input capture, "already drawn, no
-// need to redraw") is then wrong until something else disturbs it.
-//
-// Only the OSD implemented this. The first-run controls card did not, so a reload while the card
-// was up left `visible()` true with nothing painted: the input layer went on swallowing every
-// event and pinning the D-pad, and the user's next button press was eaten dismissing a card that
-// had already vanished. Same document, same failure mode, one implementation now.
+// believe it is there, and notice when the page takes it away. Leanback navigates, reloads, and
+// rebuilds `documentElement` underneath us, silently deleting whatever we appended, so the painted
+// belief must be re-checked with lost().
 
-// Rate-limits a periodic check. A health probe costs a CDP round trip, and the input loop can tick
-// every few milliseconds while a direction auto-repeats.
+// Rate-limits a periodic check (e.g. a CDP health probe from the input loop).
 class Throttle {
  public:
   explicit Throttle(int period_ms) : period_(period_ms) {}
@@ -42,8 +32,7 @@ class Throttle {
   std::chrono::steady_clock::time_point last_{};
 };
 
-// How often to ask the page whether our node is still there. Fast enough that a stale belief is
-// corrected within a beat of a reload, slow enough not to be a poll loop.
+// How often to ask the page whether our node is still there.
 inline constexpr int kOverlayReconcileMs = 750;
 
 class PageOverlay {
@@ -56,31 +45,25 @@ class PageOverlay {
   PageOverlay(const PageOverlay&) = delete;
   PageOverlay& operator=(const PageOverlay&) = delete;
 
-  // Render `script_name` and inject it. Returns whether the engine accepted the injection, and only
-  // then records the overlay as painted: caching a FAILED draw would leave a startup or reload
-  // transport blip looking like a successful paint forever after.
+  // Render `script_name` and inject it. Returns whether the engine accepted the injection; only
+  // then is the overlay recorded as painted.
   bool draw(std::string_view script_name, const ScriptParams& params = {});
 
-  // As draw(), for a caller that already rendered its JS through a pure, separately-tested helper
-  // (overlay_js et al.) rather than naming a script here.
+  // As draw(), for JS the caller already rendered.
   bool draw_js(std::string_view js);
 
-  // Inject `hide_script_name` and clear the belief. Idempotent — no round trip when already hidden,
-  // which matters because this is called per button press while a modal overlay is up.
+  // Inject `hide_script_name` and clear the belief. Idempotent: no round trip when already hidden.
   void hide(std::string_view hide_script_name);
 
-  // Our own belief. Written by whichever thread draws, read by the input thread every event, so it
-  // is atomic for the same reason LayerState is: losing the race by one tick is recoverable, taking
-  // a lock on the input hot path is not.
+  // Our own belief. Written by whichever thread draws, read lock-free by the input thread on every
+  // event; a one-tick race is recoverable.
   bool painted() const { return painted_.load(std::memory_order_relaxed); }
 
-  // Set the belief without touching the page. For a caller that learns from elsewhere (the
-  // navigator's reload signal) that the document was replaced.
+  // Set the belief without touching the page (e.g. on a reload signal). Returns whether it changed.
   bool set_painted(bool v) { return painted_.exchange(v, std::memory_order_relaxed) != v; }
 
-  // Throttled `getElementById` probe. True when the page has taken our node away while we believed
-  // it painted — the belief is cleared as this returns. An UNREACHABLE engine is a transport blip,
-  // not a lost overlay, so it changes nothing: only a live reply saying "absent" counts.
+  // Throttled `getElementById` probe. True when the page removed our node while we believed it
+  // painted; the belief is then cleared. An unreachable engine changes nothing.
   bool lost();
 
  private:

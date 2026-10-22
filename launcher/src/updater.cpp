@@ -40,9 +40,8 @@ constexpr const char* kPermNo = "no";
 constexpr const char* kPermUnsetName = "unset";
 constexpr const char* kFlatpakInfoPath = "/.flatpak-info";
 
-// What flatpak-portal reports when it refuses a permission-widening self-update: the encoded
-// G_DBUS_ERROR_NOT_SUPPORTED it raises in transaction_ready(), plus a substring of the untranslated
-// message as a fallback for a portal that ever stops setting the name.
+// flatpak-portal's refusal of a permission-widening update: the encoded G_DBUS_ERROR_NOT_SUPPORTED,
+// plus a substring of the untranslated message as a fallback.
 constexpr std::string_view kNotSupportedError = "org.freedesktop.DBus.Error.NotSupported";
 constexpr std::string_view kPermissionMessageNeedle = "new permissions";
 
@@ -157,9 +156,8 @@ constexpr const char* kPortalPath = "/org/freedesktop/portal/Flatpak";
 constexpr const char* kPortalIface = "org.freedesktop.portal.Flatpak";
 constexpr const char* kMonitorIface = "org.freedesktop.portal.Flatpak.UpdateMonitor";
 
-// The permission store behind flatpak-portal's self-update consent gate. Seeding
-// flatpak/updates=yes is what its own Access dialog would record on "allow" — the dialog Game Mode
-// cannot show (durable/self-update.md).
+// The permission store behind flatpak-portal's self-update consent. flatpak/updates=yes is what its
+// Access dialog would record on "allow".
 constexpr const char* kPermStore = "org.freedesktop.impl.portal.PermissionStore";
 constexpr const char* kPermStorePath = "/org/freedesktop/impl/portal/PermissionStore";
 constexpr const char* kPermTable = "flatpak";
@@ -178,12 +176,9 @@ std::string read_flatpak_app_id() {
   return text ? parse_flatpak_app_id(*text) : std::string();
 }
 
-// Wire format of the portal dicts this scans:
+// Reads the wanted keys of an a{sv} portal dict in one pass (a message can only be read once):
 //   Progress:        {n_ops:u, op:u, progress:u, status:u, error:s, error_message:s}
 //   UpdateAvailable: {running-commit:s, local-commit:s, remote-commit:s}
-//
-// A signal is read once, so every field a caller needs must be collected in this single pass —
-// hence the lists of targets rather than one.
 void scan_dict(sd_bus_message* m, std::initializer_list<std::pair<const char*, uint32_t*>> uints,
                std::initializer_list<std::pair<const char*, std::string*>> strs) {
   if (sd_bus_message_enter_container(m, 'a', "{sv}") < 0) return;
@@ -224,9 +219,7 @@ void scan_dict(sd_bus_message* m, std::initializer_list<std::pair<const char*, u
 }
 
 // Session-bus client for the Flatpak update portal. sd-bus is not thread-safe, so every sd-bus call
-// happens on one owned event-loop thread. A dropped bus or a restarted portal is reconnected with
-// backoff, going inert only after repeated failures (durable/dbus-reconnect.md); every launch
-// re-checks from scratch regardless.
+// happens on one owned event-loop thread. A dropped bus or restarted portal is reconnected.
 class PortalUpdater final : public Updater {
  public:
   explicit PortalUpdater(UpdaterConfig cfg) : cfg_(std::move(cfg)) {
@@ -243,8 +236,7 @@ class PortalUpdater final : public Updater {
 
   ~PortalUpdater() override {
     stop();
-    // Slots hold a ref on the bus, so free them before the bus (durable/dbus-reconnect.md, review
-    // N10).
+    // Slots hold a ref on the bus, so free them before the bus.
     if (slot_avail_) sd_bus_slot_unref(slot_avail_);
     if (slot_progress_) sd_bus_slot_unref(slot_progress_);
     if (slot_owner_) sd_bus_slot_unref(slot_owner_);
@@ -264,8 +256,8 @@ class PortalUpdater final : public Updater {
     if (thread_.joinable()) thread_.join();
   }
 
-  // Thread-safe consent from the UI thread. Set a flag and wake the loop; the loop (never this
-  // caller) issues Update(), so sd_bus_call is never re-entered from outside the event-loop thread.
+  // Sets a flag and wakes the loop, which issues Update(): sd-bus is never touched from the
+  // caller's thread.
   void request_update() override {
     confirm_requested_.store(true, std::memory_order_relaxed);
     nudge();
@@ -415,13 +407,9 @@ class PortalUpdater final : public Updater {
     return true;
   }
 
-  // An explicit host-side "no" wins: the watcher still runs so the refusal is logged, but no
-  // consent is forged over it.
-  // Returns true when consent is DETERMINATE (nothing to retry): not sandboxed, already granted or
-  // denied, or a fresh grant succeeded. Returns false ONLY when a grant was attempted and the call
-  // itself failed (e.g. the permission store was unreachable at bring-up) — a transient error the
-  // caller must NOT latch, so a later reconnect re-seeds instead of leaving auto-deploy silently
-  // un-consented (review SF2).
+  // Pre-grant self-update consent unless the store already says yes or no (an explicit host "no"
+  // wins). Returns true when the outcome is determinate; false only when a grant was attempted and
+  // the call failed, a transient error the caller must not latch so a reconnect re-seeds.
   bool seed_update_permission() {
     const std::string app_id = read_flatpak_app_id();
     if (app_id.empty()) {
@@ -438,8 +426,7 @@ class PortalUpdater final : public Updater {
         return true;
       case UpdatePermission::Unset:
       case UpdatePermission::Ask:
-        // Don't start the second blocking sd_bus_call after a stop() landed (bounds join latency to
-        // one in-flight ~5 s call, review SF3).
+        // Don't start a second blocking call after stop().
         if (!running_.load()) return false;
         if (grant_update_permission(app_id)) {
           info("updater: pre-granted self-update consent (" + std::string(kPermTable) + "/" +
@@ -488,10 +475,9 @@ class PortalUpdater final : public Updater {
     return true;
   }
 
-  // Drop only the UpdateMonitor (its two signal slots + path); keep the bus and the owner-change
-  // match. An in-flight deploy died with the monitor, so clear updating_ — but NOT want_update_: a
-  // latched user "Update now" consent must survive a rebuild (durable/dbus-reconnect.md, review
-  // S5).
+  // Drop only the UpdateMonitor (its signal slots + path), keeping the bus and the owner-change
+  // match. Clears updating_ (the deploy died with the monitor) but NOT want_update_: a latched user
+  // consent must survive a rebuild.
   void teardown_monitor() {
     if (slot_avail_) {
       sd_bus_slot_unref(slot_avail_);
@@ -505,8 +491,7 @@ class PortalUpdater final : public Updater {
     updating_ = false;
   }
 
-  // Drop the whole connection: monitor slots, the owner-change match, then the bus (slots first —
-  // they hold a bus ref, review N10).
+  // Drop the whole connection; slots before the bus.
   void teardown_bus() {
     teardown_monitor();
     if (slot_owner_) {
@@ -519,9 +504,7 @@ class PortalUpdater final : public Updater {
     }
   }
 
-  // Create the UpdateMonitor and subscribe its two signals. Used at bring-up and to rebuild the
-  // monitor after a portal restart (case B). teardown_monitor() first so a rebuild can't leak
-  // slots.
+  // Create the UpdateMonitor and subscribe its signals; also rebuilds it after a portal restart.
   bool establish_monitor() {
     teardown_monitor();
     if (!create_monitor(&monitor_path_)) return false;
@@ -534,11 +517,9 @@ class PortalUpdater final : public Updater {
     return true;
   }
 
-  // Watch for flatpak-portal (re)acquiring its bus name = it restarted, so our monitor object is
-  // orphaned and must be rebuilt (case B). arg0 in the match limits the wakeups to the portal;
-  // sd_bus_match_signal has no arg0 filter, so an explicit match string is required (review S3).
-  // Subscribed AFTER establish_monitor() so the portal's own activation NameOwnerChanged (emitted
-  // while create_monitor() activates it) is not mistaken for a restart.
+  // flatpak-portal (re)acquiring its bus name means it restarted and orphaned our monitor. Needs an
+  // explicit match string: sd_bus_match_signal has no arg0 filter. Subscribe AFTER
+  // establish_monitor() so the portal's own activation is not taken for a restart.
   bool subscribe_portal_owner_changes() {
     if (slot_owner_) return true;
     static constexpr const char* kOwnerMatch =
@@ -547,19 +528,14 @@ class PortalUpdater final : public Updater {
     return sd_bus_add_match(bus_, &slot_owner_, kOwnerMatch, &on_name_owner_changed, this) >= 0;
   }
 
-  // Bring the whole watch up: open the bus, seed consent ONCE per session (reconnects skip it — it
-  // is a blocking call and re-writing the permission store every reconnect is wrong, review C1/S6),
-  // then the monitor and the owner-change match. running_ is re-checked before each blocking step
-  // so a stop() that lands mid-establish is honored promptly (worst case: one in-flight ~5 s
-  // sd_bus_call).
+  // Open the bus, seed consent once per session (reconnects skip it), then the monitor and the
+  // owner-change match. running_ is re-checked before each blocking step so a stop() is honored
+  // within one in-flight call.
   bool establish() {
     if (!running_.load() || !open_bus()) return false;
     if (!seeded_) {
       if (!running_.load()) return false;
-      // Seed consent in every mode: a user-confirmed notify deploy needs the same no-dialog path as
-      // an auto deploy (durable/self-update.md ★ SOLUTION); an explicit host "no" is still
-      // respected. Latch ONLY a determinate outcome so a transient failure re-seeds on reconnect
-      // (SF2).
+      // Seeded in every mode: a confirmed notify deploy needs the same no-dialog path as auto.
       if (seed_update_permission()) seeded_ = true;
     }
     if (!running_.load() || !establish_monitor() || !subscribe_portal_owner_changes()) {
@@ -569,16 +545,14 @@ class PortalUpdater final : public Updater {
     return true;
   }
 
-  // Interruptible backoff: sleep up to ms, but wake at once on a stop() nudge. Returns running_ so
-  // the retry loop exits immediately on stop (review C2 — also what keeps the L0 lifecycle fast).
+  // Sleep up to ms, waking at once on a stop() nudge. Returns running_.
   bool wait_backoff(std::uint64_t ms) {
     wake_.wait(ms);
     return running_.load();
   }
 
-  // establish() with bounded exponential backoff. Success stamps last_connect_ms_; after
-  // kReconnectMaxTries consecutive failures the watcher goes inert until the next launch (the
-  // connect-once floor, just deferred). Returns false on give-up OR a stop().
+  // establish() with exponential backoff until reconnect_should_give_up. Returns false on give-up
+  // or stop().
   bool establish_with_retry() {
     while (running_.load()) {
       if (establish()) {
@@ -604,7 +578,7 @@ class PortalUpdater final : public Updater {
       info("updater: watching for updates to this app via the Flatpak portal");
       loop();
     }
-    running_.store(false);  // uniform post-condition on every loop/give-up exit (review N1)
+    running_.store(false);  // on every exit path
   }
 
   // Drain all pending sd-bus work; false if the connection errored.
@@ -614,18 +588,14 @@ class PortalUpdater final : public Updater {
     reconnect_failures_ = 0;  // a fresh, healthy connection: full retry budget for the first drop
     while (running_.load()) {
       if (!pump_pending()) {
-        // Case A: our session-bus connection dropped. Reconnect instead of going inert until the
-        // next launch (durable/dbus-reconnect.md). A link that stayed up a while earns a fresh
-        // budget; a flapping one keeps its climbing failure count and marches toward give-up
-        // (review S6).
+        // The bus dropped. A link that stayed up kReconnectStableMs earns a fresh retry budget; a
+        // flapping one keeps counting toward give-up.
         const bool was_stable = (mono_ms() - last_connect_ms_) >= kReconnectStableMs;
         warn("updater: session bus error — attempting to reconnect");
         teardown_bus();
         if (was_stable) {
-          reconnect_failures_ = 0;  // a long-lived link earns a fresh retry budget
+          reconnect_failures_ = 0;
         } else if (reconnect_should_give_up(++reconnect_failures_)) {
-          // A link that keeps dropping almost immediately is flapping — count it and, once the
-          // budget is spent, go inert instead of spinning a tight reconnect loop (review SF1).
           warn(
               "updater: the Flatpak portal connection keeps dropping — self-update inactive "
               "until next launch");
@@ -633,15 +603,14 @@ class PortalUpdater final : public Updater {
         } else if (!wait_backoff(reconnect_delay_ms(reconnect_failures_ - 1))) {
           return;  // stop() during the flap backoff
         }
-        if (!establish_with_retry()) return;  // exhausted or stopped -> inert (review S7)
+        if (!establish_with_retry()) return;  // exhausted or stopped -> inert
         info("updater: reconnected to the Flatpak portal — watching again");
         continue;
       }
       if (!running_.load()) break;
       if (reestablish_monitor_) {
-        // Case B: flatpak-portal restarted (NameOwnerChanged), so our monitor object is orphaned.
-        // The bus is fine — rebuild only the monitor. A failed rebuild falls into the reconnect
-        // path.
+        // flatpak-portal restarted: the bus is fine, so rebuild only the monitor; a failed rebuild
+        // reconnects.
         reestablish_monitor_ = false;
         info("updater: flatpak-portal restarted — re-creating the update monitor");
         if (establish_monitor()) {
@@ -653,8 +622,7 @@ class PortalUpdater final : public Updater {
         }
         continue;
       }
-      // A user "Update now" (notify mode) lands here, on the loop thread, so Update() is issued the
-      // same way an auto deploy is — never from the request_update() caller's thread.
+      // Consent from request_update(), acted on here so Update() only runs on the loop thread.
       if (confirm_requested_.exchange(false, std::memory_order_relaxed) && !updating_) {
         want_update_ = true;
       }
@@ -667,9 +635,8 @@ class PortalUpdater final : public Updater {
     }
   }
 
-  // Ask the portal to deploy. Returns false if the Update() call itself was rejected synchronously
-  // (so callers need not wait for a Progress signal that will never arrive); true if it was
-  // accepted and the deploy proceeds in the background, reported later via Progress.
+  // Ask the portal to deploy. False if Update() was rejected synchronously (no Progress will
+  // follow); true if accepted, with the outcome reported later via Progress.
   bool do_update() {
     sd_bus_message* req = nullptr;
     if (sd_bus_message_new_method_call(bus_, &req, kPortal, monitor_path_.c_str(), kMonitorIface,
@@ -687,8 +654,7 @@ class PortalUpdater final : public Updater {
     if (r < 0) {
       const std::string msg = err.message ? err.message : "error";
       warn("updater: Update(): " + msg);
-      // A refused call is a verdict too: no Progress signal will follow it, so without this the
-      // Updates tab would say "Updating…" until the next launch.
+      // A refused call is a terminal verdict: no Progress signal will follow.
       record_terminal(UpdateProgress::Failed, msg);
       if (cfg_.on_terminal) cfg_.on_terminal(UpdateProgress::Failed, err.name ? err.name : "", msg);
       sd_bus_error_free(&err);
@@ -707,10 +673,8 @@ class PortalUpdater final : public Updater {
     show_toast(client, cfg_.toast_text, cfg_.toast_ms);
   }
 
-  // NameOwnerChanged(name, old_owner, new_owner) for the portal. A non-empty new owner = the portal
-  // (re)appeared, i.e. it restarted and our monitor is orphaned. Runs on the loop thread (inside
-  // sd_bus_process), so it only sets a plain flag; the loop rebuilds the monitor — never from here,
-  // to keep sd_bus_call out of sd_bus_process (review N8).
+  // NameOwnerChanged(name, old_owner, new_owner) for the portal: a non-empty new owner means it
+  // restarted. Runs inside sd_bus_process, so it only sets a flag; the loop rebuilds the monitor.
   static int on_name_owner_changed(sd_bus_message* m, void* userdata, sd_bus_error*) {
     auto* self = static_cast<PortalUpdater*>(userdata);
     const char* name = nullptr;
@@ -731,8 +695,7 @@ class PortalUpdater final : public Updater {
     if (self->cfg_.auto_deploy) {
       if (!self->updating_) self->want_update_ = true;  // deploy now (auto mode)
     } else {
-      // notify mode: publish availability for the UI threads; the deploy waits for
-      // request_update().
+      // notify mode: publish availability; the deploy waits for request_update().
       if (self->cfg_.state) self->cfg_.state->set_available(true, short_remote);
       info("updater: notify mode — awaiting user confirmation in Settings ▸ Updates");
     }
@@ -777,8 +740,7 @@ class PortalUpdater final : public Updater {
         break;
     }
     self->record_terminal(p, errmsg);
-    // Notify mode owns every user-visible message (UpdatePromptController). Only fall back to the
-    // updater's own toast when nobody else is listening, or a deploy would announce itself twice.
+    // A set on_terminal owns the user-visible message; otherwise toast a completed deploy here.
     if (self->cfg_.on_terminal)
       self->cfg_.on_terminal(p, errname, errmsg);
     else if (p == UpdateProgress::Done && was_updating)
@@ -786,8 +748,7 @@ class PortalUpdater final : public Updater {
     return 0;
   }
 
-  // Latch the first terminal Progress for the bounded --selftest-deploy loop. Unused by the normal
-  // watcher (loop() never reads these).
+  // Terminal Progress for --selftest-deploy; the normal watcher never reads these.
   void record_terminal(UpdateProgress p, std::string err) {
     deploy_result_ = p;
     deploy_err_ = std::move(err);
@@ -800,8 +761,7 @@ class PortalUpdater final : public Updater {
   sd_bus* bus_ = nullptr;
   sd_bus_slot* slot_avail_ = nullptr;
   sd_bus_slot* slot_progress_ = nullptr;
-  sd_bus_slot* slot_owner_ =
-      nullptr;  // portal NameOwnerChanged match (case B, durable/dbus-reconnect.md)
+  sd_bus_slot* slot_owner_ = nullptr;  // portal NameOwnerChanged match
   std::string monitor_path_;
   WakePipe wake_;  // stop()/request_update() nudge the loop thread
   std::atomic<bool> running_{false};
@@ -809,11 +769,10 @@ class PortalUpdater final : public Updater {
   std::atomic<bool> confirm_requested_{false};  // set by request_update() (UI thread), read by loop
   bool want_update_ = false;
   bool updating_ = false;
-  bool seeded_ = false;  // consent seeded once per session (reconnects skip it)
-  bool reestablish_monitor_ =
-      false;  // set by on_name_owner_changed, acted on in loop() (loop thread)
-  unsigned reconnect_failures_ = 0;  // consecutive failed (re)connects; reset by a stable link
-  long last_connect_ms_ = 0;         // mono_ms() of the last successful establish (stability gate)
+  bool seeded_ = false;               // consent seeded once per session (reconnects skip it)
+  bool reestablish_monitor_ = false;  // set by on_name_owner_changed, handled in loop()
+  unsigned reconnect_failures_ = 0;   // consecutive failed (re)connects; reset by a stable link
+  long last_connect_ms_ = 0;          // mono_ms() of the last successful establish (stability gate)
   bool live_ = false;
   bool deploy_terminal_ = false;
   UpdateProgress deploy_result_ = UpdateProgress::Unknown;

@@ -11,32 +11,25 @@
 
 namespace deckback {
 
-// The host unit scripts/install-idle-nudge.sh installs; without it SteamOS dims and suspends
-// mid-video and nothing in the sandbox can stop it (findings durable/keep-awake.md).
+// Host unit installed by scripts/install-idle-nudge.sh; without it SteamOS dims and suspends
+// mid-video and nothing in the sandbox can prevent that.
 inline constexpr const char* kKeepAwakeUnit = "deckback-idle-nudge.service";
 
-// How we learn whether that unit is alive. Asking systemd directly needs
-// --talk-name=org.freedesktop.systemd1, and ADDING that to the manifest is what broke self-update
-// in v0.0.7 — flatpak-portal refuses any update that widens the sandbox, so every installed user
-// was stranded (findings/durable/self-update.md). The helper instead touches a file in the app's
-// own data dir, which it can already write as the same user and which costs no permission at all.
+// Heartbeat file the helper touches in the app's data dir. Used instead of asking systemd, which
+// would need --talk-name=org.freedesktop.systemd1: flatpak-portal refuses any self-update that
+// widens the sandbox.
 inline constexpr const char* kKeepAwakeHeartbeat = "idle-nudge.alive";
-// The helper refreshes the heartbeat once per poll (25 s, scripts/idle-nudge.py DEFAULT_INTERVAL).
-// Six missed polls before calling it dead: after a resume the file is stale until the helper's next
-// tick, and a false "the helper is not running" toast is worse than a late true one.
+// The helper refreshes the heartbeat every 25 s (scripts/idle-nudge.py). Six missed polls count as
+// dead, because after a resume the file stays stale until the helper's next tick.
 inline constexpr long kKeepAwakeStaleMs = 150'000;
 
-// Absolute path of the heartbeat, under the same $XDG_DATA_HOME/deckback the profile lives in — the
-// Flatpak points that at ~/.var/app/<id>/data, which resolves to the identical path on the host, so
-// both sides name the same file without either knowing about the sandbox.
+// Heartbeat path under $XDG_DATA_HOME/deckback; in the Flatpak that is ~/.var/app/<id>/data, the
+// same file on the host.
 std::string keep_awake_heartbeat_path();
 
-// Pure verdict from one heartbeat observation. `age_ms` is nullopt when the file does not exist.
-//
-// Absent reads as Unknown, never Inactive. A helper installed before heartbeats existed writes
-// nothing, so treating absence as "not running" would warn every existing user that their working
-// helper is dead. The cost is that a genuinely missing helper is not reported until the user
-// re-runs the installer, which is the honest trade: we cannot distinguish the two.
+// Verdict from one heartbeat observation; `age_ms` is nullopt when the file does not exist. Absent
+// reads as Unknown, never Inactive: a helper that writes no heartbeat cannot be told apart from a
+// missing one.
 UnitState decide_keep_awake(std::optional<long> age_ms, long stale_ms = kKeepAwakeStaleMs);
 
 // Default keep-awake probe: decide_keep_awake() over the heartbeat file.
@@ -49,9 +42,8 @@ struct ResumeProbe {
   int timeout_ms = 0;
 };
 
-// What one poll tick observed about the page. Fetched as a single bitmask in one CDP round trip:
-// three separate Runtime.evaluate calls per tick would triple the poll cost and could observe an
-// inconsistent page between them.
+// What one poll tick observed about the page, fetched as one bitmask in a single CDP round trip so
+// the fields are consistent with each other.
 struct PlayState {
   bool playing = false;      // a <video> is actively presenting frames -> hold the idle inhibitor
   bool player_open = false;  // the watch view is up (route + a <video> element)
@@ -62,14 +54,10 @@ struct PlayState {
 // decodes to all-false, which resolves to the Browse layer and no inhibitor — the safe default.
 PlayState decode_play_state(double bitmask);
 
-// Drives the Phase 6 power contract through the DevTools bridge (doc §2 P6):
-//   * a background thread polls the player's play-state and holds/releases the logind idle
-//     inhibitor via Platform so the screen never dims mid-video;
-//   * on_suspend() pauses the video and reads its position (checkpoint) while the delay inhibitor
-//     is still held;
-//   * on_resume() nudges playback back.
-// All engine access goes through one DevToolsClient, which is internally synchronized, so the poll
-// thread and the logind callbacks may call in concurrently.
+// The power contract over CDP: a poll thread holds the logind idle inhibitor while a video plays;
+// on_suspend() pauses and checkpoints while the delay inhibitor is held; on_resume() nudges
+// playback. DevToolsClient is internally synchronized, so the poll thread and the logind callbacks
+// may call in concurrently.
 class PlayerController {
  public:
   PlayerController(Platform& platform, std::string host, int port, int poll_ms,
@@ -101,14 +89,11 @@ class PlayerController {
   // The last state poll_once() observed. Exposed for tests and logging.
   PlayState last_state() const;
 
-  // logind hooks. on_suspend returns the checkpointed position (nullopt if unavailable); on_resume
-  // returns whether the play nudge was accepted. Return values are for tests/logging.
-  //
-  // on_suspend stays synchronous: it must finish while logind's delay lock is held. The resume is
-  // different: on_resume() waits up to resume_probe.timeout_ms for the network, and on the logind
-  // thread that blocked every other bus callback for as long, including the PrepareForSleep(true)
-  // of a quick re-suspend. request_resume() is the logind-thread entry: it hands the resume to the
-  // poll thread and returns at once. A suspend that lands during the wait cancels the nudge.
+  // logind hooks. on_suspend returns the checkpointed position (nullopt if unavailable) and must
+  // finish while logind's delay lock is held. on_resume returns whether the play nudge was accepted
+  // and may wait up to resume_probe.timeout_ms for the network, so the logind thread calls
+  // request_resume() instead: it hands the resume to the poll thread and returns at once. A suspend
+  // during the wait cancels the nudge.
   std::optional<double> on_suspend();
   bool on_resume();
   void request_resume();
@@ -122,9 +107,8 @@ class PlayerController {
   int poll_ms_;
   bool synthetic_fallback_;
   ResumeProbe resume_probe_;
-  // After a suspend at least this long (0 = disabled), reload on resume so stale stream URLs / auth
-  // tokens are refreshed instead of nudging a dead <video>. Duration is measured with
-  // CLOCK_BOOTTIME.
+  // After a suspend at least this long (CLOCK_BOOTTIME; 0 = disabled), reload on resume instead of
+  // nudging, so stale stream URLs / auth tokens are refreshed.
   long reload_after_suspend_ms_ = 0;
   // CLOCK_BOOTTIME at the last on_suspend (0 = none seen). Written on the logind thread, read on
   // the poll thread.
@@ -136,8 +120,7 @@ class PlayerController {
   std::function<UnitState()> keep_awake_probe_;
   bool warned_keep_awake_ = false;
   LayerState* layers_ = nullptr;  // optional context sink for the input layer
-  // Kept as the raw bitmask rather than std::atomic<PlayState>: a 3-byte struct is not lock-free
-  // and would drag in -latomic on GCC for no benefit.
+  // Raw bitmask: std::atomic<PlayState> is not lock-free and would need -latomic on GCC.
   std::atomic<int> state_bits_{0};
 
   WorkerThread worker_;

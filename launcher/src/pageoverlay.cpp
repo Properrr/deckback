@@ -17,15 +17,14 @@ bool PageOverlay::draw_js(std::string_view js) {
 
 void PageOverlay::hide(std::string_view hide_script_name) {
   if (!set_painted(false)) return;  // already hidden: do not spend a round trip per button press
-  // A hide that did not run (engine busy, CDP timeout) leaves the overlay drawn: keep believing it
-  // is painted, or nothing would ever retry and lost() would never probe it again.
+  // A hide that did not run leaves the overlay drawn: keep believing it is painted.
   if (!ScriptLibrary::instance().invoke(client_, hide_script_name)) set_painted(true);
 }
 
 bool PageOverlay::lost() {
   if (!painted()) return false;
   if (!probe_.due()) return false;
-  // The comment marker keeps this expression distinguishable in a CDP trace; it costs nothing.
+  // The comment marker identifies this expression in a CDP trace.
   const std::optional<bool> present =
       client_.eval_bool("/*overlay-state*/!!document.getElementById('" + element_id_ + "')");
   if (!present || *present) return false;  // still there, or the engine did not answer

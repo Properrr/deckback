@@ -4,9 +4,8 @@
 
 namespace deckback {
 
-// D-Bus / logind integration (doc §6, Phase 6). Backed by libsystemd sd-bus when available;
-// compiles to no-op stubs otherwise so the launcher builds on a bare toolchain. The backend runs
-// its own event-loop thread — callbacks fire on that thread, so keep them cheap and thread-aware.
+// logind integration over sd-bus; no-op stubs without libsystemd. Callbacks fire on the backend's
+// own event-loop thread, so keep them cheap and thread-aware.
 class Platform {
  public:
   static std::unique_ptr<Platform> create();
@@ -25,8 +24,7 @@ class Platform {
   // True if a live logind connection was established.
   virtual bool backend_live() const = 0;
 
-  // Live self-test (needs a reachable system bus): confirm the connection + inhibitor path work.
-  // Returns 0 on success. Used by `deckback-launcher --selftest-dbus`.
+  // `--selftest-dbus`: confirm the connection + inhibitor path work. Returns 0 on success.
   virtual int selftest() = 0;
 
   static bool backend_available();

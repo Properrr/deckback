@@ -55,34 +55,26 @@ void Navigator::loop() {
     info("navigator: TV UA override armed");
   }
 
-  // Startup CDP policy, installed before the first navigation so it takes effect on the initial
-  // load. Both are sticky in DevToolsClient (re-armed across Leanback's target teardown).
+  // Startup CDP policy, installed before the first navigation; all sticky in DevToolsClient.
   if (policy_.steer_av1) {
     if (ScriptLibrary::instance().install_sticky(client_, "av1_steering"))
       info("navigator: AV1 codec steering installed (AV1 -> unsupported; VP9/H.264 unaffected)");
   }
   if (policy_.disable_pointer) {
-    // Option A of disable_touch: swallow every pointer/mouse/touch event in the page so a finger
-    // (delivered as synthetic mouse events under gamescope) cannot navigate. Sticky across
-    // Leanback's target teardown, same as the steering script. Option B (gamescope hover) is in
-    // main.cpp.
+    // Swallow every pointer/mouse/touch event so a finger cannot navigate. The gamescope hover
+    // half of disable_touch is in main.cpp.
     if (ScriptLibrary::instance().install_sticky(client_, "no_pointer"))
       info("navigator: touch disabled — page pointer/mouse/touch events swallowed");
   }
   if (policy_.touch_gestures) {
-    // P12.4: the gesture router reads REAL touch events (gamescope mode 4 delivers wl_touch into
-    // Blink — verified on-Deck 2026-07-31) and swallows them, so Leanback cannot double-act. The
-    // launcher polls its queue and dispatches trusted keys (gestures.cpp). Sticky, because a
-    // reload must not leave the panel live-but-unrouted.
+    // The router consumes real touch events (gamescope mode 4) and queues gestures that
+    // gestures.cpp polls and turns into trusted keys.
     if (ScriptLibrary::instance().install_sticky(client_, "touch_gestures"))
       info(
           "navigator: touch gesture router installed (drag/flick, edge-swipe Back, double-tap "
           "seek)");
   }
   if (policy_.hide_cursor) {
-    // Separate from the router deliberately: with no_pointer.js not installed under the gesture
-    // policy, the cursor it used to hide comes back — but this is also one of the two suspects for
-    // touch-gestures.md §7.0, so it has to be droppable on its own, without touching the router.
     if (ScriptLibrary::instance().install_sticky(client_, "hide_cursor"))
       info("navigator: cursor hidden (hide_cursor.js)");
   }
@@ -95,8 +87,7 @@ void Navigator::loop() {
   bool announced = false;
   do {
     if (showing_error_) {
-      // The user asked, or the backoff expired. A retry the user requested resets the backoff: they
-      // presumably just fixed the Wi-Fi, and making them wait 30 s to find out is hostile.
+      // A user-requested retry resets the backoff.
       if (take_retry_request(client_)) {
         info("navigator: retry requested from the error page");
         fail_attempt_ = 0;
@@ -104,10 +95,8 @@ void Navigator::loop() {
       } else if (mono_ms() >= next_retry_ms_) {
         if (try_navigate()) announced = false;
       } else if (client_.eval_bool(kIsErrorPageExpr) == false) {
-        // The engine was restarted (watchdog) or navigated out from under us, so the page we were
-        // waiting on no longer exists — and with it the retry button the user is looking for.
-        // `== false` and not `!`: an unreachable engine answers nullopt, and must not count as
-        // gone.
+        // The error page is gone (engine restarted or navigated away). `== false`, not `!`: an
+        // unreachable engine answers nullopt and must not count as gone.
         info("navigator: error page vanished — re-navigating");
         try_navigate();  // succeeds onto the app, or re-draws the error page
       }
@@ -142,10 +131,8 @@ bool Navigator::try_navigate() {
     return true;
   }
 
-  // A failed navigation. Without this branch the loop would find `document.location.href` still set
-  // to the URL we asked for, conclude the TV app had loaded, and leave the user on Chromium's
-  // desktop error interstitial forever — a page with no focusable control in an app with no
-  // keyboard.
+  // A failed navigation still sets `document.location.href`, so the error state must be entered
+  // here rather than inferred by the loop.
   warn(std::format("navigator: navigation to {} failed: {}", url_, st.error_text));
 
   const long delay = retry_backoff_ms(fail_attempt_, policy_.retry_min_ms, policy_.retry_max_ms);

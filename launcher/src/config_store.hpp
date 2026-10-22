@@ -9,12 +9,10 @@ namespace deckback {
 
 struct Config;
 
-// Sparse user-settings overlay: user.json, the launcher's first config WRITER (configurator-plan
-// C2, osd-menu-plan O4/O10). Only user-changed, allowlisted keys live here. It loads AFTER app.json
-// and overrides those fields, so shipped defaults (UA, cobalt_flags, the R1 hotfix keys) keep
-// flowing through updates; a per-key reset drops the key, and "reset all" deletes the file. Writes
-// are atomic (tmp + fsync + rename). Single-threaded: constructed and used on the launcher's input
-// thread (the OSD's exec()), never concurrently.
+// Sparse user-settings overlay (user.json). Only user-changed, allowlisted keys live here. It loads
+// after app.json and overrides those fields, so shipped defaults keep flowing through updates; a
+// per-key reset drops the key, and "reset all" deletes the file. Writes are atomic (tmp + fsync +
+// rename). Single-threaded: used on the launcher's input thread (the OSD's exec()).
 class ConfigStore {
  public:
   explicit ConfigStore(std::string path);
@@ -44,8 +42,8 @@ class ConfigStore {
   std::vector<json::Member> overlay_;  // key order preserved across rewrites
 };
 
-// Whether `key` may appear in user.json. Defense for R1/remote config: the user channel must not
-// fight the shipped/remote channel over UA, cobalt_flags, url, etc. v1 = the caption settings.
+// Whether `key` may appear in user.json. Shipped-only keys (UA, cobalt_flags, url, ...) are never
+// overlayable.
 bool is_overlayable(std::string_view key);
 
 }  // namespace deckback

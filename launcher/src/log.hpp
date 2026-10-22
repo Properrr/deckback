@@ -6,9 +6,8 @@ namespace deckback {
 
 enum class Level { info, warn, error };
 
-// Configure a size-rotating file sink (doc §2 P2: the launcher owns log rotation). Until this is
-// called, logs go to stderr only — the default scaffolding behavior, and what `--version` /
-// `--selftest-dbus` keep using. Idempotent: a second call reconfigures the sink.
+// Configure a size-rotating file sink. Until this is called, logs go to stderr only. A second call
+// reconfigures the sink.
 //
 //   file_path    absolute path of the active log file (rotated siblings get `.1`, `.2`, … suffixes)
 //   max_bytes    rotate once the active file would exceed this; <=0 disables rotation (unbounded)

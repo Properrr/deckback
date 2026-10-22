@@ -13,15 +13,12 @@
 
 namespace deckback {
 
-// Shared, thread-safe hand-off from the updater thread (which detects an available update) to the
-// input thread (which draws the one-time card + amber pill). Mirrors the relaxed-atomic
-// OverlayState/LayerState pattern. Keyed on the portal's remote ostree commit — the precise dedup
-// key (version labels are cosmetic to the portal, durable/self-update.md).
+// Thread-safe hand-off of "an update is available" from the updater thread to the input thread.
+// Keyed on the portal's short remote ostree commit; version labels are cosmetic to the portal.
 class UpdateState {
  public:
-  // Publish "a newer commit R is available" (updater thread). Dismissal ("ignore this version") is
-  // keyed to the commit via the on-disk dot marker (decide_notification), so a newer commit
-  // naturally re-arms the pill — this state carries only availability + the commit.
+  // Updater thread. Dismissal is not stored here: it is keyed to the commit by an on-disk marker
+  // (decide_notification), so a newer commit re-arms the indicator.
   void set_available(bool available, std::string commit);
   bool available() const { return available_.load(std::memory_order_relaxed); }
   std::string commit() const;  // the short remote commit, mutex-guarded
@@ -32,29 +29,20 @@ class UpdateState {
   std::string commit_;
 };
 
-// Flatpak portal `Progress.status` codes (data/org.freedesktop.portal.Flatpak.xml):
-// 0 Running, 1 Empty (nothing to do), 2 Done, 3 Failed. Pure decoder, always compiled.
+// Flatpak portal `Progress.status` codes: 0 Running, 1 Empty (nothing to do), 2 Done, 3 Failed.
 enum class UpdateProgress { Running, Empty, Done, Failed, Unknown };
 UpdateProgress decode_progress_status(std::uint32_t status);
 
-// True when a Failed Progress means "the new build asks for a permission the installed one lacks".
-//
-// flatpak-portal refuses such an update outright — transaction_ready() ->
-// flatpak_context_adds_permissions() -> G_DBUS_ERROR_NOT_SUPPORTED — and no retry, consent or
-// override from inside the sandbox can change that; the user must update once from the host. It is
-// the only deploy failure with a different remedy, so it gets told apart and named. v0.0.7 hit it
-// and, because nothing distinguished it, every 0.0.6 user simply saw "updating…" and stayed put.
-//
-// Keyed on the D-Bus error name (emit_progress's `error`, from g_dbus_error_encode_gerror), because
-// the message is passed through gettext and is not English on every host; the message substring is
-// only a fallback. Pure, always compiled.
+// True when a Failed Progress means the new build asks for a permission the installed one lacks.
+// flatpak-portal always refuses such an update (G_DBUS_ERROR_NOT_SUPPORTED); only an update run
+// from the host can install it. Keyed on the D-Bus error name because the message is translated;
+// the message substring is a fallback.
 bool is_permission_change_failure(std::string_view error_name, std::string_view error_message);
 
-// flatpak-portal gates a self-update deploy on the permission store (table "flatpak", id
-// "updates"): "yes" deploys silently, anything else routes through an Access-portal consent dialog
-// that Game Mode cannot show (durable/self-update.md ★ T1 RESULT). Mirrors flatpak's
-// get_update_permission(): only the first element counts, "yes"/"ask" match exactly, any other
-// value is No, no entry is Unset. Pure decoder, always compiled.
+// flatpak-portal's self-update consent in the permission store (table "flatpak", id "updates"):
+// "yes" deploys silently; anything else needs an Access-portal dialog that Game Mode cannot show.
+// Mirrors flatpak's get_update_permission(): only the first element counts, "yes"/"ask" match
+// exactly, any other value is No, no entry is Unset.
 enum class UpdatePermission { Unset, Ask, Yes, No };
 UpdatePermission decode_update_permission(const std::vector<std::string>& perms);
 const char* update_permission_name(UpdatePermission p);
@@ -66,66 +54,42 @@ std::string parse_flatpak_info_value(const std::string& text, std::string_view s
 // App id from /.flatpak-info text (`[Application]` section, `name=` key); empty when not sandboxed.
 std::string parse_flatpak_app_id(const std::string& text);
 // The ostree commit this process was started from (`[Instance] app-commit` in /.flatpak-info), or
-// "" outside the sandbox. It is the RUNNING commit: a deploy staged during this session does not
-// change it until the next launch.
+// "" outside the sandbox. A deploy staged during this session does not change it.
 std::string read_running_commit();
 
-// Commits are keyed by their first 12 hex digits everywhere the UI sees them: the dedup markers
-// (update_card_shown_v1 / update_dot_dismissed_v1) store this form, so every source of "commit X is
-// available" must shorten the same way or one commit would read as two.
+// Commits are keyed by their first 12 hex digits wherever the UI and the dedup markers see them;
+// every source must shorten the same way or one commit would read as two.
 inline constexpr std::size_t kShortCommitLen = 12;
 inline std::string short_commit(std::string_view commit) {
   return std::string(commit.substr(0, kShortCommitLen));
 }
 
-// Session-bus reconnect backoff (durable/dbus-reconnect.md): reconnect_delay_ms and
-// reconnect_should_give_up live in busloop.hpp, shared with the platform's system-bus loop. When
-// the updater's connection drops mid-session, or flatpak-portal restarts and orphans the monitor,
-// the loop re-establishes instead of going inert until relaunch.
-
-// Self-update through the Flatpak portal (`org.freedesktop.portal.Flatpak`'s UpdateMonitor).
-//
-// A sandboxed app cannot run `flatpak update`; instead it asks the portal to update the app on its
-// behalf. Only this app's own ref is updated, from its own `--user` `deckback` remote — no root, no
-// polkit prompt, and nothing else the user installed is touched. Because Game Mode has no
-// Access-portal backend for flatpak-portal's consent dialog, an enabled updater records the consent
-// itself (permission store, flatpak/updates=yes) before watching; an explicit host-side "no" is
-// respected. The new ostree commit is deployed without swapping the running deployment, so playback
-// is not interrupted; it binds on the next launch, when a "restart to apply" toast is shown if a
-// CDP port is available.
-//
-// Backed by libsystemd sd-bus on the session bus; a no-op stub without libsystemd.
 struct UpdaterConfig {
-  // The Updater is constructed only in `notify`/`auto` (never `off`), so being constructed already
-  // means "enabled". `auto_deploy` distinguishes the two: true deploys on detection (auto), false
-  // only publishes availability and waits for request_update() (notify).
+  // true (auto): deploy on detection. false (notify): only publish availability and wait for
+  // request_update(). In `off` mode no Updater is constructed.
   bool auto_deploy = false;
-  // Where the updater publishes "an update is available" for the UI threads. Non-owning; must
-  // outlive the Updater. Null in `auto`-only builds/tests that don't wire the notify UI.
+  // Receives availability for the UI threads. Not owned; must outlive the Updater. May be null.
   UpdateState* state = nullptr;
-  // Only for the "restart to apply" toast; cdp_port <= 0 disables the toast (the update still
-  // deploys). Host/port match the engine's --remote-debugging-port (loopback).
+  // For the "restart to apply" toast only; cdp_port <= 0 disables it (the update still deploys).
   std::string cdp_host = "127.0.0.1";
   int cdp_port = 0;
   std::string toast_text = "Deckback update installed \xE2\x80\x94 restart to apply.";
   int toast_ms = 8000;
-  // Terminal deploy verdict (Done/Empty/Failed), with the portal's D-Bus error name and message on
-  // a failure. Called on the updater's own loop thread, so an implementation must only hand the
-  // result to whichever thread owns the UI — never draw from here.
-  //
-  // Set in notify mode, where UpdatePromptController owns every user-visible message. When it is
-  // null (auto mode) the updater falls back to its own "restart to apply" toast, so a deploy is
-  // still announced. Before this existed the ONLY record of a failure was a journal line, and the
-  // user got an unconditional success toast either way.
+  // Terminal deploy verdict (Done/Empty/Failed) with the portal's D-Bus error name and message.
+  // Called on the updater's loop thread: hand the result to the UI thread, never draw from here.
+  // When null, the updater shows its own "restart to apply" toast after a deploy.
   std::function<void(UpdateProgress, std::string error_name, std::string error_message)>
       on_terminal;
-  // Every Running Progress of a deploy: operation `op` (0-based) of `n_ops`, at `percent` (0–100)
-  // of that operation (flatpak-portal: 0–99 while running, 100 once the operation is done). Same
-  // thread rules as on_terminal. A runtime or GL-driver bump can be hundreds of MB, so this is what
-  // tells the user the deploy is alive.
+  // Each Running Progress: operation `op` (0-based) of `n_ops`, at `percent` (0–100, 100 once the
+  // operation is done). Same thread rules as on_terminal.
   std::function<void(std::uint32_t op, std::uint32_t n_ops, std::uint32_t percent)> on_running{};
 };
 
+// Self-update through the Flatpak portal's UpdateMonitor (session bus via sd-bus; a no-op stub
+// without libsystemd). Updates only this app's own ref from its `--user` remote, with no root.
+// Game Mode cannot show the portal's consent dialog, so the updater records the consent itself
+// (flatpak/updates=yes) unless the host explicitly says "no". A deployed commit binds on the next
+// launch. A dropped bus or restarted portal is reconnected with backoff (busloop.hpp).
 class Updater {
  public:
   static std::unique_ptr<Updater> create(UpdaterConfig cfg);
@@ -137,29 +101,22 @@ class Updater {
   // Signal + join the event-loop thread. Idempotent.
   virtual void stop() = 0;
 
-  // Consent to deploy the currently-available update (notify mode): thread-safe, called from the UI
-  // thread when the user chooses "Update now". The deploy happens on the updater's own loop thread
-  // (never reentrantly), exactly as an `auto` deploy would. No-op in the stub / if nothing pending.
+  // Notify mode: consent to deploy the available update. Thread-safe; the deploy runs on the
+  // updater's loop thread. No-op in the stub or with nothing pending.
   virtual void request_update() = 0;
 
-  // True if a live session-bus connection was established (the portal itself is probed by
-  // selftest).
+  // True if a session-bus connection was established (does not probe the portal).
   virtual bool backend_live() const = 0;
 
-  // Live self-test (needs the portal on the session bus, i.e. run inside the Flatpak): create a
-  // monitor and report whether the portal answered. Returns 0 on success. `--selftest-update`.
+  // `--selftest-update` (run inside the Flatpak): create a monitor and report whether the portal
+  // answered. Returns 0 on success.
   virtual int selftest() = 0;
 
-  // Diagnostic (`--selftest-deploy`): drive one portal Update cycle to a terminal Progress and
-  // report it, on one persistent connection (UpdateMonitor signals are unicast to the creating
-  // connection, so a transient dbus-send/gdbus can't observe them). `seed` false reflects the raw
-  // permission store (reproduces the Game-Mode "No portal support found" blocker); `seed` true
-  // pre-grants consent first. Exit: 0 Done · 2 Empty · 3 Failed · 1 setup/timeout.
+  // `--selftest-deploy`: drive one portal Update cycle to a terminal Progress on one connection
+  // (UpdateMonitor signals are unicast to the creating connection). `seed` pre-grants consent
+  // first; false uses the raw permission store.
+  // Exit: 0 Done · 2 Empty · 3 Failed · 1 setup/timeout.
   virtual int selftest_deploy(bool seed) = 0;
-
-  // NOTE: the `--selftest-watch` sim driver is deliberately NOT a method here — it only needs the
-  // public start()/stop() below, so it lives outside this interface in simwatch.cpp to keep the
-  // simulator surface isolated from the shipping updater (findings/durable/test-sim.md).
 
   static bool backend_available();
 };

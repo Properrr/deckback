@@ -8,7 +8,7 @@
 namespace deckback {
 namespace {
 
-constexpr long kDownloadTimeoutSec = 120;  // a CDM is megabytes, on whatever Wi-Fi the user has
+constexpr long kDownloadTimeoutSec = 120;  // a CDM is several megabytes
 
 }  // namespace
 
@@ -19,12 +19,9 @@ std::string CdmFetcher::installed_path(const std::string& profile_dir) {
 }
 
 bool CdmFetcher::usable_cdm_path(const std::string& path) {
-  // `starts_with` rather than `front() != '/'`: it is total, so the empty string falls out for
-  // free. The `path.empty()` guard it replaces was unkillable by any test — `front()` on an empty
-  // string is UB that happens to return '\0' — and a check no test can fail is not a check.
+  // `starts_with` is total, so the empty string is rejected here too.
   if (!path.starts_with('/')) return false;
-  // `..` anywhere in the path, as a whole component. "a/../b" is rejected; "a..b" and "..x" are not
-  // path traversal and are perfectly legal directory names.
+  // Reject `..` as a whole component only: "a/../b" fails; "a..b" and "..x" are legal names.
   size_t start = 0;
   while (start <= path.size()) {
     size_t end = path.find('/', start);
@@ -74,16 +71,14 @@ bool CdmFetcher::ensure_installed(const std::string& profile_dir, const CdmConfi
       info("cdm: Widevine CDM present (" + dest + "; no cdm_sha256 to verify it against)");
       return true;
     case Installed::Mismatch:
-      // A pinned CDM that no longer matches was truncated by an interrupted install from before
-      // installs were atomic, or the pin moved to a new CDM. Either way, fetch the pinned one.
+      // Truncated, or the pin moved to a new CDM: fetch the pinned one.
       warn("cdm: installed CDM does not match cdm_sha256 — fetching the pinned one");
       break;
     case Installed::Missing:
       break;
   }
-  // What a failed fetch leaves us with. The old file stays in place (the install is atomic), and a
-  // pin that moved must not strand a CDM that was working until the user edited app.json; a
-  // truncated one fails to load in the engine, exactly as it did before.
+  // On a failed fetch a mismatched CDM is still used: the atomic install leaves it in place, and a
+  // moved pin must not strand a working CDM.
   const bool fallback = have == Installed::Mismatch;
 
   if (cfg.url.empty()) {
@@ -91,8 +86,7 @@ bool CdmFetcher::ensure_installed(const std::string& profile_dir, const CdmConfi
       warn("cdm: no cdm_url to fetch the pinned CDM from — using the installed one as it is");
       return true;
     }
-    // No opt-in URL: we must not fetch or bundle Google's CDM ourselves (docs/legal.md). Tell the
-    // user how to enable it and make clear free YouTube still works.
+    // No opt-in URL: we must never fetch or bundle Google's CDM ourselves (docs/legal.md).
     info(
         "cdm: no Widevine CDM installed and no cdm_url configured — DRM/paid content will be "
         "unavailable; free YouTube is unaffected. Set cdm_url + cdm_sha256 in app.json to fetch "

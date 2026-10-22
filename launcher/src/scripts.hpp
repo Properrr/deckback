@@ -9,26 +9,17 @@ namespace deckback {
 
 class DevToolsClient;
 
-// ---- page-side scripts (findings durable/page-scripts.md) ---------------------------------------
+// ---- page-side scripts --------------------------------------------------------------------------
 //
-// Every behaviour the launcher injects into youtube.com/tv is authored as a real .js file in
-// config/scripts/ and reached through this one registry, instead of being hand-built as a C++
-// string literal at each call site. Two problems that used to recur are solved centrally here:
+// Every script injected into youtube.com/tv is a .js file in config/scripts/, embedded at build
+// time and optionally shadowed at runtime by a same-named file in the scripts dir. Parameters are
+// JSON-encoded through ScriptParams, so no call site builds JS text by hand.
 //
-//   * escaping — parameters are JSON-encoded through ONE escaper (ScriptParams), so no call site
-//     concatenates JS by hand and gets the quoting subtly wrong;
-//   * hot-swap — a script embedded at build time can be shadowed at runtime by a same-named .js in
-//     the scripts dir, giving injected behaviours the same ship-a-fix-without-a-rebuild surface
-//     app.json already has (doc §6, the R1 hotfix posture).
-//
-// Convention: each script file is a single PARENTHESISED FUNCTION EXPRESSION `(function(p){ ...
-// })`. `render()` appends the params object, so the script receives its arguments as one object `p`
-// and the call site never builds JS text. A no-arg script still takes `p` (it ignores it) and is
-// invoked with `{}`. Keeping the file a valid standalone expression means it lints and can be
-// exercised on its own.
+// Convention: a one-shot script is a single parenthesised function expression `(function(p){...})`;
+// `render()` appends the params object (`{}` when there are none). Sticky scripts differ: see
+// install_sticky().
 
-// A JSON object literal builder for a script's `p` argument. Numbers/bools/strings/arrays are
-// encoded once, here, so escaping is not re-invented per feature.
+// A JSON object literal builder for a script's `p` argument; every value is escaped here.
 class ScriptParams {
  public:
   ScriptParams& set(std::string_view key, long value);
@@ -37,9 +28,7 @@ class ScriptParams {
   ScriptParams& set(std::string_view key, bool value);
   ScriptParams& set(std::string_view key, std::string_view value);                 // JSON string
   ScriptParams& set(std::string_view key, const std::vector<std::string>& value);  // JSON string[]
-  // JSON array of 2-element arrays, [["k1","v1"],...] — each string escaped ONCE. For structured
-  // rows (e.g. the controls card's control/action pairs) that must not be pre-escaped by the
-  // caller.
+  // JSON array of 2-element arrays, [["k1","v1"],...]; the caller must not pre-escape.
   ScriptParams& set(std::string_view key,
                     const std::vector<std::pair<std::string, std::string>>& value);
   ScriptParams& set_raw(std::string_view key, std::string_view js_expr);  // unescaped, verbatim
@@ -51,15 +40,14 @@ class ScriptParams {
   std::string body_;  // comma-joined "key":value pairs, no braces
 };
 
-// Process-wide registry of the page scripts. One instance (a singleton), initialised to the
-// embedded defaults on first use and optionally pointed at a runtime override dir in main().
+// Process-wide registry of the page scripts, initialised to the embedded defaults on first use.
 class ScriptLibrary {
  public:
   static ScriptLibrary& instance();  // thread-safe first-use init to the embedded defaults
 
-  // Shadow embedded defaults with same-named .js files found in `dir` (each <name>.js overrides the
-  // default of that name). Call ONCE in main() before any worker thread starts — after that the
-  // library is read-only and safely shared across threads. An absent/empty dir is a no-op.
+  // Shadow embedded defaults with same-named <name>.js files in `dir`. Call ONCE in main() before
+  // any worker thread starts; afterwards the library is read-only and thread-safe. An absent/empty
+  // dir is a no-op.
   void load_overrides(const std::string& dir);
 
   // The (possibly overridden) body of `name`, or "" if there is no such script.
@@ -71,8 +59,8 @@ class ScriptLibrary {
   // eval_void(render(name, params)). false if the script is unknown or the engine rejected it.
   bool invoke(DevToolsClient& client, std::string_view name, const ScriptParams& params = {}) const;
 
-  // add_script_on_new_document(render(name)) — for scripts that must run on every document
-  // (Page.addScriptToEvaluateOnNewDocument). false if unknown or the engine rejected it.
+  // add_script_on_new_document(body(name)), verbatim with no params: sticky scripts are
+  // self-invoking `(function(){...})();`. false if unknown or the engine rejected it.
   bool install_sticky(DevToolsClient& client, std::string_view name) const;
 
  private:

@@ -42,7 +42,6 @@ namespace {
 
 using namespace deckback;
 
-// Compiled in from the repo VERSION file (launcher/CMakeLists.txt → version.hpp).
 std::string version_line() { return std::string("deckback-launcher ") + kDeckbackVersion; }
 
 void on_signal(int) { Watchdog::request_shutdown(); }
@@ -52,17 +51,13 @@ std::string env_or(const char* key, std::string fallback) {
   return v ? std::string(v) : std::move(fallback);
 }
 
-// UpdateMonitor only reports positive availability, so the OSD must present each configured policy
-// directly instead of treating an absent signal as proof that the installed version is latest.
+// Idle Updates-tab text for each policy. UpdateMonitor only reports positive availability, so none
+// of these may claim the installed version is the latest.
 std::string update_policy_status(SelfUpdateMode mode) {
   switch (mode) {
     case SelfUpdateMode::Off:
       return "Updates are off. Update Deckback in Discover or run flatpak update.";
     case SelfUpdateMode::Notify:
-      // NOT "no update is available" — that was a claim the app had never earned. This is what the
-      // tab says until the launch probe answers (it then says "latest" itself) or when the probe
-      // could not read the repo; the portal never announces the absence of an update. A user who
-      // restarted expecting the update they had just approved read "no update" as proof it landed.
       return "No update announced yet. Deckback checks at launch and about every half hour — or "
              "check now.";
     case SelfUpdateMode::Auto:
@@ -71,8 +66,8 @@ std::string update_policy_status(SelfUpdateMode mode) {
   return "Update status is not available.";
 }
 
-// The published ref the update probe reads (TASKS U4): the commit `flatpak update` would move to on
-// the official remote. DECKBACK_UPDATE_REF_URL points a staging test at another repo.
+// The published ref the update probe reads: the commit `flatpak update` would move to on the
+// official remote. DECKBACK_UPDATE_REF_URL overrides it.
 constexpr std::string_view kUpdateRefUrl =
     "https://properrr.github.io/deckback/repo/refs/heads/app/io.github.properrr.deckback/x86_64/"
     "master";
@@ -95,8 +90,7 @@ bool acquire_single_instance_lock(const std::string& runtime_dir) {
   return true;  // fd intentionally leaked: lock lives as long as the process
 }
 
-// Where small persistent launcher state lives (the first-run marker). Deliberately NOT the Chromium
-// profile: that directory is Chromium's to manage, and `just install`'s reset path may wipe it.
+// Small persistent launcher state (markers). Not the Chromium profile, which a reset may wipe.
 std::string resolve_state_dir(const std::string& runtime_dir) {
   if (const char* v = std::getenv("XDG_STATE_HOME"); v && *v) return std::string(v) + "/deckback";
   if (const char* v = std::getenv("HOME"); v && *v)
@@ -104,18 +98,16 @@ std::string resolve_state_dir(const std::string& runtime_dir) {
   return runtime_dir + "/deckback";
 }
 
-// Where the sparse user-settings overlay (user.json, written by the OSD) lives. XDG_CONFIG_HOME,
-// then ~/.config, else the state dir. In the Flatpak XDG_CONFIG_HOME points at the durable
-// ~/.var/app/<id>/config, so a user's caption settings survive updates.
+// Dir of the user.json settings overlay: XDG_CONFIG_HOME, then ~/.config, else the state dir.
 std::string resolve_config_dir(const std::string& runtime_dir) {
   if (const char* v = std::getenv("XDG_CONFIG_HOME"); v && *v) return std::string(v) + "/deckback";
   if (const char* v = std::getenv("HOME"); v && *v) return std::string(v) + "/.config/deckback";
   return resolve_state_dir(runtime_dir);
 }
 
-// The SteamOS system language (Settings ▸ System ▸ Language sets LANG), for the caption "system"
-// pseudo-language. POSIX precedence, skipping the "no localization" C/POSIX values SteamOS ships in
-// LC_ALL alongside a real LANG; LANGUAGE is a colon-list, so take its first entry.
+// The system language (SteamOS sets LANG) for the caption "system" pseudo-language. POSIX
+// precedence, skipping C/POSIX values (SteamOS ships one in LC_ALL alongside a real LANG); LANGUAGE
+// is a colon-list, so its first entry is used.
 std::string system_language() {
   for (const char* var : {"LANGUAGE", "LC_ALL", "LC_MESSAGES", "LANG"}) {
     const char* v = std::getenv(var);
@@ -128,18 +120,16 @@ std::string system_language() {
   return {};
 }
 
-// Resolve the log directory: explicit config wins, then $DECKBACK_LOG_DIR, else `logs/` under the
-// state dir (XDG_STATE_HOME / ~/.local/state / the runtime dir, in that order).
+// Log directory: explicit config wins, then $DECKBACK_LOG_DIR, else `logs/` under the state dir.
 std::string resolve_log_dir(const std::string& cfg_dir, const std::string& runtime_dir) {
   if (!cfg_dir.empty()) return cfg_dir;
   if (const char* v = std::getenv("DECKBACK_LOG_DIR"); v && *v) return v;
   return resolve_state_dir(runtime_dir) + "/logs";
 }
 
-// Resolve the Chromium profile dir. Must be PERSISTENT so sign-in survives reboot/updates (doc §6
-// P1): $DECKBACK_PROFILE wins, then $XDG_DATA_HOME/deckback/profile (which Flatpak points at the
-// durable ~/.var/app/<id>/data), then ~/.local/share/deckback/profile. The runtime dir is a last
-// resort only — XDG_RUNTIME_DIR is a tmpfs wiped on logout, so a profile there loses the login.
+// Persistent Chromium profile dir, so sign-in survives reboots and updates: $DECKBACK_PROFILE, then
+// $XDG_DATA_HOME/deckback/profile, then ~/.local/share/deckback/profile. The runtime dir (a tmpfs
+// wiped on logout) is a last resort.
 std::string resolve_profile_dir(const std::string& runtime_dir) {
   if (const char* v = std::getenv("DECKBACK_PROFILE"); v && *v) return v;
   if (const char* v = std::getenv("XDG_DATA_HOME"); v && *v)
@@ -152,7 +142,7 @@ std::string resolve_profile_dir(const std::string& runtime_dir) {
   return runtime_dir + "/deckback-profile";
 }
 
-// Turn an `app://` deep-link arg into a Leanback URL fragment (doc §6 P2).
+// Turn an `app://<video-id>` deep link into a Leanback URL fragment.
 std::string apply_deep_link(std::string base_url, const std::string& deep_link) {
   constexpr std::string_view kPrefix = "app://";
   if (deep_link.starts_with(kPrefix)) {
@@ -242,8 +232,6 @@ int main(int argc, char** argv) {
     } else if (a.starts_with("app://")) {
       deep_link = a;
     } else {
-      // Previously any unrecognised argument — including --help — fell through here and the app
-      // launched anyway. Launching YouTube because someone asked for usage is a bad surprise.
       error(std::format("unknown argument '{}'", a));
       print_usage();
       return 2;
@@ -266,13 +254,10 @@ int main(int argc, char** argv) {
     info(std::string("selftest-deploy: backend ") +
          (Updater::backend_available() ? "libsystemd" : "stub (no libsystemd)") +
          (selftest_deploy_seed ? " — seeding consent first" : " — RAW permission (not seeded)"));
-    // selftest_deploy drives one portal Update cycle explicitly; auto_deploy/state are irrelevant
-    // to it (it uses the `seed` argument), so a default config is correct here.
     return Updater::create(UpdaterConfig{})->selftest_deploy(selftest_deploy_seed);
   }
 
   if (selftest_watch) {
-    // The sim reconnect driver lives in simwatch.cpp (isolated from the shipping updater).
     return run_selftest_watch(selftest_watch_secs);
   }
 
@@ -299,11 +284,9 @@ int main(int argc, char** argv) {
   log_init(log_dir + "/deckback.log", cfg->log_max_bytes, cfg->log_max_files, cfg->log_to_stderr);
   info(version_line());
 
-  // Page-script runtime overrides (findings durable/page-scripts.md). Same ship-a-fix-without-a-
-  // rebuild surface as app.json: a same-named .js in the scripts dir shadows the embedded default.
-  // Loaded here — before any worker thread starts — so the registry is read-only once shared. The
-  // dir defaults to <config dir>/scripts, co-located with app.json, and DECKBACK_SCRIPTS_DIR
-  // overrides.
+  // Page-script overrides: a same-named .js in the scripts dir (default <config dir>/scripts,
+  // DECKBACK_SCRIPTS_DIR overrides) shadows the embedded default. Loaded before any worker thread
+  // starts, so the registry is read-only once shared.
   {
     std::string scripts_dir = env_or("DECKBACK_SCRIPTS_DIR", "");
     if (scripts_dir.empty()) {
@@ -329,8 +312,8 @@ int main(int argc, char** argv) {
   // thread reads it. Declared here so it outlives both.
   LayerState layers;
 
-  // Phase 6: the DevTools bridge drives suspend/resume and the play-state idle inhibitor. It needs
-  // Cobalt's remote-debugging port; without it we fall back to logging-only hooks.
+  // The DevTools bridge drives suspend/resume and the idle inhibitor; it needs the engine's
+  // remote-debugging port, otherwise the hooks only log.
   std::optional<PlayerController> player;
   if (cfg->remote_debugging_port > 0) {
     player.emplace(
@@ -352,33 +335,24 @@ int main(int argc, char** argv) {
   const std::string profile_dir = resolve_profile_dir(runtime_dir);
   migrate_legacy_profile(profile_dir, runtime_dir);
   info("startup: profile dir " + profile_dir);
-  // Best-effort Widevine CDM; free YouTube unaffected if absent. Opt-in fetch via
-  // cdm_url/cdm_sha256.
+  // Best-effort, opt-in Widevine CDM (cdm_url/cdm_sha256); unencrypted YouTube plays without it.
   const bool cdm_ready =
       CdmFetcher::ensure_installed(profile_dir, CdmConfig{cfg->cdm_url, cfg->cdm_sha256});
 
   const std::string cobalt_bin = env_or("DECKBACK_COBALT_BIN", "./content_shell");
   const std::string url = apply_deep_link(cfg->url, deep_link);
 
-  // content_shell ignores --user-agent (hardcodes Chrome/999) and takes the start URL positionally.
-  // Handing it the app URL directly would load it once with that default UA -> YouTube desktop
-  // redirect. So when we can drive CDP we boot on about:blank and let the Navigator inject the TV
-  // UA and navigate; only without a debugging port do we fall back to the positional URL (wrong
-  // UA).
+  // content_shell ignores --user-agent and takes the start URL positionally, so with CDP we boot on
+  // about:blank and the Navigator injects the TV UA and navigates. Without a debugging port the
+  // positional URL loads with the wrong UA (desktop redirect).
   const bool cdp_nav = cfg->remote_debugging_port > 0;
   std::vector<std::string> args;
-  // content_shell/cobalt-shell's data-dir switch is --data-path (kContentShellDataPath);
-  // --user-data-dir is a chrome/-layer switch the shell silently ignores (m114.md corrections).
+  // The shell's data-dir switch is --data-path; it silently ignores --user-data-dir.
   args.push_back("--data-path=" + profile_dir);
   if (cdp_nav)
     args.push_back(std::format("--remote-debugging-port={}", cfg->remote_debugging_port));
-  // P7. The engine registers a CDM only when handed one: `patches/0001-…-widevine-cdm-registration`
-  // adds the `AddContentDecryptionModules` override that upstream content_shell lacks, and it reads
-  // this switch. Passed ONLY when a CDM is actually installed — pointing the engine at a path that
-  // does not exist buys a `LOG(ERROR)` on every launch and no Widevine either way.
-  //
-  // Nothing about the CDM is shipped by us; it is user-fetched and hash-verified (docs/legal.md).
-  // Unencrypted YouTube plays with or without it.
+  // Read by the Widevine registration patch. Passed only when a CDM is installed: a missing path
+  // just logs an error on every launch. The CDM is user-fetched and hash-verified, never shipped.
   if (cdm_ready) {
     const std::string cdm_path = CdmFetcher::installed_path(profile_dir);
     if (CdmFetcher::usable_cdm_path(cdm_path))
@@ -389,35 +363,25 @@ int main(int argc, char** argv) {
            "DECKBACK_PROFILE to an absolute path.");
   }
   for (const auto& f : cfg->cobalt_flags) args.push_back(f);
-  // Dev/bring-up passthrough for flags we don't want baked into the shipped config (e.g.
-  // --no-sandbox before zypak lands in Phase 8). Whitespace-separated; empty when unset.
+  // Dev passthrough for engine flags not in the shipped config; whitespace-separated.
   if (const char* extra = std::getenv("DECKBACK_EXTRA_ARGS"); extra && *extra)
     for (std::string& a : split_whitespace(extra)) args.push_back(std::move(a));
   args.push_back(cdp_nav ? "about:blank" : url);
 
-  // First-run controls card (findings input-ux §17). Drawn once the TV app has actually loaded —
-  // there is no document to draw on before that. After dismissal, Menu opens Settings instead.
-  //
-  // Declared BEFORE the navigator and the gamepad: the navigator's thread captures it by reference
-  // and the input thread holds a pointer to it, so it must outlive both. Both are stopped
-  // explicitly below, but relying on that rather than on declaration order is a use-after-free
-  // waiting for someone to add an early return.
+  // First-run controls card, drawn once the TV app has loaded. Declared BEFORE the navigator and
+  // gamepad, whose threads borrow it, so it outlives both even on an early return.
   std::optional<OnboardingController> onboarding;
-  // Self-update (findings durable/self-update.md). Declared before the navigator and gamepad so it
-  // outlives the two threads that borrow update_prompt; the updater owns its own thread, stopped
-  // first in the shutdown sequence below. update_state is the thread-safe hand-off the updater
-  // writes and the notify UI reads.
+  // Self-update, also declared before the navigator and gamepad, which borrow update_prompt. The
+  // updater owns its thread and is stopped first at shutdown. update_state is the hand-off from the
+  // updater to the notify UI.
   UpdateState update_state;
   std::unique_ptr<Updater> updater;
   std::optional<UpdatePromptController> update_prompt;
   std::optional<OsdMenuController> osd;
   std::optional<Navigator> navigator;
   std::optional<GamepadInput> gamepad;
-  // The touch lock and the gesture router are opposites and cannot both hold. Resolved HERE, once,
-  // rather than in each of the three places that consume the answer: no_pointer.js swallows touch
-  // before the router can see it, and the two want opposite gamescope touch modes (0 hover vs 4
-  // passthrough). A config asking for both is a user error with a silent symptom — a dead
-  // touchscreen — so it is reported and the safer of the two (the lock) wins.
+  // touch_gestures and disable_touch are mutually exclusive: no_pointer.js swallows the touches the
+  // router reads, and they want opposite gamescope touch modes. Resolved once here; the lock wins.
   bool gestures_on = cfg->touch_gestures;
   if (gestures_on && cfg->disable_touch) {
     warn(
@@ -432,14 +396,11 @@ int main(int argc, char** argv) {
                        OverlayContext{cfg->keymap, cfg->right_stick_scroll, gestures_on},
                        first_run_marker_path(resolve_state_dir(runtime_dir)));
   }
-  // In-app OSD Settings menu (osd-menu-plan.md): the single settings surface, always available off
-  // playback. Constructed whenever CDP is up, independent of self-update. The update callbacks
-  // route to update_prompt, which is emplaced below and feeds the OSD Updates tab.
+  // In-app OSD Settings menu, whenever CDP is up. The update callbacks route to update_prompt,
+  // which is emplaced below.
   if (cdp_nav) {
-    // Ordered: checkpoint BEFORE the shutdown request, or "your place is saved" is a lie.
-    // request_shutdown() is the only path the watchdog scores as success rather than a crash to
-    // restart, so this must never just kill the child. Runs on the input thread; DevToolsClient is
-    // internally synchronized and request_shutdown() is async-signal-safe.
+    // Checkpoint BEFORE the shutdown request. request_shutdown() is the only exit the watchdog
+    // treats as success rather than a crash to restart. Runs on the input thread.
     const auto graceful_exit = [&player](const char* why) {
       if (player) player->on_suspend();
       info(why);
@@ -469,25 +430,21 @@ int main(int argc, char** argv) {
               graceful_exit("exit: closing so the staged update applies on relaunch");
             },
         .on_exit = [graceful_exit] { graceful_exit("exit: user confirmed — shutting down"); }});
-    // "Check for updates" is wired through the notify-mode prompt, so offer it only there: in auto
-    // mode the button had no handler behind it.
+    // "Check for updates" is handled by the notify-mode prompt, so it is offered only there.
     osd->set_update_model(false, cfg->self_update_mode == SelfUpdateMode::Notify, false,
                           update_policy_status(cfg->self_update_mode), "");
   }
 
-  // Self-update. Detection (portal UpdateMonitor) runs in notify + auto; 'off' never constructs the
-  // updater. auto_deploy distinguishes them: auto deploys on detection, notify only publishes
-  // availability into update_state and waits for the user's "Update now" via update_prompt.
+  // Self-update: auto deploys on detection; notify publishes availability to update_state and waits
+  // for "Update now" via update_prompt.
   if (cfg->self_update_mode != SelfUpdateMode::Off) {
     UpdaterConfig uc;
     uc.auto_deploy = cfg->self_update_mode == SelfUpdateMode::Auto;
     uc.state = &update_state;
     uc.cdp_port = cdp_nav ? cfg->remote_debugging_port : 0;
-    // Set ONLY when the notify prompt below exists: a non-null handler suppresses the updater's own
-    // "restart to apply" toast, so setting it unconditionally left auto mode announcing nothing.
-    // Runs on the updater's loop thread. update_prompt is emplaced below and updater->start() is
-    // called after it, and shutdown stops the updater first, so the reference is live for every
-    // call.
+    // Only when the notify prompt exists: a non-null on_terminal suppresses the updater's own
+    // "restart to apply" toast. Runs on the updater's loop thread; the updater starts after
+    // update_prompt is emplaced and stops first at shutdown, so the reference stays live.
     if (cfg->self_update_mode == SelfUpdateMode::Notify && cdp_nav) {
       uc.on_terminal = [&update_prompt](UpdateProgress p, std::string name, std::string msg) {
         if (update_prompt) update_prompt->on_deploy_result(p, name, msg);
@@ -507,8 +464,7 @@ int main(int argc, char** argv) {
                             .state = &update_state,
                             .updater = updater.get(),
                             .osd = osd ? &*osd : nullptr};
-      // The ref probe (U4). Outside the sandbox there is no running commit, so a workstation run
-      // keeps the portal-only behaviour.
+      // Outside the sandbox there is no running commit, so the ref probe is off.
       pc.running_commit = read_running_commit();
       if (pc.running_commit.empty())
         info("update: no running commit (not sandboxed) — Check for updates uses the portal");
@@ -516,9 +472,8 @@ int main(int argc, char** argv) {
         return http_get(url, kUpdateRefTimeoutSec, "deckback-updater/1");
       };
       update_prompt.emplace(std::move(pc));
-      // Test aid: force the notify UI (dot + one-time card + changelog) without waiting for the
-      // portal's ~30-min poll. DECKBACK_FAKE_UPDATE=<any-commit-string> publishes availability at
-      // launch. Confirming the update still routes through the real portal deploy.
+      // Test aid: DECKBACK_FAKE_UPDATE=<commit> publishes availability at launch. Confirming still
+      // runs the real portal deploy.
       if (const char* fake = std::getenv("DECKBACK_FAKE_UPDATE"); fake && *fake) {
         update_state.set_available(true, fake);
         warn(std::string("startup: DECKBACK_FAKE_UPDATE set — simulating an available update (") +
@@ -531,8 +486,8 @@ int main(int argc, char** argv) {
         "startup: self_update off — update via 'flatpak update'/Discover (durable/self-update.md)");
   }
 
-  // P12.4. Declared before the Navigator so the input layer can be handed a stable pointer, and
-  // started after it so the router does not poll a page that has no script in it yet.
+  // Declared before the Navigator so the input layer gets a stable pointer; started after it so the
+  // router does not poll a page that has no script in it yet.
   std::optional<GestureRouter> gestures;
   if (cdp_nav && gestures_on) {
     GestureRouterConfig gc;
@@ -563,15 +518,13 @@ int main(int argc, char** argv) {
     if (onboarding || osd)
       navigator->set_on_app_loaded([&onboarding, &osd] {
         if (onboarding) onboarding->show(/*first_run_only=*/true);
-        // Redraw the Settings button and re-inject the menu (if open) after a full reload tore down
-        // documentElement — else a navigation strands the menu and traps input (osd-menu-plan.md).
+        // After a full reload, redraw the Settings button and re-inject the menu if open, or the
+        // menu is stranded and traps input.
         if (osd) osd->on_page_reloaded();
       });
     navigator->start();
-    // Phase 3 input: gamepad evdev -> DOM key events over CDP (S0.6 mechanism), bindings from
-    // config/app.json:keymap so a Leanback change can be hotfixed without a rebuild. `layers`
-    // carries the context (browse/player/osk) the player poll observed; it is only live when
-    // `player` exists.
+    // Gamepad evdev -> DOM key events over CDP, bindings from the config keymaps. `layers` is only
+    // live when `player` exists.
     GamepadOptions gp;
     gp.keymap = KeymapConfig{cfg->keymap, cfg->keymap_player, cfg->keymap_osk, cfg->keymap_lt,
                              cfg->keymap_rt};
@@ -599,17 +552,14 @@ int main(int argc, char** argv) {
         "will load with its default UA (desktop redirect likely)");
   }
 
-  // Option B of disable_touch: hold gamescope's touch mode at hover while our window is focused, so
-  // a stray finger cannot even generate a click at the compositor. Independent of CDP — the
-  // page-side swallow (Option A, in the Navigator) needs remote debugging; this does not.
+  // disable_touch: hold gamescope's touch mode at hover while our window is focused, so a finger
+  // cannot generate a click at the compositor. Unlike the page-side swallow, this needs no CDP.
   std::optional<TouchModeGuard> touch_mode;
   if (cfg->disable_touch) {
     touch_mode.emplace();
     touch_mode->start();
   } else if (gestures_on) {
-    // The same guard, holding the opposite mode: 4 (passthrough) is the only one that delivers real
-    // wl_touch to Blink, which is what the router reads. Modes 1-3 synthesize a mouse button and 0
-    // emits only motion (touchmode.hpp).
+    // Mode 4 (passthrough) is the only one that delivers real wl_touch, which the router reads.
     touch_mode.emplace(750, TouchMode::kPassthrough);
     touch_mode->start();
   }

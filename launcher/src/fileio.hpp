@@ -5,48 +5,35 @@
 
 namespace deckback {
 
-// Small filesystem primitives. Each of these existed three to five times over — `read_file` alone
-// was open-coded as `ifstream` + `ostringstream` + `rdbuf()` in config.cpp, config_store.cpp,
-// about.cpp, scripts.cpp and updater.cpp, and the mkdir-then-write pair in onboarding.cpp,
-// updateprompt.cpp and cdm_fetcher.cpp (the last with its own hand-rolled parent-directory loop).
-// Copies of a five-line helper drift in what they do on failure, which is the only interesting
-// part.
+// Small filesystem primitives.
 
 // Whole file as bytes. nullopt when it cannot be opened. Binary — no newline translation.
 std::optional<std::string> read_file(const std::string& path);
 
 // Create `path`'s parent directories, then write `bytes`, truncating. Returns whether the file is
-// fully on disk. Never throws; a read-only or unwritable destination is a normal outcome here (the
-// state dir may be read-only), so callers warn and carry on rather than treating it as fatal.
+// fully on disk. Never throws; an unwritable destination is a normal, non-fatal outcome.
 bool write_file(const std::string& path, std::string_view bytes);
 
-// write_file, but the bytes land at `path` all at once or not at all: written to `path + ".part"`,
-// fsync'd, then renamed over `path`. For files a reader would trust merely because they exist — a
-// CDM half-written by a crash or a full disk otherwise read as installed forever.
+// write_file, but all-or-nothing: written to `path + ".part"`, fsync'd, then renamed over `path`.
+// For files a reader trusts merely because they exist.
 bool write_file_atomic(const std::string& path, std::string_view bytes);
 
 // True when `path` exists and is a regular file (not a directory or a dangling symlink).
 bool file_exists(const std::string& path);
 
-// Milliseconds since `path` was last modified, or nullopt when it does not exist / cannot be
-// stat'ed. Wall-clock based (the mtime is compared against CLOCK_REALTIME), because the writer is a
-// different process on the host side and only the real clock is shared between them. A file stamped
-// in the future reads as age 0 rather than a negative age.
+// Milliseconds since `path` was last modified, or nullopt when it cannot be stat'ed. Compared
+// against CLOCK_REALTIME, since the writer may be another process. A future mtime reads as 0.
 std::optional<long> file_age_ms(const std::string& path);
 
 // ---- state markers ------------------------------------------------------------------------------
 //
-// The launcher records three one-line facts across restarts: the first-run card was shown, the
-// update card was shown, this update commit was ignored. They are separate files rather than one
-// state blob so a partial write can only lose one of them, and each filename is versioned by its
-// caller so bumping the version re-shows that UI once.
+// One-line facts persisted across restarts, one file each so a partial write loses only one.
 
 // The single trimmed line in `path`, or "" if absent/unreadable/empty.
 std::string read_marker(const std::string& path);
 
-// Write `value` plus a newline. On failure logs `what_breaks` (phrased as the user-visible
-// consequence, e.g. "the controls card will show again") and returns false — a marker that cannot
-// be written must never crash the launcher or nag on every launch.
+// Write `value` plus a newline. On failure logs `what_breaks` (the user-visible consequence, e.g.
+// "the controls card will show again") and returns false.
 bool write_marker(const std::string& path, std::string_view value, std::string_view what_breaks);
 
 }  // namespace deckback

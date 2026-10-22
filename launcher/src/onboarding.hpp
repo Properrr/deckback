@@ -9,38 +9,21 @@
 
 namespace deckback {
 
-// First-run controls overlay (findings input-ux §7; doc P3).
-//
-// This app's controls are unguessable from Leanback's own UI — `View (⧉)` toggles captions and
-// Menu opens Settings, neither of which YouTube advertises — and `docs/SUPPORT.md` and
-// `install.sh` are invisible from Game Mode. Every console app and every Deck-Verified title shows
-// a one-shot controls card for exactly this reason.
-//
-// The overlay is **derived from the live keymap, never hardcoded.** `config/app.json` is designed
-// to be hot-swapped remotely (doc §6 R1), so a card that says "View = Captions" while the config
-// rebound View would be teaching the user something false — and a controls card nobody can trust is
-// worse than none, because they will stop reading it. For the same reason a control that resolves
-// to
-// **no** key is omitted rather than listed: showing a binding that does nothing is the dead-button
-// failure again (see voice, input-ux §13).
-
-// ---- pure helpers (no CDP) — unit-tested in tests/onboarding_test.cpp
-// ----------------------------
+// First-run controls overlay. The rows are derived from the live keymap, never hardcoded; a control
+// that resolves to no key is omitted.
 
 struct ControlRow {
   std::string control;  // "A", "View (⧉)", "L3 + R3" — what is printed on the hardware
   std::string action;   // "Select", "Captions" — what it does, in the user's words
 };
 
-// Everything the card needs to know about the running configuration. Sourced from the same values
-// the input layer resolves, so the two cannot disagree.
+// Everything the card needs to know about the running configuration, sourced from the same values
+// the input layer resolves.
 struct OverlayContext {
   std::vector<std::pair<std::string, std::string>> keymap;  // app.json `keymap`, in written order
   bool right_stick_scroll = true;
-  // Whether the touch gesture router is actually running. The gesture rows are listed only then:
-  // teaching a user to swipe when touch is inert is worse than not mentioning touch at all, and
-  // this is the resolved state (main() may have kept the lock over a config asking for both), not
-  // the raw config flag.
+  // Whether the touch gesture router is actually running (the resolved state, not the raw config
+  // flag). The gesture rows are listed only then.
   bool touch_gestures = false;
 };
 
@@ -52,9 +35,8 @@ std::vector<ControlRow> controls_overlay_rows(const OverlayContext& ctx);
 // "" for a name no Deck control has.
 std::string control_label(std::string_view name);
 
-// A semantic action or DOM key -> human text ("playpause" -> "Play / pause"). A raw DOM key that we
-// have no phrase for is returned as-is: a user who hot-swapped `"a": "MediaTrackNext"` is better
-// served by seeing `MediaTrackNext` than by seeing nothing.
+// A semantic action or DOM key -> human text ("playpause" -> "Play / pause"). A raw DOM key with no
+// phrase is returned as-is.
 std::string action_label(std::string_view value);
 
 // The DOM id config/scripts/overlay.js assigns to the card. Also the handle PageOverlay probes to
@@ -72,8 +54,6 @@ std::string first_run_marker_path(std::string_view state_dir);
 bool first_run_pending(const std::string& marker_path);
 bool mark_first_run_done(const std::string& marker_path);
 
-// ---- the controller ----------------------------------------------------------------------------
-
 class OnboardingController {
  public:
   OnboardingController(std::string host, int port, OverlayContext ctx, std::string marker_path);
@@ -84,13 +64,11 @@ class OnboardingController {
   void hide();
 
   // Is the card on screen? Read by the input thread on every event: while it is up the card is
-  // modal, so this gates swallowing the event and pinning the D-pad.
+  // modal.
   bool visible() const { return card_.painted(); }
 
-  // Per input-tick health check. The card is drawn into Leanback's document, and a reload deletes
-  // it without telling us — which used to leave `visible()` true forever after, eating the user's
-  // next button press to dismiss a card that was no longer there and freezing the D-pad until they
-  // pressed one. Throttled; a no-op when the card is down.
+  // Per input-tick health check: notices a page reload deleting the card, so `visible()` turns
+  // false. Throttled; a no-op when the card is down.
   void tick();
 
  private:

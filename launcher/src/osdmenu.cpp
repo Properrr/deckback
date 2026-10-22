@@ -13,12 +13,9 @@ std::string osd_status_line(std::string_view local_version, std::string_view ava
                             bool has_update) {
   if (!available_version.empty())
     return std::format("v{} is available. You have v{}.", available_version, local_version);
-  // An update is known (the portal saw a newer commit) but its version/changelog hasn't arrived yet
-  // — the GitHub fetch is independent of availability and can lag or fail. Never claim "latest"
-  // while the buttons still offer "Update now".
+  // Update known, version not fetched yet: never claim "latest" while offering "Update now".
   if (has_update) return std::format("A newer version is available. You have v{}.", local_version);
-  // UpdateMonitor publishes only positive availability. A false bit means it has not observed an
-  // update, not that it has completed a "you're current" check, so it cannot honestly say latest.
+  // A false bit means "no update observed", not "checked and current".
   return "Update status is not available.";
 }
 
@@ -125,10 +122,8 @@ void OsdMenuController::close_menu() {
 std::string OsdMenuController::exec(std::string_view cmd) {
   const std::optional<std::string> reply =
       eval_op(client_, ScriptParams().set("op", std::string_view("cmd")).set("cmd", cmd));
-  // No answer (a CDP timeout, a dropped socket) says nothing about the menu, which is most likely
-  // still painted. Reading it as "gone" released capture under a visible menu, so the next keys
-  // drove Leanback behind it. Keep capture and let reconcile_open() ask the page on its next tick:
-  // a reload that really took the menu away answers "gone" there.
+  // No answer says nothing about the menu, which is most likely still painted: keep capture and
+  // let reconcile_open() ask the page.
   if (!reply) return std::string(kOsdUnreachable);
   const std::string& v = *reply;
   const OsdVerdict pv = parse_verdict(v);
@@ -140,9 +135,7 @@ std::string OsdMenuController::exec(std::string_view cmd) {
       close_menu();
       break;
     case OsdVerdict::Kind::Action:
-      // "Check for updates" is a QUERY, so the menu stays up and its answer (which lands under a
-      // second later) patches the panel in place. Closing here was the whole bug: the verdict
-      // arrived with nothing on screen to receive it, so the button looked inert.
+      // "Check for updates" is a query: the menu stays up and the answer patches it in place.
       if (pv.action == "update.check") {
         if (cfg_.on_update_check) cfg_.on_update_check();
         break;
@@ -178,9 +171,7 @@ void OsdMenuController::tick(bool on_watch) {
   }
 
   if (open_.load(std::memory_order_acquire)) {
-    // The menu is allowed to stay up over playback (Menu opens it there, and Exit is most wanted
-    // mid-video), so a video appearing underneath no longer closes it. Capture is modal, so a video
-    // can only arrive from autoplay/up-next, never from the user driving Leanback behind the menu.
+    // The menu may stay up over playback; a video appearing underneath does not close it.
     reconcile_open();  // enforce capture <=> paint: the menu we capture for must still be painted
   } else if (just_reloaded) {
     // Not captured, but a reload can leave a keep-alive'd node painted with no owner — keys would
@@ -189,8 +180,7 @@ void OsdMenuController::tick(bool on_watch) {
   }
 
   const bool want = !on_watch;
-  // PageOverlay::lost() is the reconcile: the Navigator only announces a non-app -> app transition,
-  // so a same-URL reload leaves it announced while documentElement (and the button) is gone.
+  // lost() catches a same-URL reload, which wipes the button without any Navigator signal.
   if (want) button_.lost();
   if (want && (!button_.painted() || badge_dirty_))
     draw_button();
@@ -199,8 +189,7 @@ void OsdMenuController::tick(bool on_watch) {
 }
 
 void OsdMenuController::reconcile_open() {
-  // Throttled: the input loop can tick every few ms while a direction auto-repeats, but this is a
-  // health check, not per-frame work.
+  // Throttled: the input loop can tick every few ms during auto-repeat.
   if (!menu_probe_.due()) return;
 
   const std::string js =
@@ -209,9 +198,7 @@ void OsdMenuController::reconcile_open() {
   const std::optional<std::string> st = client_.eval_string(js);
   if (!st) return;            // engine unreachable: a transport blip, not a lost menu — retry later
   if (*st != "gone") return;  // a live state string, or 'detached' (keep-alive re-appends): ours
-  // The page was reloaded out from under the captured menu (JS context wiped, so no keep-alive can
-  // bring it back). Release capture so input is never trapped behind an absent menu. The paint is
-  // already gone with the old document, so this restores capture <=> paint.
+  // The page reloaded under the captured menu: release capture so input is not trapped.
   open_.store(false, std::memory_order_release);
 }
 
@@ -221,8 +208,7 @@ void OsdMenuController::draw_button() {
     std::lock_guard lk(model_mu_);
     has_update = has_update_;
   }
-  // PageOverlay::draw does not cache a failed draw, so a startup/reload transport blip retries on
-  // the next input tick instead of pinning the button as present.
+  // A failed draw is not cached, so it retries on the next tick.
   if (button_.draw(
           "osd_button",
           ScriptParams().set("label", std::string_view("Settings")).set("badge", has_update)))
@@ -245,7 +231,7 @@ void OsdMenuController::set_update_model(bool has_update, bool can_check, bool c
   model_dirty_.store(true, std::memory_order_release);
 }
 
-// Patch an already-open menu with the current model. Same input-thread client as every other op.
+// Patch an already-open menu with the current model (input thread).
 void OsdMenuController::push_update_model() {
   bool has_update, can_check, can_quit;
   std::string status;
@@ -274,10 +260,7 @@ bool OsdMenuController::update_available() const {
 }
 
 void OsdMenuController::on_page_reloaded() {
-  // Just flag it; the input-thread tick() is the single owner of open_ and the OSD's CDP client and
-  // reconciles capture <=> paint from there. The old code re-injected here on a second CDP client
-  // (racing the input thread) AND only ran when the navigator saw a not-app -> app transition, so a
-  // same-URL reload — the common case — silently left the menu captured with nothing painted.
+  // Only flag it: the input-thread tick() owns open_ and the CDP client.
   reloaded_.store(true, std::memory_order_release);
 }
 

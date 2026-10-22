@@ -14,9 +14,7 @@ std::string classify_net_error(std::string_view error_text) {
   if (error_text.empty()) return {};
   auto has = [&](std::string_view n) { return error_text.find(n) != std::string_view::npos; };
 
-  // Only errors we can say something *useful* about. Everything else gets the generic hint: a wrong
-  // instruction ("check your Wi-Fi" for an expired certificate) is worse than an honest vague one,
-  // because the user will follow it.
+  // Only errors with a useful, correct instruction; everything else gets the generic hint.
   if (has("ERR_INTERNET_DISCONNECTED") || has("ERR_NETWORK_CHANGED") ||
       has("ERR_ADDRESS_UNREACHABLE"))
     return "This Steam Deck isn't connected to a network.";
@@ -36,16 +34,10 @@ std::string classify_net_error(std::string_view error_text) {
 
 long retry_backoff_ms(int attempt, long min_ms, long max_ms) {
   if (min_ms < 250) min_ms = 250;  // never spin the navigator against a dead network
-  // Two clamps that look necessary and are not, so they are absent rather than decorative:
-  //   * `max_ms < min_ms` — `delay` starts at min_ms and the loop needs `delay < max_ms`, so an
-  //     inverted range simply never doubles and returns min_ms, which is what a clamp would give.
-  //   * `attempt < 0` — the loop never runs, and returns min_ms.
+  // An inverted range or a negative `attempt` never enters the loop and returns min_ms.
   long delay = min_ms;
   for (int i = 0; i < attempt && delay < max_ms; ++i) {
-    // Cap *before* doubling, not after. `delay *= 2` on a delay past max_ms/2 can overflow when
-    // max_ms is itself near LONG_MAX — signed overflow is UB, and the plausible outcome is a
-    // negative delay, i.e. an immediate retry: a busy loop that also re-navigates every iteration.
-    // This also makes a post-loop cap unnecessary, since `delay` can never exceed max_ms here.
+    // Cap before doubling so `delay *= 2` cannot overflow when max_ms is near LONG_MAX.
     if (delay > max_ms / 2) return max_ms;
     delay *= 2;
   }
@@ -53,10 +45,8 @@ long retry_backoff_ms(int attempt, long min_ms, long max_ms) {
 }
 
 std::string error_page_js(const ErrorPageInfo& info) {
-  // The page markup, style, and Trusted Types policy now live in config/scripts/error_page.js
-  // (ScriptLibrary); title/hint/url/detail are JSON string params, escaped once by ScriptParams —
-  // this call site no longer hand-escapes JS. Enter/Space retry; Escape is deliberately unbound.
-  // The script's policy falls back to the raw string on about:blank, which has no Trusted Types.
+  // config/scripts/error_page.js carries its own Trusted Types policy, which falls back to the raw
+  // string on about:blank. Enter/Space retry; Escape is deliberately unbound.
   return ScriptLibrary::instance().render("error_page", ScriptParams()
                                                             .set("title", info.title)
                                                             .set("hint", info.hint)
@@ -65,8 +55,7 @@ std::string error_page_js(const ErrorPageInfo& info) {
 }
 
 bool show_error_page(DevToolsClient& client, const ErrorPageInfo& info) {
-  // about:blank always commits, so unlike a bundled file:// page this cannot itself fail with the
-  // very error we are trying to report.
+  // about:blank always commits, so it cannot fail with the error being reported.
   if (!client.navigate("about:blank")) return false;
   return client.eval_void(error_page_js(info));
 }

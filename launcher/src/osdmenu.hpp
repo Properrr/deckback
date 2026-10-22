@@ -18,13 +18,12 @@ namespace deckback {
 
 class CaptionSettings;
 
-// In-app OSD Settings menu (findings osd-menu-plan.md). Focus/tab/scroll state lives in
-// config/scripts/osd.js; this owns open/close, the top-right Settings button, playback gating, and
-// the C++<->JS command bridge. Invariant: capture <=> paint — exec() returning "gone" clears open_;
-// an unanswered command (kOsdUnreachable) does not, because it proves nothing about the paint.
+// In-app OSD Settings menu. Focus/tab/scroll state lives in config/scripts/osd.js; this owns
+// open/close, the top-right Settings button, playback gating, and the C++<->JS command bridge.
+// Invariant: capture <=> paint — exec() returning "gone" clears open_; an unanswered command
+// (kOsdUnreachable) does not, because it proves nothing about the paint.
 
-// The DOM id config/scripts/osd_button.js assigns. Shared with PageOverlay's presence probe, so the
-// drawn node and the node we look for cannot drift apart.
+// The DOM id config/scripts/osd_button.js assigns; also used by PageOverlay's presence probe.
 inline constexpr const char* kOsdButtonElementId = "__deckback_settings_btn";
 
 // ---- pure helpers (unit-tested in osdmenu_test.cpp) ----
@@ -32,10 +31,8 @@ inline constexpr const char* kOsdButtonElementId = "__deckback_settings_btn";
 std::string osd_status_line(std::string_view local_version, std::string_view available_version,
                             bool has_update);
 
-// Updates-tab actions. `has_update` offers the deploy pair; `can_check` offers a manual check —
-// UpdateMonitor only announces availability on its own ~30 min poll, so without this the tab is
-// inert for the first half hour of every session and a user has no way to ask. `can_quit` offers
-// Close now once an update is staged: it binds on the next launch.
+// Updates-tab actions. `has_update` offers the deploy pair; `can_check` offers a manual check;
+// `can_quit` offers Close now once an update is staged (it applies on the next launch).
 std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_update, bool can_check,
                                                                     bool can_quit);
 
@@ -43,10 +40,10 @@ std::vector<std::pair<std::string, std::string>> osd_update_buttons(bool has_upd
 inline constexpr std::string_view kOsdUnreachable = "unreachable";
 
 struct OsdVerdict {
-  // Apply = a settings change to persist WITHOUT closing the menu (the Captions sub-tab); Action =
-  // a one-shot that closes (the Updates buttons); Hold = A landed on a hold-to-confirm control (the
-  // Exit row), which acts only once the caller's hold deadline elapses. Unreachable = no answer:
-  // the menu's state is unknown, so capture is kept and the reconcile tick decides.
+  // Apply = a settings change to persist WITHOUT closing the menu (Captions); Action = a one-shot
+  // that closes (Updates buttons); Hold = A landed on a hold-to-confirm control (Exit), which acts
+  // once the caller's hold deadline elapses. Unreachable = no answer: capture is kept and the
+  // reconcile tick decides.
   enum class Kind { Consumed, Close, Action, Apply, Hold, Gone, Unreachable } kind = Kind::Consumed;
   std::string action;
 };
@@ -60,20 +57,17 @@ struct OsdMenuConfig {
   std::string local_version;
   OverlayContext overlay;  // live keymap -> Keys rows; const after ctor
   AboutInfo about;         // About tab content (from the AppStream metainfo)
-  // Captions sub-tab: read at open (osd_model_json) and mutated on each edit (apply_action). Not
-  // owned; null hides the sub-tab. Same object the input layer's View toggle reads, so an OSD edit
-  // takes effect on the next press with no restart.
+  // Captions sub-tab: read at open and mutated on each edit. Not owned; null hides the sub-tab.
+  // Shared with the input layer, so an edit takes effect on the next press.
   CaptionSettings* captions = nullptr;
   std::function<void()> on_update_confirm;
   std::function<void()> on_update_ignore;
   std::function<void()> on_update_check;
-  // Close now (a staged update). Null hides nothing but leaves the button inert, so wire it with
-  // the same graceful exit as on_exit.
+  // Close now (a staged update). Null leaves the button inert; wire it like on_exit.
   std::function<void()> on_update_quit;
   // Fired when the Exit row's hold completes. Null leaves the row inert.
   std::function<void()> on_exit;
-  // How long A must be held on the Exit row. Also drives the fill animation, so the bar and the
-  // launcher's deadline cannot drift apart.
+  // How long A must be held on the Exit row; also drives the fill animation.
   int exit_hold_ms = 600;
   bool exit_enabled = true;
 };
@@ -104,9 +98,8 @@ class OsdMenuController {
   // Per input-tick with the raw watch signal (LayerState::video_up).
   void tick(bool on_watch);
 
-  // Thread-safe: feed the Updates tab + button badge. `status` is supplied by the update-policy
-  // owner rather than inferred from `has_update`: false means either "no update" or "not checked",
-  // and the OSD must never turn that ambiguity into a false "latest" claim.
+  // Thread-safe: feed the Updates tab + button badge. `status` is supplied, not inferred from
+  // `has_update`, whose false means either "no update" or "not checked".
   void set_update_model(bool has_update, bool can_check, bool can_quit, std::string_view status,
                         std::string_view notes);
   bool update_available() const;
@@ -131,18 +124,14 @@ class OsdMenuController {
   std::atomic<bool> open_{false};
   std::atomic<bool> reloaded_{false};
 
-  // The top-right Settings button. PageOverlay owns the "is it still painted?" probe: the Navigator
-  // only announces a non-app -> app transition, so a same-URL reload (the common wake path) wipes
-  // documentElement without any signal, and a local flag alone would pin the button gone forever.
+  // The top-right Settings button. PageOverlay re-checks presence, since a same-URL reload wipes
+  // the DOM without any signal.
   PageOverlay button_;
   bool badge_dirty_ = true;
-  // A model change that an OPEN menu has not been shown yet. The menu is otherwise a snapshot taken
-  // at open, so a verdict arriving mid-session would only appear on the next open — which for a
-  // "Check for updates" press is never, because the answer arrives a moment after the press.
+  // A model change not yet pushed to the open menu (otherwise a snapshot taken at open).
   std::atomic<bool> model_dirty_{false};
 
-  // The menu's own liveness question is richer than element presence (the keep-alive re-appends a
-  // detached node), so it asks the script for its state — but on the same schedule.
+  // Paces the menu liveness probe, which asks osd.js for its state rather than checking presence.
   Throttle menu_probe_{kOverlayReconcileMs};
 
   mutable std::mutex model_mu_;

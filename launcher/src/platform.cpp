@@ -55,16 +55,13 @@ constexpr const char* kSystemdUnit = "org.freedesktop.systemd1.Unit";
 // GetUnit's error for a unit that is not loaded — a real "not installed", not a failure to ask.
 constexpr const char* kNoSuchUnit = "org.freedesktop.systemd1.NoSuchUnit";
 
-// Implements the Phase 6 power contract against logind:
-//   * a "sleep"/delay inhibitor is held so on_suspend runs before the system sleeps;
-//   * an "idle"/block inhibitor is held while the player is playing so the screen never dims.
-// All sd-bus calls happen on a single owned event-loop thread (sd-bus is not thread-safe); other
-// threads request idle-inhibit changes via an atomic + the wake pipe.
+// The power contract against logind: a "sleep" delay inhibitor so on_suspend runs before sleep, and
+// an "idle" block inhibitor while playing. All sd-bus calls happen on one owned event-loop thread
+// (sd-bus is not thread-safe); other threads request idle changes via an atomic + the wake pipe.
 //
-// A dropped system-bus connection is reconnected with the updater's backoff (busloop.hpp). It used
-// to warn once a second forever with power integration dead. The inhibitor fds are logind FIFOs
-// that outlive our bus connection, so a reconnect re-subscribes PrepareForSleep and re-takes only a
-// lock that is not held.
+// A dropped system bus is reconnected with backoff (busloop.hpp). The inhibitor fds are logind
+// FIFOs that outlive the bus connection, so a reconnect re-subscribes PrepareForSleep and re-takes
+// only a lock that is not held.
 class SdBusPlatform final : public Platform {
  public:
   SdBusPlatform() {
@@ -188,17 +185,12 @@ class SdBusPlatform final : public Platform {
     return owned;
   }
 
-  // Hold an "idle" block inhibitor while a video plays. On the Deck this is otherwise harmless
-  // (logind's idle action does nothing under gamescope), but its "Deckback: playback active" reason
-  // is the signal the host-side idle-nudge helper gates on (scripts/idle-nudge.py).
+  // Hold an "idle" block inhibitor while a video plays. logind's idle action does nothing under
+  // gamescope, but the "Deckback: playback active" reason is what the host-side idle-nudge helper
+  // gates on (scripts/idle-nudge.py).
   //
-  // We deliberately do NOT hold a "sleep" block. Preventing Steam Game Mode's auto-suspend is the
-  // idle-nudge helper's job: it resets gamescope's input-idle timer with a *real* synthetic input,
-  // which also keeps the screen on AND leaves a deliberate power-button sleep working. A
-  // launcher-side "sleep" block only ever blocked suspend indiscriminately — including the power
-  // button mid-playback — for no benefit the helper doesn't cover better. (History: a sleep-block
-  // shipped briefly on 2026-07-11, then was retired once the on-Deck test showed gamescope ignores
-  // sandbox-emulated input for idle, forcing the host helper anyway — see docs/SUPPORT.md.)
+  // Never hold a "sleep" block: it would also block a deliberate power-button suspend. Preventing
+  // Game Mode's auto-suspend is the idle-nudge helper's job.
   void reconcile_idle() {
     const bool want = want_idle_.load();
     if (want && idle_fd_ < 0) {
@@ -244,8 +236,8 @@ class SdBusPlatform final : public Platform {
     last_connect_ms_ = mono_ms();
     while (running_.load()) {
       if (!bus_pump(bus_)) {
-        // Same policy as the updater (durable/dbus-reconnect.md): a link that stayed up a while
-        // earns a fresh budget; one that keeps dropping at once counts toward giving up.
+        // A link that stayed up a while earns a fresh budget; one that keeps dropping at once
+        // counts toward giving up.
         if (mono_ms() - last_connect_ms_ >= kReconnectStableMs) reconnect_failures_ = 0;
         warn("platform: system bus connection lost — reconnecting");
         if (!reconnect()) {

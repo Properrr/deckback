@@ -95,8 +95,6 @@ ScriptLibrary::ScriptLibrary() {
 }
 
 ScriptLibrary& ScriptLibrary::instance() {
-  // Meyers singleton: thread-safe initialisation on first use. load_overrides() is expected before
-  // any worker thread starts, so the map is read-only by the time it is shared.
   static ScriptLibrary lib;
   return lib;
 }
@@ -108,8 +106,7 @@ void ScriptLibrary::load_overrides(const std::string& dir) {
     auto loaded = read_file(dir + "/" + name + ".js");
     if (!loaded) continue;
     std::string override_body = std::move(*loaded);
-    // A present-but-empty file is a mistake (an editor truncation, a failed write); keeping the
-    // embedded default is safer than injecting nothing and silently disabling the behaviour.
+    // A present-but-empty file keeps the embedded default.
     if (override_body.find_first_not_of(" \t\r\n") == std::string::npos) continue;
     body = std::move(override_body);
     ++n;
@@ -140,10 +137,7 @@ bool ScriptLibrary::invoke(DevToolsClient& client, std::string_view name,
 }
 
 bool ScriptLibrary::install_sticky(DevToolsClient& client, std::string_view name) const {
-  // Sticky scripts are installed VERBATIM (no params appended): they are self-invoking
-  // document-start scripts `(function(){...})();`, not the `(function(p){...})` one-shot shape
-  // render() feeds. `just smoke` injects the same file verbatim, so the two paths run identical
-  // text.
+  // Installed verbatim; `just smoke` injects the same text.
   std::string_view b = body(name);
   if (b.empty()) {
     warn(std::format("scripts: no sticky script named '{}' (call-site typo?)", name));

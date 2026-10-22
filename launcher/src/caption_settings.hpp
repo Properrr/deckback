@@ -9,11 +9,8 @@ class ConfigStore;
 
 // The live "CC button" configuration: the ordered preferred-language list, the track-source policy
 // (authored vs auto-generated vs machine translation), remember-last, and the confirmation toast.
-// It is the single owner of caption behaviour, shared by pointer between the input layer (which
-// renders + evaluates the View toggle and toasts the result) and the OSD Captions sub-tab (which
-// displays and edits it). Edits persist through the ConfigStore (user.json). Single-threaded: only
-// the input thread touches it — GamepadInput::toggle_captions and OsdMenuController::exec both run
-// there.
+// Shared by pointer between the input layer (the View toggle) and the OSD Captions sub-tab. Edits
+// persist through the ConfigStore (user.json). Single-threaded: only the input thread touches it.
 
 struct CaptionOption {
   std::string value;  // stored value ("author_first", "en", ...)
@@ -69,8 +66,7 @@ class CaptionSettings {
   std::vector<CaptionOption> picker_languages() const;  // curated first, then the rest
 
   // The whole OSD model as a compact JSON object {rows:[...], langs:[...]}, handed to osd.js
-  // verbatim (via ScriptParams::set_raw) so the sub-tab renders combos + the language list + the
-  // picker.
+  // verbatim (via ScriptParams::set_raw).
   std::string osd_model_json() const;
 
   // Apply an "cc.*" action from the OSD; true when a setting actually changed (OSD then re-reads).

@@ -130,11 +130,8 @@ std::string base64(const unsigned char* data, size_t n) {
   return out;
 }
 
-// Decode one CDP frame. A REPLY carries a top-level `id`; an EVENT does not and is dropped.
-//
-// The `"id":` pre-check is not redundant with the parse: `Page.enable` turns on an event stream
-// whose payloads can be far larger than any reply we ask for, and every one of them would otherwise
-// be fully parsed only to be thrown away. This keeps the parse on the reply path.
+// Decode one CDP frame. A REPLY carries a top-level `id`; an EVENT does not and is dropped. The
+// `"id":` pre-check skips parsing the (large) event payloads `Page.enable` streams.
 struct Reply {
   uint64_t id = 0;
   json::Value body;
@@ -171,10 +168,9 @@ long content_length_of(std::string_view headers) {
   return any ? v : -1;
 }
 
-// Blocking HTTP/1.1 GET. Returns once the Content-Length body has arrived (Chromium's DevTools HTTP
-// server keeps the socket open despite our `Connection: close`, so reading-until-close would block
-// until the poll timeout and fail). Falls back to read-until-close when no Content-Length is sent.
-// Returns the full response (headers + body), or nullopt on failure.
+// Blocking HTTP/1.1 GET. Returns once the Content-Length body has arrived: Chromium's DevTools HTTP
+// server keeps the socket open despite `Connection: close`. Falls back to read-until-close without
+// a Content-Length. Returns the full response (headers + body), or nullopt on failure.
 std::optional<std::string> http_get(int fd, const std::string& host, int port,
                                     const std::string& path) {
   const std::string req = std::format(
@@ -220,8 +216,7 @@ std::optional<std::string> http_get(int fd, const std::string& host, int port,
 // ---- CdpSession ---------------------------------------------------------------------------------
 //
 // One socket per host:port, shared by every DevToolsClient handle. A reader thread owns the read
-// side and demultiplexes replies by CDP id into per-request promises, so a caller's wait never
-// blocks another caller's send. See the header for why this replaced seven independent sockets.
+// side and demultiplexes replies by CDP id into per-request slots.
 
 class CdpSession {
  public:
@@ -247,8 +242,7 @@ class CdpSession {
     return fd_ >= 0;
   }
 
-  // Send `method` and wait for its reply. nullopt on transport error, CDP error, or timeout. The
-  // reply is already parsed — the reader thread does it once, so no caller re-scans the bytes.
+  // Send `method` and wait for its parsed reply. nullopt on transport error, CDP error, or timeout.
   std::optional<json::Value> request(std::string_view method, std::string_view params_json,
                                      long timeout_ms = kRequestTimeoutMs) {
     if (!ensure_connected()) return std::nullopt;
@@ -268,8 +262,7 @@ class CdpSession {
       return std::nullopt;
     }
 
-    // The wait is OUTSIDE every lock. This is the whole point: seven clients existed because the
-    // old request() held its mutex across the round trip, so one poll could stall key injection.
+    // The wait holds no session lock, so other callers keep sending.
     std::unique_lock lk(slot->mu);
     const bool got =
         slot->cv.wait_for(lk, std::chrono::milliseconds(timeout_ms), [&] { return slot->done; });
@@ -279,15 +272,11 @@ class CdpSession {
 
     if (!got) {
       warn(std::format("devtools: {} timed out", method));
-      drop_connection();  // a reply we stopped waiting for would desync nothing, but a dead peer
-                          // would
+      drop_connection();  // treat a timeout as a dead peer
       return std::nullopt;
     }
     if (!body) return std::nullopt;  // reader saw the socket die
-    // Failure is checked by PATH, not by searching the bytes. The substring check this replaced
-    // matched `"error":` and `"exceptionDetails"` anywhere in the payload — including inside a
-    // string the page returned, so `eval_string()` on a document whose title contained `"error":`
-    // reported a CDP failure that never happened.
+    // Check failure by JSON path, never by substring: page-returned strings may contain "error".
     if (body->find("error") || body->find("result.exceptionDetails")) {
       warn(std::format("devtools: {} returned an error", method));
       return std::nullopt;
@@ -295,9 +284,7 @@ class CdpSession {
     return body;
   }
 
-  // Sticky state lives here, not on a handle: it is a property of the CONNECTION, so it is armed
-  // once and re-applied by whichever thread reconnects -- not only on the poll tick of whichever
-  // client happened to own the socket that carried it.
+  // Sticky state: stored on the session and re-applied by whichever thread reconnects.
   bool set_user_agent(std::string_view ua) {
     {
       std::lock_guard lk(sticky_mu_);
@@ -309,8 +296,7 @@ class CdpSession {
   bool add_sticky_script(std::string_view source) {
     {
       std::lock_guard lk(sticky_mu_);
-      // Idempotent: re-arming on reconnect must not grow the list, and two handles installing the
-      // same script must not double-inject it into the page.
+      // Idempotent: the same script is never stored or injected twice.
       for (const std::string& s : sticky_scripts_)
         if (s == source) return install_script(source);
       sticky_scripts_.emplace_back(source);
@@ -343,8 +329,7 @@ class CdpSession {
     pending_.erase(id);
   }
 
-  // Fail every in-flight request. Without this a caller would sit out its full timeout after the
-  // socket is already known dead.
+  // Fail every in-flight request now rather than at its timeout.
   void fail_all_pending() {
     std::map<uint64_t, std::shared_ptr<Pending>> taken;
     {
@@ -399,20 +384,14 @@ class CdpSession {
     {
       std::lock_guard lk(conn_mu_);
       if (stopping_) return false;
-      // The re-arm below runs its own requests through here. Let them use the fresh socket, and
-      // never let them reconnect: this thread already holds reconnect_mu_, and a socket that dies
-      // mid-arm used to send it back into that lock (a self-deadlock).
+      // The re-arm's own requests use the fresh socket and must never reconnect: this thread
+      // already holds reconnect_mu_.
       if (arming_thread_ == std::this_thread::get_id()) return fd_ >= 0;
       if (fd_ >= 0 && armed_) return true;
     }
-    // One reconnect at a time. reader_ is joined and replaced only under reconnect_mu_: two callers
-    // that both saw the socket die once raced here, joined the same thread (EINVAL ->
-    // std::system_error) or assigned over a joinable one, and either way hit std::terminate.
-    //
-    // A socket that is up but not yet re-armed also waits here, because the arming thread holds
-    // this lock until the sticky state is back. Before, the socket was usable as soon as it was
-    // published, so another thread's Page.navigate could reach the fresh target ahead of the UA
-    // override and take a desktop-redirect round trip.
+    // One reconnect at a time; reader_ is joined and replaced only under reconnect_mu_. Callers
+    // also wait here while a fresh socket is being re-armed, so no request reaches the new target
+    // ahead of the sticky UA.
     std::lock_guard rk(reconnect_mu_);
     {
       std::lock_guard lk(conn_mu_);
@@ -432,8 +411,7 @@ class CdpSession {
     }
     const int fd = connect_tcp(host_, port_, 1500);
     if (fd < 0) return false;
-    // Handshake on the private fd, and publish it only once it speaks WebSocket: a sender seeing
-    // fd_ >= 0 earlier would have written frames into an un-upgraded HTTP connection.
+    // Publish the fd only after the WebSocket upgrade, so no sender writes into raw HTTP.
     if (!ws_handshake(fd, *path)) {
       close(fd);
       return false;
@@ -452,11 +430,8 @@ class CdpSession {
     info("devtools: WebSocket session established");
     reader_ = std::thread([this] { read_loop(); });
 
-    // Re-arm the sticky state on the fresh target. Leanback tears the page target down on
-    // navigation, and a new target reverts to content_shell defaults -- without this the app would
-    // fall back to the desktop redirect (UA) or lose codec steering / the mic grant. Page.enable
-    // goes first and only here: once per connection is enough, and navigate/reload/install used
-    // to re-send it on every call.
+    // Re-arm the sticky state: a new page target reverts to content_shell defaults. Page.enable is
+    // sent once per connection, here.
     request("Page.enable", "{}");
     apply_user_agent();
     {
@@ -470,7 +445,7 @@ class CdpSession {
     apply_grant();
     std::lock_guard lk(conn_mu_);
     arming_thread_ = {};
-    // Even if the socket died mid-arm: fd_ is then -1, so the next caller reconnects and arms anew.
+    // Safe even if the socket died mid-arm: fd_ is then -1 and the next caller reconnects.
     armed_ = true;
     return fd_ >= 0;
   }
@@ -517,8 +492,8 @@ class CdpSession {
     }
 
     {
-      // Both locks: a sender holding send_mu_ has checked fd_ >= 0 and is about to write. Closing
-      // under it, the number could be recycled by an unrelated open() and receive our frame.
+      // Both locks: closing under a sender that already checked fd_ >= 0 could let a recycled fd
+      // receive our frame.
       std::scoped_lock lk(conn_mu_, send_mu_);
       if (fd_ >= 0) {
         close(fd_);
@@ -544,8 +519,6 @@ class CdpSession {
       default:
         return true;  // pong / binary / continuation
     }
-    // A reply carries an id; a CDP EVENT does not, and is dropped. Events are where an
-    // event-driven navigator/player would hook in -- the demux is the prerequisite for that.
     std::optional<Reply> reply = decode_reply(f.payload);
     if (!reply) return true;
     std::shared_ptr<Pending> slot;
@@ -571,10 +544,8 @@ class CdpSession {
       ua = sticky_ua_;
     }
     if (ua.empty()) return true;
-    // No Network.enable: the override does not need it (the protocol redirects this command to
-    // Emulation), and it would stream a network event for every media segment during playback.
-    // Checked against the shipped M138 engine: without it the override reaches the navigation
-    // request, a page fetch(), and navigator.userAgent.
+    // No Network.enable: the override works without it, and it would stream an event for every
+    // media segment during playback.
     return request("Network.setUserAgentOverride",
                    std::format(R"({{"userAgent":"{}"}})", js_string_escape(ua)))
         .has_value();
@@ -600,9 +571,7 @@ class CdpSession {
         .has_value();
   }
 
-  // GET /json/list, then pull the path out of the first target's webSocketDebuggerUrl. Now done
-  // ONCE per endpoint rather than once per client, so every caller is pinned to the same target --
-  // seven independent discoveries could land on different ones after a Leanback teardown.
+  // GET /json/list and return the path of the first page target's webSocketDebuggerUrl.
   std::optional<std::string> discover_ws_path() {
     const int fd = connect_tcp(host_, port_, 1500);
     if (fd < 0) return std::nullopt;
@@ -617,9 +586,8 @@ class CdpSession {
     if (!targets.ok()) return std::nullopt;
     const std::vector<json::Value>* list = targets.value->as_array();
     if (!list) return std::nullopt;
-    // The first PAGE. Chromium sorts /json/list by last activity, so the front can be a service
-    // worker, an iframe, or another tool's page (cert.py opens one with /json/new); attaching there
-    // would steer and navigate the wrong document. scripts/cdp.py picks the same way.
+    // The first entry of type "page": /json/list is sorted by last activity and may start with a
+    // service worker or iframe. scripts/cdp.py picks the same way.
     const json::Value* ws = nullptr;
     for (const json::Value& t : *list) {
       const json::Value* type = t.find("type");
@@ -671,9 +639,7 @@ class CdpSession {
       warn("devtools: WebSocket upgrade rejected: " + status);
       return false;
     }
-    // Anything past the headers is the first WS frame(s) -- but the fake server and Chromium both
-    // wait for our first request, so there is nothing to carry over in practice. Assert the
-    // assumption rather than silently dropping bytes.
+    // The server speaks only after our first request, so no frame bytes should follow the headers.
     const size_t header_end = rx.find("\r\n\r\n") + 4;
     if (header_end != rx.size())
       warn("devtools: unexpected bytes immediately after the WebSocket handshake");
@@ -708,9 +674,8 @@ class CdpSession {
 
 namespace {
 
-// Process-wide registry, keyed by endpoint and held weakly: the session dies with its last handle,
-// joining the reader thread. Weak rather than strong so a test's FakeServer on an ephemeral port
-// cannot be resurrected by a later test that happens to draw the same port.
+// Process-wide registry, keyed by endpoint and held weakly: a session dies with its last handle,
+// joining the reader thread.
 std::mutex g_sessions_mu;
 std::map<std::pair<std::string, int>, std::weak_ptr<CdpSession>> g_sessions;
 
@@ -733,10 +698,8 @@ DevToolsClient::~DevToolsClient() = default;
 
 bool DevToolsClient::connected() { return session_->connected(); }
 
-// The evaluated primitive, at its exact CDP path (`result.result.value` of a RemoteObject).
-// Returned by value because the parsed reply dies with this call. The scan this replaced took the
-// FIRST `"value":` anywhere in the payload, which is only the right answer as long as nothing else
-// in the reply carries that key.
+// The evaluated primitive at its exact CDP path (`result.result.value` of a RemoteObject),
+// returned by value because the parsed reply dies with this call.
 std::optional<json::Value> DevToolsClient::eval_value(std::string_view expression) {
   auto body =
       session_->request("Runtime.evaluate",
@@ -785,18 +748,14 @@ constexpr long kNavigateTimeoutMs = 30'000;
 }  // namespace
 
 DevToolsClient::NavStatus DevToolsClient::navigate_checked(std::string_view url) {
-  // Page.navigate replies at commit or failure, not on receipt, so a slow DNS / connect / captive
-  // portal outlasts the 2.5 s default. Timing out there read as "engine unreachable" (no error page
-  // for exactly the failures it explains), dropped the shared session, and re-navigated over the
-  // load in flight -- so any page slower than ~3.5 s to commit restarted forever.
+  // Page.navigate replies at commit or failure, not on receipt, so it needs a longer timeout.
   auto body = session_->request(
       "Page.navigate", std::format(R"({{"url":"{}"}})", js_string_escape(url)), kNavigateTimeoutMs);
   if (!body) return {};
 
   NavStatus st;
   st.sent = true;
-  // Page.navigate answers with `errorText` on a failed navigation and omits the field on success —
-  // it does not report failure as a CDP error, so a body proves nothing.
+  // A failed navigation is not a CDP error: it is reported only via `errorText`.
   if (const json::Value* e = body->find("result.errorText"))
     if (const std::string* s = e->as_string()) st.error_text = *s;
   return st;
@@ -814,9 +773,8 @@ bool DevToolsClient::grant_permissions(std::string_view origin, std::string_view
   return session_->set_grant(origin, permission);
 }
 namespace {
-// A fully-resolved key event: what Blink needs to synthesize a trusted keydown/keyup pair.
-// `text` is non-empty only for printable keys — Blink derives the charCode from it, which is what
-// makes `beforeinput`/`textInput` fire and a character land in a focused <input>.
+// A fully-resolved key event. `text` is non-empty only for printable keys; Blink derives the
+// charCode from it, which is what makes a character land in a focused <input>.
 struct KeySpec {
   std::string key;   // DOM `key` value
   std::string code;  // DOM `code` value (physical key, layout-independent)
@@ -824,9 +782,8 @@ struct KeySpec {
   std::string text;  // empty for non-printable keys
 };
 
-// Named (non-printable) keys. VK codes are the Windows values Blink expects; the media ones are
-// tree-verified against cobalt/src/starboard/key.h (kSbKeyMediaRewind = 0xE3, ..FastForward =
-// 0xE4). Non-printable keys reuse `name` as their `code`.
+// Named (non-printable) keys; `name` doubles as their DOM `code`. VK codes are the Windows values
+// Blink expects (media keys match cobalt/src/starboard/key.h).
 struct NamedKey {
   std::string_view name;
   int vk;
@@ -839,12 +796,9 @@ constexpr NamedKey kNamedKeys[] = {
     {"Enter", 13},
     {"Escape", 27},
     {"Backspace", 8},
-    // Delete is the candidate erase key inside Leanback's OSK: `kSbKeyBack == kSbKeyBackspace ==
-    // 8`, so Backspace is expected to pop the view rather than erase (findings input-ux §8.4).
+    // Candidate OSK erase key: Backspace is kSbKeyBack (8) and is expected to pop the view.
     {"Delete", 46},
     {"Tab", 9},
-    // Media keys. MediaRewind/MediaFastForward exist so the `scan_rewind`/`scan_forward` spike can
-    // dispatch them at all; nothing binds them until that spike verifies Leanback honors them.
     {"MediaPlayPause", 179},
     {"MediaTrackNext", 176},
     {"MediaTrackPrevious", 177},
@@ -853,9 +807,8 @@ constexpr NamedKey kNamedKeys[] = {
     {"MediaFastForward", 228},
 };
 
-// US-layout DOM `code` + VK for the printable ASCII characters that are neither letters nor digits.
-// Shifted characters carry the code/VK of the physical key that produces them ('!' is Digit1),
-// which is what the DOM contract requires; the caller supplies mod::kShift.
+// US-layout DOM `code` + VK for printable ASCII that is neither letter nor digit. Shifted
+// characters carry their physical key's code/VK ('!' is Digit1); the caller supplies mod::kShift.
 struct PunctKey {
   char ch;
   std::string_view code;
@@ -876,7 +829,7 @@ constexpr PunctKey kPunctKeys[] = {
 };
 
 // `name` is either a named key ("ArrowUp", "MediaRewind") or a single printable ASCII character
-// ("c", "A", "7", " "). nullopt = this client cannot synthesize it, and the caller must not guess.
+// ("c", "A", "7", " "). nullopt = this client cannot synthesize it.
 std::optional<KeySpec> key_spec(std::string_view name) {
   for (const NamedKey& k : kNamedKeys)
     if (k.name == name) return KeySpec{std::string(k.name), std::string(k.name), k.vk, ""};
@@ -906,8 +859,7 @@ bool DevToolsClient::dispatch_key(std::string_view name, int modifiers) {
       std::format(R"("key":"{}","code":"{}","windowsVirtualKeyCode":{},"nativeVirtualKeyCode":{})",
                   js_string_escape(spec->key), spec->code, spec->vk, spec->vk);
   if (modifiers != mod::kNone) fields += std::format(R"(,"modifiers":{})", modifiers);
-  // A printable key needs `text` on a `keyDown` (not `rawKeyDown`) for Blink to produce a char
-  // event.
+  // Blink produces a char event only for `text` on a `keyDown`, not a `rawKeyDown`.
   const bool printable = !spec->text.empty();
   if (printable) fields += std::format(R"(,"text":"{}")", js_string_escape(spec->text));
   const std::string down_type = printable ? "keyDown" : "rawKeyDown";

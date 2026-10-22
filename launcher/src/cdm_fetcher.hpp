@@ -3,45 +3,35 @@
 
 namespace deckback {
 
-// Where to fetch the Widevine CDM from, if the user opted in via config. Both empty (the default) =
-// no auto-download: the fetcher only detects an already-installed CDM and otherwise prints an
-// honest message. `url` must point at a raw `libwidevinecdm.so` (a mirror the user trusts);
-// `sha256` is the pinned lowercase hex digest it is verified against (empty = skip verification,
-// logged as a risk).
+// Where to fetch the Widevine CDM from, if the user opted in. Empty `url` (the default) = no
+// download, only detection. `url` points at a raw `libwidevinecdm.so`; `sha256` is the pinned
+// lowercase hex digest (empty = unverified, logged as a risk).
 struct CdmConfig {
   std::string url;
   std::string sha256;
 };
 
-// First-run Widevine CDM path (doc §6 Phase 7, best-effort). The CDM binary is NEVER redistributed
-// by this project (docs/legal.md) — at most it is fetched from a user-configured URL and
-// hash-verified. Free YouTube is unaffected whether or not a CDM is present. Download is backed by
-// libcurl.
+// First-run Widevine CDM install (best-effort). The CDM is NEVER redistributed by this project
+// (docs/legal.md); at most it is fetched from a user-configured URL and hash-verified.
 class CdmFetcher {
  public:
   // True if a valid CDM is already installed under `profile_dir`, or was fetched+verified+installed
   // from `cfg`. False (non-fatal) otherwise, with an actionable log line.
   static bool ensure_installed(const std::string& profile_dir, const CdmConfig& cfg = {});
 
-  // Where the launcher installs the CDM under the profile dir (Chrome-like layout, minus Chrome's
-  // version subdir + manifest.json). The engine does not discover this on its own — the P7
-  // registration patch must point the CdmRegistry here (m114.md "Widevine registration gap").
+  // Where the launcher installs the CDM under the profile dir (Chrome-like layout, without the
+  // version subdir and manifest.json). The engine finds it only via the CDM registration patch.
   static std::string installed_path(const std::string& profile_dir);
 
   // Would the engine accept this path on `--widevine-cdm-path`? Mirrors the rule in
-  // `patches/0001-…-widevine-cdm-registration.patch`: absolute, no parent references.
-  //
-  // The engine is authoritative and rejects a bad path itself. This exists so the refusal is logged
-  // by the launcher, next to the profile dir that caused it, instead of surfacing as one LOG(ERROR)
-  // in the engine's stderr with no mention of where the path came from. A profile dir can be made
-  // relative by `DECKBACK_PROFILE=./foo`.
+  // `patches/0001-…-widevine-cdm-registration.patch`: absolute, no `..` components. The engine
+  // stays authoritative; this only lets the launcher log the refusal.
   static bool usable_cdm_path(const std::string& path);
 
   static bool backend_available();
 
-  // What is at `dest` before anything is fetched. Re-checked on every launch, so a CDM that was cut
-  // short (a crash or a full disk mid-write, before installs were atomic) is repaired from cdm_url
-  // instead of reading as installed forever. Hashing a pinned CDM costs one read of a few MB.
+  // What is at `dest` before anything is fetched; checked on every launch, so a pinned CDM that
+  // no longer matches its hash is re-fetched.
   enum class Installed { Missing, Unpinned, Verified, Mismatch };
   static Installed check_installed(const std::string& dest, const std::string& sha256);
 

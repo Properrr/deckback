@@ -7,17 +7,15 @@
 
 namespace deckback {
 
-// Self-update policy (findings durable/self-update.md). See Config::self_update_mode.
+// Self-update policy. See Config::self_update_mode.
 enum class SelfUpdateMode { Off, Notify, Auto };
 
-// Parse the `self_update_mode` string ("off" | "notify" | "auto", case-sensitive to match the rest
-// of app.json). Anything unrecognised falls back to Notify — the safe default that never deploys
-// without consent. Pure, unit-tested in config_test.cpp.
+// Parses "off" | "notify" | "auto" (case-sensitive). Anything else falls back to Notify, which
+// never deploys without consent.
 SelfUpdateMode parse_self_update_mode(std::string_view s);
 const char* self_update_mode_name(SelfUpdateMode m);
 
-// Runtime config loaded from config/app.json (doc §6). Kept intentionally flat here — the launcher
-// only needs a handful of fields; the full keymap is forwarded to the input layer (Phase 3).
+// Runtime config loaded from config/app.json.
 struct Config {
   std::string url = "https://www.youtube.com/tv";
   std::string user_agent;
@@ -26,154 +24,116 @@ struct Config {
   int watchdog_max_restarts_per_minute = 5;
   std::vector<std::string> cobalt_flags;
 
-  // Phase 3 input. Deck control name ("a", "b", "lb", "start", ...) -> either a DOM key value
-  // ("Enter", "MediaPlayPause", "c") or a semantic action ("select", "back", "playpause"). Order is
-  // as written in app.json. Empty means "use the built-in defaults". Hot-swappable by design (doc
-  // §6): a Leanback change can be worked around by shipping a new app.json, without a rebuild.
+  // Deck control name ("a", "b", "lb", "start", ...) -> a DOM key value ("Enter", "MediaPlayPause",
+  // "c") or a semantic action ("select", "back", "playpause"), in app.json order. Empty means "use
+  // the built-in defaults".
   std::vector<std::pair<std::string, std::string>> keymap;
 
-  // Optional keymap layers (findings input-ux §2/§12), all hot-swappable like `keymap` itself.
-  //   keymap_player / keymap_osk — context layers, applied when the watch view is up or a text
-  //   field
-  //     has focus. They *override* the base map; unbound controls fall through.
-  //   keymap_lt / keymap_rt — held-trigger modifier layers. A non-empty layer turns that trigger
-  //   into
-  //     a modifier (it stops dispatching its own key) and *absorbs* controls it does not bind.
-  // Ship empty: no Leanback key is bound here without an on-Deck spike (no-guessing policy).
+  // Optional keymap layers:
+  //   keymap_player / keymap_osk: context layers, applied while the watch view is up or a text
+  //     field has focus. They *override* the base map; unbound controls fall through.
+  //   keymap_lt / keymap_rt: held-trigger modifier layers. A non-empty layer turns that trigger
+  //     into a modifier (it stops dispatching its own key) and *absorbs* controls it does not bind.
   std::vector<std::pair<std::string, std::string>> keymap_player, keymap_osk, keymap_lt, keymap_rt;
 
-  // Touchscreen handling. On the Deck under gamescope the panel is delivered as synthetic MOUSE
-  // events (a finger moves the cursor and taps click — accidental navigation), and the app cannot
-  // grab the panel from inside (findings durable/touch-lock.md). `disable_touch` makes touch inert
-  // two ways: the Navigator injects `no_pointer.js` to swallow every pointer/mouse/touch event in
-  // the page (Option A), and `TouchModeGuard` holds gamescope's global touch mode at hover while
-  // our window is focused (Option B). Default on.
-  //
-  // The `touch_lock_*` / `block_touchscreen` keys this replaced are gone: their EVIOCGRAB lock was
-  // proven non-functional on SteamOS, so the code is deleted rather than shipped disabled. The keys
-  // still parse (config.cpp lists them as known-and-ignored) so an older hot-swapped app.json does
-  // not warn.
+  // Makes the touchscreen inert: the Navigator injects `no_pointer.js` to swallow every
+  // pointer/mouse/touch event in the page, and `TouchModeGuard` holds gamescope's global touch mode
+  // at hover while our window is focused.
   bool disable_touch = true;
 
-  // Touch GESTURE router (findings durable/touch-gestures.md, P12.4) — the opposite of the lock,
-  // and mutually exclusive with it. When on, the Navigator injects `touch_gestures.js` instead of
-  // `no_pointer.js`, TouchModeGuard holds gamescope's mode at 4 (passthrough) instead of 0 (hover),
-  // and the launcher polls the page for recognised gestures and dispatches them as trusted keys.
-  //
-  // Default OFF. Real wl_touch delivery was verified on ONE OLED unit on gamescope 3.16.23.4
-  // (2026-07-31) and on no other hardware; `navigator.maxTouchPoints` reads 0 even where it works,
-  // so nothing can feature-detect this. Turning it on where touch is not delivered costs nothing
-  // (no events arrive, the page swallow still makes taps inert) — but it is not a default until a
-  // second unit says so.
+  // Touch gesture router; mutually exclusive with `disable_touch`. The Navigator injects
+  // `touch_gestures.js` instead of `no_pointer.js`, TouchModeGuard holds gamescope's mode at 4
+  // (passthrough), and the launcher polls the page for recognised gestures and dispatches them as
+  // trusted keys. Config-gated because touch cannot be feature-detected: `navigator.maxTouchPoints`
+  // reads 0 even where touch works.
   bool touch_gestures = false;
 
-  // How often the launcher drains the page's gesture queue. This is the whole input latency budget
-  // for touch: a gesture is recognised in the page immediately and then waits up to this long to
-  // become a keypress.
+  // How often the launcher drains the page's gesture queue; this is the touch input latency.
   int touch_poll_ms = 50;
 
-  // Recogniser thresholds, passed through to the page script. Named for what they do rather than
-  // for the JS keys so app.json reads like settings, not like internals.
+  // Recogniser thresholds, passed through to the page script.
   int touch_step_px = 70;  // travel at which a drag's single move fires
-  // Moves per gesture. 1 = one swipe is one move however far it travels, which is what a
-  // discrete-focus UI wants: Leanback moves SELECTION per key and cannot interpolate, so a
-  // proportional drag silently double-steps on a long swipe. >1 restores proportional scrolling.
+  // Moves per gesture. 1 = one swipe is one move however far it travels (Leanback moves selection
+  // per key, so a proportional drag double-steps on a long swipe). >1 = proportional scrolling.
   int touch_max_steps = 1;
   int touch_edge_px = 40;         // a touch starting this close to the left edge may be Back
   int touch_long_press_ms = 550;  // hold this long, without moving, for the held-rate gesture
   int touch_double_tap_ms = 280;  // pairing window for a double-tap seek
 
   // Press-and-hold playback rate, by zone: the right third (and the centre) speeds up, the left
-  // third slows down. Both are real rates on the ladder the player advertises ([0.25 .. 2],
-  // measured by P12.0b) — a rewind would have needed stepped seeks instead, because Chromium has no
-  // negative playbackRate. Whatever is asked for is snapped to the nearest advertised value.
+  // third slows down. Snapped to the nearest rate the player advertises.
   double touch_hold_rate = 2.0;
   double touch_hold_slow_rate = 0.5;
 
-  // Hide the X cursor while the gesture router is running. `disable_touch` gets this from
-  // no_pointer.js; the gesture policy needs its own, since the two are mutually exclusive.
-  // SEPARATELY INJECTED and separately switchable on purpose: it is one of two suspects for
-  // touch-gestures.md §7.0 (a build where a finger produced no events at all), and the other is the
-  // engine binary itself. Turning this off must remove exactly this and nothing else.
+  // Hide the X cursor while the gesture router is running. Injected separately so it can be
+  // switched off in isolation.
   bool touch_hide_cursor = true;
 
-  // First-run controls overlay (findings input-ux §17). `View (⧉)` = captions is unguessable, and
-  // SUPPORT.md is invisible from Game Mode. Shown once; the same rows remain available in
-  // Settings ▸ Keys via the fixed Menu button.
+  // Show the first-run controls overlay once.
   bool first_run_overlay = true;
 
-  // Right-stick fast list traversal (findings input-ux §7/§15). The second axis is otherwise
-  // unused, while every console app puts fast list traversal there. Rate is analog:
-  // `right_stick_slow_ms` at the deadzone edge down to `right_stick_fast_ms` at full deflection.
+  // Right-stick fast list traversal. Rate is analog: `right_stick_slow_ms` at the deadzone edge
+  // down to `right_stick_fast_ms` at full deflection.
   bool right_stick_scroll = true;
   int right_stick_deadzone = 13000;
   int right_stick_slow_ms = 200;
   int right_stick_fast_ms = 45;
 
-  // Fixed-interval skip (findings input-ux §18). A trigger bound to `skip_back`/`skip_fwd` jumps
-  // the player by this many seconds via the player's own seekBy() over CDP — chapter-aware seeking
-  // is unbuildable on TVHTML5 (m138.md S0.6), so this is the plain ±N s console model.
-  // Hot-swappable.
+  // Seconds a trigger bound to `skip_back`/`skip_fwd` jumps the player, via its seekBy() over CDP.
   int skip_seconds = 10;
 
-  // Caption toggle (View by default): confirm each toggle with a brief on-screen toast ("Captions
-  // on"/"off"), so a press over the unobservable player is never a silent no-op. Hot-swappable.
+  // Confirm each caption toggle with a brief on-screen toast ("Captions on"/"off").
   bool captions_toast = true;
-  // Preferred caption language when captions turn ON (e.g. "en", "pt-BR"). Empty = follow the
-  // SteamOS system language (the launcher reads it from the LANG/LC_* locale). Legacy scalar: seeds
-  // `caption_languages` when that list is empty. Hot-swappable + user-overridable.
+  // Preferred caption language when captions turn ON (e.g. "en", "pt-BR"). Empty = the SteamOS
+  // system language (from the LANG/LC_* locale). Legacy scalar: seeds `caption_languages` when that
+  // list is empty.
   std::string caption_language;
-  // Ordered list of preferred caption languages, tried in order when captions turn ON. Entries are
-  // language codes; the special "system" means the SteamOS locale. Empty falls back to
-  // `caption_language`, then "system". Edited via the OSD ▸ Settings ▸ Captions sub-tab; persisted
-  // in user.json.
+  // Ordered preferred caption languages, tried in order when captions turn ON. The special entry
+  // "system" means the SteamOS locale. Empty falls back to `caption_language`, then "system".
+  // Persisted in user.json.
   std::vector<std::string> caption_languages;
   // How a track is chosen within a preferred language: "author_first" (authored > auto >
   // translated, the default), "auto_first" (auto > authored > translated), "author_only", or
   // "auto_only".
   std::string caption_type = "author_first";
-  // Master caption kill switch: "local" (our preferred-language override + auto-apply on video
-  // start, the default) or "youtube" (defer to YouTube; View is a plain on/off toggle in the system
-  // language). Edited via the OSD Captions sub-tab; persisted in user.json.
+  // "local" (our preferred-language override + auto-apply on video start, the default) or
+  // "youtube" (defer to YouTube; View is a plain on/off toggle in the system language). Persisted
+  // in user.json.
   std::string caption_control = "local";
   // Whether the caption on/off state (and the last language) survive an app restart. Within a
-  // session the on/off state always carries across videos; this controls cross-restart persistence.
+  // session the on/off state always carries across videos.
   bool caption_remember = true;
   // The persisted local on/off state (only trusted when caption_remember). Written by the launcher.
   bool caption_on = false;
 
-  // Phase 4/5 startup CDP policy, applied by the Navigator. `steer_av1` mirrors
-  // quality.steer_av1_unsupported (AV1 hw decode on the Deck unproven/disputed — findings
-  // durable/hardware.md); `mic_autogrant`
-  // auto-approves the mic for the app origin so voice search needs no prompt (Phase 5).
+  // Startup CDP policy, applied by the Navigator. `steer_av1` mirrors
+  // quality.steer_av1_unsupported; `mic_autogrant` auto-approves the mic for the app origin so
+  // voice search needs no prompt.
   bool steer_av1 = true;
   bool mic_autogrant = true;
 
-  // Failure-state UX (findings input-ux §7). Chromium's error interstitial has no control a
-  // controller can focus, in an app with no address bar and no keyboard. Replace it with our own
-  // Retry page and keep retrying with backoff. `error_title`/`error_hint` override the page's text:
-  // empty means "derive it from the net:: error", and setting them is the R1 hotfix surface — if
-  // Leanback breaks under us, the explanation ships as config, not as a rebuild.
+  // Replace Chromium's error interstitial with our own controller-focusable Retry page that keeps
+  // retrying with backoff. `error_title`/`error_hint` override the page's text; empty means "derive
+  // it from the net:: error".
   bool error_page = true;
   int error_retry_min_ms = 2000;
   int error_retry_max_ms = 30000;
   std::string error_title;
   std::string error_hint;
 
-  // Phase 7 Widevine (best-effort, opt-in). Both empty = detect-only, never fetch. `cdm_url` points
-  // at a raw libwidevinecdm.so the user trusts; `cdm_sha256` pins its digest. Never redistributed
-  // by us (docs/legal.md).
+  // Widevine (opt-in). Both empty = detect-only, never fetch. `cdm_url` points at a raw
+  // libwidevinecdm.so the user trusts; `cdm_sha256` pins its digest.
   std::string cdm_url;
   std::string cdm_sha256;
 
-  // Log rotation (doc §2 P2). Empty log_dir means "derive at runtime" (env / XDG_STATE_HOME).
+  // Log rotation. Empty log_dir means "derive at runtime" (env / XDG_STATE_HOME).
   std::string log_dir;
   long log_max_bytes = 5'000'000;
   int log_max_files = 5;
   bool log_to_stderr = true;
 
-  // Phase 6 power (doc §2 P6). The DevTools poll cadence for play-state → idle-inhibit, and whether
-  // to fall back to synthetic activity when no logind idle inhibitor is available.
+  // The DevTools poll cadence for play-state → idle-inhibit, and whether to fall back to synthetic
+  // activity when no logind idle inhibitor is available.
   int devtools_poll_ms = 1000;
   bool idle_inhibit_synthetic_fallback = false;
   // Warn once, on first playback, when the host keep-awake helper is not running.
@@ -186,29 +146,20 @@ struct Config {
   // URLs / auth token. 0 = disabled (always nudge). Duration is measured with CLOCK_BOOTTIME.
   int resume_reload_after_ms = 0;
 
-  // Self-update policy via the Flatpak portal (findings durable/self-update.md):
+  // Self-update policy via the Flatpak portal:
   //   off    — the updater is never constructed; update only via Desktop Mode `flatpak update`.
   //   notify — DEFAULT. Detect a newer commit and surface a passive indicator + a one-time card,
   //            but never deploy without the user pressing "Update now".
   //   auto   — deploy any newer commit in the background; it binds on the next launch (no prompt,
   //            no couch-reachable rollback). Opt-in.
-  // In every mode the portal updates ONLY this app, from its own `deckback` remote, with no root
-  // and no password. The legacy boolean `self_update` still parses (true -> auto, false -> off).
+  // The portal updates ONLY this app, from its own `deckback` remote. The legacy boolean
+  // `self_update` still parses (true -> auto, false -> off).
   SelfUpdateMode self_update_mode = SelfUpdateMode::Notify;
 
-  // Loads and parses the JSON at `path`. Returns nullopt when the file cannot be READ, cannot be
-  // PARSED, is not a JSON object, or declares a schema_version newer than this launcher supports.
-  //
-  // Parse failure being representable is the point: app.json is hot-swappable (doc §6), so a
-  // half-written file is a normal event on that path, and the previous reader could only fail on
-  // "cannot read" — a corrupt config loaded as all-defaults, i.e. remote_debugging_port 0, i.e. no
-  // CDP and no input at all, behind one warning.
-  //
-  // A key that is present but of the wrong type, or out of range, does NOT fail the load: it warns
-  // and keeps the default (or clamps). A bad value in an emergency config push should degrade
-  // loudly, not take the app down. Keys the launcher does not understand are reported, never
-  // silently ignored. Binding is by exact JSON path (see kStringFields et al. in config.cpp) — the
-  // sections in app.json are real, not decorative.
+  // Loads and parses the JSON at `path`. Returns nullopt when the file cannot be read, cannot be
+  // parsed, is not a JSON object, or declares a schema_version newer than this launcher supports.
+  // A key of the wrong type or out of range warns and keeps the default (or clamps); unknown keys
+  // are reported. Binding is by exact JSON path (see kStringFields et al. in config.cpp).
   static std::optional<Config> load(const std::string& path);
 };
 
