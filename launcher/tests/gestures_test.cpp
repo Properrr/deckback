@@ -210,6 +210,28 @@ void test_a_modal_surface_swallows_touch() {
   assert(keys_sent_for(tap, true) == 0);
 }
 
+// A page that answers every ask at once with nothing (no router yet, a script without wait()) is
+// retried every poll_ms, not in a tight loop; each ask awaits the page's promise.
+void test_an_instant_empty_answer_does_not_spin() {
+  testing::FakeServer srv;
+  GestureRouterConfig cfg;
+  cfg.cdp_port = srv.port();
+  cfg.poll_ms = 50;
+  GestureRouter router(cfg);
+  router.start();
+  std::this_thread::sleep_for(std::chrono::milliseconds(400));
+  router.stop();
+  int asks = 0;
+  bool awaited = false;
+  for (const std::string& r : srv.take_requests()) {
+    if (r.find("g.drain()") == std::string::npos) continue;
+    ++asks;
+    awaited = awaited || r.find(R"("awaitPromise":true)") != std::string::npos;
+  }
+  assert(asks >= 2 && asks <= 12);
+  assert(awaited);
+}
+
 }  // namespace
 }  // namespace deckback
 
@@ -233,6 +255,7 @@ DECKBACK_TEST_MAIN(gestures) {
   test_malformed_entries_are_skipped_not_guessed();
   test_every_emitted_gesture_kind_has_an_action();
   test_a_modal_surface_swallows_touch();
+  test_an_instant_empty_answer_does_not_spin();
   std::puts("gestures_test: all assertions passed");
   return 0;
 }

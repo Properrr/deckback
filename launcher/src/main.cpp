@@ -18,6 +18,7 @@
 #include "cdm_fetcher.hpp"
 #include "config.hpp"
 #include "config_store.hpp"
+#include "fileio.hpp"
 #include "gestures.hpp"
 #include "http.hpp"
 #include "input.hpp"
@@ -152,9 +153,20 @@ std::string apply_deep_link(std::string base_url, const std::string& deep_link) 
   return base_url;
 }
 
+// Plain-text support report on stdout: version, the user settings overlay and the newest app log
+// lines. Nothing leaves the device; the user redirects it to a file and attaches that.
 int collect_logs() {
-  // TODO(Phase 10): tar the app log dir + journald slice into ~/deckback-logs-<date>.tar.gz.
-  info("collect-logs: not yet implemented (Phase 10 / docs/SUPPORT.md)");
+  constexpr size_t kTailLines = 600;
+  const std::string runtime_dir = env_or("XDG_RUNTIME_DIR", "/tmp");
+  const std::string user_json = resolve_config_dir(runtime_dir) + "/user.json";
+  const std::string log_path = resolve_log_dir("", runtime_dir) + "/deckback.log";
+  std::printf("%s\n\n== %s\n%s\n", version_line().c_str(), user_json.c_str(),
+              read_file(user_json).value_or("(none)").c_str());
+  const std::string log = read_file(log_path).value_or("");
+  size_t start = log.size(), newlines = 0;  // start just after the (N+1)-th newline from the end
+  while (start > 0 && !(log[start - 1] == '\n' && ++newlines == kTailLines + 1)) --start;
+  std::printf("\n== %s (last %zu lines)\n%s", log_path.c_str(), kTailLines,
+              log.empty() ? "(no log yet)\n" : log.c_str() + start);
   return 0;
 }
 
@@ -167,7 +179,7 @@ void print_usage() {
       "\n"
       "Options:\n"
       "  --config <path>    Config file (default: config/app.json)\n"
-      "  --collect-logs     Write a support bundle to stdout and exit\n"
+      "  --collect-logs     Print a support report (version, settings, recent log) and exit\n"
       "  --selftest-dbus    Report whether the logind backend is live and exit\n"
       "  --selftest-update  Probe the Flatpak update portal (run inside the flatpak) and exit\n"
       "  --selftest-deploy  Drive one portal Update cycle (RAW permission) and report; exit\n"
@@ -311,6 +323,9 @@ int main(int argc, char** argv) {
   // The input context (browse/player/osk). PlayerController's poll thread writes it, GamepadInput's
   // thread reads it. Declared here so it outlives both.
   LayerState layers;
+  // Set once the navigator first sees the TV app; page pollers stay quiet until then, so they do
+  // not race the initial navigation.
+  std::atomic<bool> app_ready{false};
 
   // The DevTools bridge drives suspend/resume and the idle inhibitor; it needs the engine's
   // remote-debugging port, otherwise the hooks only log.
@@ -318,10 +333,10 @@ int main(int argc, char** argv) {
   if (cfg->remote_debugging_port > 0) {
     player.emplace(
         *platform, "127.0.0.1", cfg->remote_debugging_port, cfg->devtools_poll_ms,
-        cfg->idle_inhibit_synthetic_fallback,
         ResumeProbe{cfg->resume_probe_host, cfg->resume_probe_port, cfg->resume_online_timeout_ms},
         cfg->resume_reload_after_ms);
     player->set_layer_sink(&layers);
+    player->set_app_ready(&app_ready);
     if (cfg->keep_awake_warn) player->set_keep_awake_probe(&keep_awake_state);
     platform->on_suspend([&] { player->on_suspend(); });
     platform->on_resume([&] { player->request_resume(); });
@@ -429,7 +444,8 @@ int main(int argc, char** argv) {
             [graceful_exit] {
               graceful_exit("exit: closing so the staged update applies on relaunch");
             },
-        .on_exit = [graceful_exit] { graceful_exit("exit: user confirmed — shutting down"); }});
+        .on_exit = [graceful_exit] { graceful_exit("exit: user confirmed — shutting down"); },
+        .app_ready = &app_ready});
     // "Check for updates" is handled by the notify-mode prompt, so it is offered only there.
     osd->set_update_model(false, cfg->self_update_mode == SelfUpdateMode::Notify, false,
                           update_policy_status(cfg->self_update_mode), "");
@@ -515,13 +531,13 @@ int main(int argc, char** argv) {
     nav_policy.hide_cursor = gestures_on && cfg->touch_hide_cursor;
     navigator.emplace("127.0.0.1", cfg->remote_debugging_port, cfg->user_agent, url,
                       cfg->devtools_poll_ms, nav_policy);
-    if (onboarding || osd)
-      navigator->set_on_app_loaded([&onboarding, &osd] {
-        if (onboarding) onboarding->show(/*first_run_only=*/true);
-        // After a full reload, redraw the Settings button and re-inject the menu if open, or the
-        // menu is stranded and traps input.
-        if (osd) osd->on_page_reloaded();
-      });
+    navigator->set_on_app_loaded([&app_ready, &onboarding, &osd] {
+      app_ready.store(true, std::memory_order_release);
+      if (onboarding) onboarding->show(/*first_run_only=*/true);
+      // After a full reload, redraw the Settings button and re-inject the menu if open, or the
+      // menu is stranded and traps input.
+      if (osd) osd->on_page_reloaded();
+    });
     navigator->start();
     // Gamepad evdev -> DOM key events over CDP, bindings from the config keymaps. `layers` is only
     // live when `player` exists.

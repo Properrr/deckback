@@ -46,7 +46,7 @@ class FakePlatform final : public Platform {
 void test_poll_tracks_playstate() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, /*synthetic_fallback=*/false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
 
   server.set_playing(true);
   assert(pc.poll_once() == true);
@@ -55,6 +55,23 @@ void test_poll_tracks_playstate() {
   server.set_playing(false);
   assert(pc.poll_once() == false);
   assert(plat.inhibited() == false);
+}
+
+// Until the app is ready the poll does not touch the page; then it reads the play state.
+void test_poll_waits_for_the_app() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  std::atomic<bool> ready{false};
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
+  pc.set_app_ready(&ready);
+  server.set_playing(true);
+  assert(pc.poll_once() == false);
+  assert(plat.calls() == 0);
+  for (const std::string& r : server.take_requests())
+    assert(r.find("Runtime.evaluate") == std::string::npos);
+  ready.store(true);
+  assert(pc.poll_once() == true);
+  assert(plat.inhibited());
 }
 
 // ---- play-state bitmask and input layer ---------------------------------------------------------
@@ -84,7 +101,7 @@ void test_poll_publishes_input_layer() {
   testing::FakeServer server;
   FakePlatform plat;
   LayerState layers;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
   pc.set_layer_sink(&layers);
   assert(layers.get() == Layer::Browse);  // before any poll
 
@@ -118,14 +135,14 @@ void test_layer_falls_back_to_browse_when_engine_dies() {
   FakePlatform plat;
   {
     testing::FakeServer server;
-    PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+    PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
     pc.set_layer_sink(&layers);
     server.set_player_open(true);
     pc.poll_once();
     assert(layers.get() == Layer::Player);
   }
   // Server destroyed: the port is dead.
-  PlayerController dead(plat, "127.0.0.1", 8, 1000, false);
+  PlayerController dead(plat, "127.0.0.1", 8, 1000);
   dead.set_layer_sink(&layers);
   assert(dead.poll_once() == false);
   assert(layers.get() == Layer::Browse);
@@ -135,17 +152,28 @@ void test_layer_falls_back_to_browse_when_engine_dies() {
 void test_suspend_resume_hooks() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
 
   auto checkpoint = pc.on_suspend();
   assert(checkpoint.has_value() && *checkpoint == 123.5);
   assert(pc.on_resume() == true);
 }
 
+// A session that dies under the pause is retried once on a fresh one, so the checkpoint lands.
+void test_suspend_retries_a_dropped_session() {
+  testing::FakeServer server;
+  FakePlatform plat;
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
+  pc.poll_once();                // the session's two frames: Page.enable, the play-state poll
+  server.close_after_frames(2);  // the pause is frame 3: unanswered, the session dropped
+  auto checkpoint = pc.on_suspend();
+  assert(checkpoint.has_value() && *checkpoint == 123.5);
+}
+
 // With no engine reachable: never playing, no inhibitor, and hooks fail cleanly.
 void test_engine_unreachable() {
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", 8, 1000, false);
+  PlayerController pc(plat, "127.0.0.1", 8, 1000);
   assert(pc.poll_once() == false);
   assert(plat.inhibited() == false);
   assert(!pc.on_suspend().has_value());
@@ -157,7 +185,7 @@ void test_thread_lifecycle() {
   testing::FakeServer server;
   server.set_playing(true);
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 100, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 100);
 
   pc.start();
   // Wait (bounded) until a tick has held the inhibitor.
@@ -209,7 +237,7 @@ bool wait_for(const std::function<bool()>& cond, long ms) {
 void test_resume_request_returns_at_once_and_nudges_on_the_poll_thread() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, false,
+  PlayerController pc(plat, "127.0.0.1", server.port(), 5000,
                       ResumeProbe{"127.0.0.1", 8, 600});  // never reachable: the full 600 ms wait
   pc.start();
   std::this_thread::sleep_for(std::chrono::milliseconds(200));  // into its 5 s poll wait
@@ -227,7 +255,7 @@ void test_resume_request_returns_at_once_and_nudges_on_the_poll_thread() {
 void test_stop_does_not_wait_out_the_resume_probe() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, false,
+  PlayerController pc(plat, "127.0.0.1", server.port(), 5000,
                       ResumeProbe{"127.0.0.1", 8, 8000});  // nothing listens on port 8
   pc.start();
   pc.request_resume();
@@ -242,8 +270,7 @@ void test_stop_does_not_wait_out_the_resume_probe() {
 void test_a_suspend_during_the_resume_wait_cancels_the_nudge() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, false,
-                      ResumeProbe{"127.0.0.1", 8, 1200});
+  PlayerController pc(plat, "127.0.0.1", server.port(), 5000, ResumeProbe{"127.0.0.1", 8, 1200});
   pc.start();
   pc.request_resume();
   std::this_thread::sleep_for(std::chrono::milliseconds(150));
@@ -257,7 +284,7 @@ void test_a_suspend_during_the_resume_wait_cancels_the_nudge() {
 void test_resume_with_probe() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false,
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000,
                       ResumeProbe{"127.0.0.1", server.port(), 2000});
   assert(pc.on_resume() == true);
   assert(!server.saw_reload());  // default (reload_after=0) -> nudge, never reload
@@ -268,7 +295,7 @@ void test_resume_with_probe() {
 void test_resume_reloads_after_long_suspend() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false, ResumeProbe{},
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, ResumeProbe{},
                       /*reload_after_suspend_ms=*/1);
   pc.on_suspend();  // records the CLOCK_BOOTTIME baseline
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -280,7 +307,7 @@ void test_resume_reloads_after_long_suspend() {
 void test_resume_no_reload_when_disabled() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false, ResumeProbe{},
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, ResumeProbe{},
                       /*reload_after_suspend_ms=*/0);
   pc.on_suspend();
   std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -301,7 +328,7 @@ bool any_request_contains(const std::vector<std::string>& reqs, std::string_view
 void test_keep_awake_warns_once_when_helper_inactive() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
   int probes = 0;
   pc.set_keep_awake_probe([&probes] {
     ++probes;
@@ -319,7 +346,7 @@ void test_keep_awake_warns_once_when_helper_inactive() {
 void test_keep_awake_silent_when_helper_active() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
   int probes = 0;
   pc.set_keep_awake_probe([&probes] {
     ++probes;
@@ -336,7 +363,7 @@ void test_keep_awake_silent_when_helper_active() {
 void test_keep_awake_silent_when_state_unknown() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
   pc.set_keep_awake_probe([] { return UnitState::Unknown; });
   server.set_playing(true);
   server.take_requests();
@@ -348,7 +375,7 @@ void test_keep_awake_silent_when_state_unknown() {
 void test_keep_awake_not_probed_while_idle() {
   testing::FakeServer server;
   FakePlatform plat;
-  PlayerController pc(plat, "127.0.0.1", server.port(), 1000, false);
+  PlayerController pc(plat, "127.0.0.1", server.port(), 1000);
   int probes = 0;
   pc.set_keep_awake_probe([&probes] {
     ++probes;
@@ -388,10 +415,12 @@ void test_keep_awake_heartbeat_path() {
 
 DECKBACK_TEST_MAIN(player) {
   test_poll_tracks_playstate();
+  test_poll_waits_for_the_app();
   test_decode_play_state();
   test_poll_publishes_input_layer();
   test_layer_falls_back_to_browse_when_engine_dies();
   test_suspend_resume_hooks();
+  test_suspend_retries_a_dropped_session();
   test_engine_unreachable();
   test_thread_lifecycle();
   test_netprobe();

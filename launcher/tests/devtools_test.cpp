@@ -124,7 +124,7 @@ void test_integration() {
   assert(client.grant_permissions("https://www.youtube.com", "audioCapture"));
 }
 
-// ---- key/mouse dispatch -------------------------------------------------------------------------
+// ---- key dispatch -------------------------------------------------------------------------------
 
 void test_key_supported_set() {
   // Named navigation/media keys.
@@ -383,36 +383,6 @@ void test_requests_from_two_threads_do_not_serialize_on_a_lock() {
   assert(srv.ws_upgrades() == 1);  // 100 interleaved round trips, still one socket
 }
 
-void test_dispatch_mouse() {
-  deckback::testing::FakeServer server;
-  DevToolsClient client("127.0.0.1", server.port());
-  assert(client.eval_bool("true").has_value());
-  server.take_requests();
-
-  // CDP mouse coords are CSS pixels; no letterbox transform is applied.
-  assert(client.mouse_click(640.5, 360));
-  auto r = server.take_requests();
-  assert(count_method(r, "Input.dispatchMouseEvent") == 2);
-  assert(sent(r, "Input.dispatchMouseEvent", R"("type":"mousePressed")"));
-  assert(sent(r, "Input.dispatchMouseEvent", R"("type":"mouseReleased")"));
-  assert(sent(r, "Input.dispatchMouseEvent", R"("x":640.5)"));
-  assert(sent(r, "Input.dispatchMouseEvent", R"("y":360)"));
-  assert(sent(r, "Input.dispatchMouseEvent", R"("button":"left")"));
-
-  // press and release can be sent separately.
-  assert(client.mouse_press(10, 20));
-  r = server.take_requests();
-  assert(count_method(r, "Input.dispatchMouseEvent") == 1);
-  assert(sent(r, "Input.dispatchMouseEvent", R"("type":"mousePressed")"));
-  assert(sent(r, "Input.dispatchMouseEvent", R"("buttons":1)"));
-
-  assert(client.mouse_release(10, 20));
-  r = server.take_requests();
-  assert(count_method(r, "Input.dispatchMouseEvent") == 1);
-  assert(sent(r, "Input.dispatchMouseEvent", R"("type":"mouseReleased")"));
-  assert(sent(r, "Input.dispatchMouseEvent", R"("buttons":0)"));
-}
-
 void test_unreachable_server() {
   // Nothing listening on this port: every call fails cleanly and we never claim connected.
   DevToolsClient client("127.0.0.1", 8);  // port 8 is unassigned/unlikely to listen
@@ -501,7 +471,6 @@ DECKBACK_TEST_MAIN(devtools) {
   test_concurrent_reconnects_do_not_crash();
   test_slow_navigation_is_not_a_transport_failure();
   test_requests_from_two_threads_do_not_serialize_on_a_lock();
-  test_dispatch_mouse();
   test_unreachable_server();
   test_rearm_finishes_before_another_caller_navigates();
   test_enable_commands_are_not_repeated();

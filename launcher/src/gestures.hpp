@@ -12,9 +12,10 @@
 namespace deckback {
 
 // Touch gesture router. config/scripts/touch_gestures.js recognises gestures in the page and queues
-// them; this polls that queue over CDP every `poll_ms` and turns each one into a trusted key event
-// or a player call. A page cannot synthesize a trusted key and the launcher cannot read the touch
-// panel, hence the split; DevToolsClient drops CDP events, hence polling.
+// them; this long-polls that queue over CDP (the page answers as soon as a gesture is queued) and
+// turns each one into a trusted key event or a player call. A page cannot synthesize a trusted key
+// and the launcher cannot read the touch panel, hence the split; DevToolsClient drops CDP events,
+// hence the long-poll. `poll_ms` is the retry interval while the page has no router to wait on.
 
 // The DOM key a gesture maps to, or "" when it is not a key gesture (seek and hold are not).
 std::string gesture_key(std::string_view kind, std::string_view dir);

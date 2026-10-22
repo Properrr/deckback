@@ -70,6 +70,8 @@ struct OsdMenuConfig {
   // How long Y must be held to exit; also drives the fill animation.
   int exit_hold_ms = 600;
   bool exit_enabled = true;
+  // While *app_ready is false, tick() leaves the page alone (no Settings button yet).
+  const std::atomic<bool>* app_ready = nullptr;
 };
 
 class OsdMenuController {

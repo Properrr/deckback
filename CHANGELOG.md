@@ -8,6 +8,17 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+### Changed
+- **Faster start.** The TV interface starts loading sooner after launch, and the first-run card and
+  Settings button appear over a second earlier.
+- **Lighter on the battery.** Deckback talks to the engine far less often, especially with touch
+  gestures on; gestures still respond instantly.
+
+### Fixed
+- Unplugging one controller no longer interrupts the others.
+- `--collect-logs` now prints a support report (version, your settings and the recent log) to attach
+  to a bug report; it was documented but did nothing.
+
 ## [0.0.10] - 2026-10-21
 
 ### Changed

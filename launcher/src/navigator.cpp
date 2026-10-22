@@ -10,6 +10,10 @@
 namespace deckback {
 namespace {
 
+// Retry/recheck interval while starting up: until the engine's DevTools port answers, and right
+// after a navigation, so "app loaded" (and its hooks) fire promptly instead of on the next poll.
+constexpr int kFastPollMs = 100;
+
 // scheme://host of a URL (the security origin), for Browser.grantPermissions. "" if unparseable.
 std::string origin_of(const std::string& url) {
   auto s = url.find("://");
@@ -50,7 +54,7 @@ void Navigator::loop() {
   // Prime the sticky TV UA before the first navigation so YouTube sees it on the initial load.
   if (!user_agent_.empty()) {
     while (!client_.set_user_agent_override(user_agent_)) {
-      if (worker_.wait_or_stop(poll_ms_)) return;
+      if (worker_.wait_or_stop(kFastPollMs)) return;
     }
     info("navigator: TV UA override armed");
   }
@@ -85,7 +89,9 @@ void Navigator::loop() {
   }
 
   bool announced = false;
+  int wait_ms = poll_ms_;
   do {
+    wait_ms = poll_ms_;
     if (showing_error_) {
       // A user-requested retry resets the backoff.
       if (take_retry_request(client_)) {
@@ -108,7 +114,10 @@ void Navigator::loop() {
       const bool on_app = !needle.empty() && here->find(needle) != std::string::npos;
       if (!on_app) {
         info(std::format("navigator: engine at '{}' — navigating to {}", *here, url_));
-        if (try_navigate()) announced = false;
+        if (try_navigate()) {
+          announced = false;
+          wait_ms = kFastPollMs;
+        }
       } else if (!announced) {
         info("navigator: TV app loaded");
         announced = true;
@@ -116,7 +125,7 @@ void Navigator::loop() {
         if (on_app_loaded_) on_app_loaded_();
       }
     }
-  } while (!worker_.wait_or_stop(poll_ms_));
+  } while (!worker_.wait_or_stop(wait_ms));
 }
 
 bool Navigator::try_navigate() {

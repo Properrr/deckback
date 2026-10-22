@@ -48,7 +48,8 @@ struct Config {
   // reads 0 even where touch works.
   bool touch_gestures = false;
 
-  // How often the launcher drains the page's gesture queue; this is the touch input latency.
+  // Retry interval while the page has no gesture router to long-poll (gestures themselves arrive
+  // as soon as they are recognised).
   int touch_poll_ms = 50;
 
   // Recogniser thresholds, passed through to the page script.
@@ -132,10 +133,8 @@ struct Config {
   int log_max_files = 5;
   bool log_to_stderr = true;
 
-  // The DevTools poll cadence for play-state → idle-inhibit, and whether to fall back to synthetic
-  // activity when no logind idle inhibitor is available.
+  // The DevTools poll cadence for play-state → idle-inhibit.
   int devtools_poll_ms = 1000;
-  bool idle_inhibit_synthetic_fallback = false;
   // Warn once, on first playback, when the host keep-awake helper is not running.
   bool keep_awake_warn = true;
   // On resume, wait until this host:port is reachable before nudging the player (0 ms = skip).

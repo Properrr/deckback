@@ -26,9 +26,8 @@
     "max_restarts_per_minute": 5
   },
   "power": {
-    "$comment": "While a video plays the launcher holds a logind idle inhibitor, polling play state over DevTools every devtools_poll_ms (needs remote_debugging_port). On resume it waits up to resume_online_timeout_ms (0 = don't wait) for resume_probe_host:resume_probe_port to accept a connection before resuming playback. idle_inhibit_synthetic_fallback is not implemented: true only logs a warning.",
+    "$comment": "While a video plays the launcher holds a logind idle inhibitor, polling play state over DevTools every devtools_poll_ms (needs remote_debugging_port). On resume it waits up to resume_online_timeout_ms (0 = don't wait) for resume_probe_host:resume_probe_port to accept a connection before resuming playback.",
     "devtools_poll_ms": 1000,
-    "idle_inhibit_synthetic_fallback": false,
     "keep_awake_warn": true,
     "$comment_keep_awake": "SteamOS dims and suspends mid-video unless the host-side helper deckback-idle-nudge.service is running (`just idle-nudge`). When keep_awake_warn is true, the launcher checks for it once on the first playback and shows a one-time toast if it is not active; it stays silent if it cannot tell. Set false to suppress the toast.",
     "resume_probe_host": "www.youtube.com",
@@ -121,7 +120,7 @@
   "touch_hold_rate": 2.0,
   "touch_hold_slow_rate": 0.5,
   "touch_hide_cursor": true,
-  "$comment_touch_gestures": "Mobile-style touch gestures, default off (touch support cannot be auto-detected). Mutually exclusive with disable_touch, which wins if both are true. Swipe moves the selection touch_max_steps times (firing after touch_step_px of travel or on release); a swipe from within touch_edge_px of the left edge is Back; a tap is Enter; a double-tap within touch_double_tap_ms on the left/right third seeks -/+skip_seconds, accumulating on repeats; holding touch_long_press_ms sets the playback rate until release (left third touch_hold_slow_rate, elsewhere touch_hold_rate, snapped to the player's nearest rate). touch_poll_ms is how often the launcher collects gestures.",
+  "$comment_touch_gestures": "Mobile-style touch gestures, default off (touch support cannot be auto-detected). Mutually exclusive with disable_touch, which wins if both are true. Swipe moves the selection touch_max_steps times (firing after touch_step_px of travel or on release); a swipe from within touch_edge_px of the left edge is Back; a tap is Enter; a double-tap within touch_double_tap_ms on the left/right third seeks -/+skip_seconds, accumulating on repeats; holding touch_long_press_ms sets the playback rate until release (left third touch_hold_slow_rate, elsewhere touch_hold_rate, snapped to the player's nearest rate). Gestures reach the launcher as soon as they are recognised; touch_poll_ms is only the retry interval while the page has no gesture router yet.",
   "$comment_touch_hide_cursor": "Hide the mouse pointer while touch gestures are on (disable_touch hides it on its own). Set false to keep the pointer visible.",
   "$comment_touch_multitouch": "Multitouch is ignored: a touch sequence that ever sees a second finger produces no gesture and is only counted.",
   "$comment_disable_touch": "Make the touchscreen inert (default on): the page swallows every pointer, mouse and touch event and hides the cursor, and gamescope's touch mode is held at hover (taps do not click) while the app window is focused. Set false to restore raw touch, where taps click.",

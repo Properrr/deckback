@@ -179,6 +179,7 @@ void OsdMenuController::tick(bool on_watch) {
     eval_op(client_, ScriptParams().set("op", std::string_view("close")));
   }
 
+  if (cfg_.app_ready && !cfg_.app_ready->load(std::memory_order_acquire)) return;
   const bool want = !on_watch;
   // lost() catches a same-URL reload, which wipes the button without any Navigator signal.
   if (want) button_.lost();

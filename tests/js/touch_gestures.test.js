@@ -416,6 +416,61 @@ function testQueueIsBounded() {
   check(r.stats.dropped > 0, 'and dropped events are counted rather than silently lost');
 }
 
+// ---- wait(): the launcher's long-poll ----
+
+async function testWaitAnswersAtOnceWhenUnconfigured() {
+  const {g} = load();
+  const r = await g.wait(1000);
+  eq(r.configured, false, 'an unconfigured page answers at once so the launcher can configure it');
+}
+
+async function testWaitResolvesWhenAGestureIsQueued() {
+  const {win, g} = load();
+  g.configure({});
+  let got = null;
+  const p = g.wait(1000).then(r => { got = r; });
+  await null;
+  eq(got, null, 'with nothing queued the wait stays pending');
+  drag(g, 640, 700, 640, 300, 900, 6);
+  await p;
+  check(got.q.length > 0, 'a queued gesture answers the pending wait');
+  eq(win._pending(), 0, 'and its timeout is cleared');
+}
+
+async function testWaitTimesOutWithAnEmptyBatch() {
+  const {win, g} = load();
+  g.configure({});
+  const p = g.wait(1000);
+  win._fire(1000);
+  const r = await p;
+  eq(r.q.length, 0, 'a timed-out wait answers with an empty batch');
+}
+
+async function testWaitAnswersAtOnceWhenAlreadyQueued() {
+  const {g} = load();
+  g.configure({});
+  drag(g, 640, 700, 640, 300, 900, 6);
+  const r = await g.wait(1000);
+  check(r.q.length > 0, 'a gesture queued before the wait is returned at once');
+}
+
+async function testSetEnabledAnswersAPendingWait() {
+  const {g} = load();
+  g.configure({});
+  const p = g.wait(1000);
+  g.setEnabled(false);
+  const r = await p;
+  eq(r.enabled, false, 'toggling the router answers the pending wait with the new state');
+}
+
+const asyncTests = [
+  testWaitAnswersAtOnceWhenUnconfigured,
+  testWaitResolvesWhenAGestureIsQueued,
+  testWaitTimesOutWithAnEmptyBatch,
+  testWaitAnswersAtOnceWhenAlreadyQueued,
+  testSetEnabledAnswersAPendingWait,
+];
+
 const tests = [
   testDragDirectionMapping,
   testAxisLocksSoDiagonalsDoNotAlternate,
@@ -460,8 +515,29 @@ for (const t of tests) {
   }
 }
 
-if (failures) {
-  console.error(`touch_gestures.test.js: ${failures} failure(s)`);
-  process.exit(1);
-}
-console.log(`touch_gestures.test.js: all ${tests.length} cases passed`);
+// A wait that never resolves would let node exit 0 mid-run; fail instead.
+let finished = false;
+process.on('exit', () => {
+  if (!finished) {
+    console.error('touch_gestures.test.js: an async case never settled');
+    process.exitCode = 1;
+  }
+});
+
+(async () => {
+  for (const t of asyncTests) {
+    clock = 1000;
+    try {
+      await t();
+    } catch (e) {
+      failures++;
+      console.error(`FAIL: ${t.name} threw ${e && e.stack ? e.stack : e}`);
+    }
+  }
+  if (failures) {
+    console.error(`touch_gestures.test.js: ${failures} failure(s)`);
+    process.exit(1);
+  }
+  console.log(`touch_gestures.test.js: all ${tests.length + asyncTests.length} cases passed`);
+  finished = true;
+})();

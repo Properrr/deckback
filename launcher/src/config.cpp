@@ -54,7 +54,6 @@ constexpr Field<bool> kBoolFields[] = {
     {"mic_autogrant", &Config::mic_autogrant},
     {"error_page", &Config::error_page},
     {"log.log_mirror_stderr", &Config::log_to_stderr},
-    {"power.idle_inhibit_synthetic_fallback", &Config::idle_inhibit_synthetic_fallback},
     {"power.keep_awake_warn", &Config::keep_awake_warn},
 };
 
@@ -126,7 +125,8 @@ constexpr std::string_view kKnownExtraPaths[] = {
     "power.self_update_mode",
     "self_update_mode",  // accepted at top level too
     "self_update",       // deprecated legacy boolean
-    // Removed touch-lock keys, still accepted so older app.json files don't warn.
+    // Removed keys, still accepted so older app.json files don't warn.
+    "power.idle_inhibit_synthetic_fallback",
     "block_touchscreen",
     "touch_lock_enabled",
     "touch_lock_chord",

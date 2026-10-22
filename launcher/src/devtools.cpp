@@ -278,7 +278,12 @@ class CdpSession {
     if (!body) return std::nullopt;  // reader saw the socket die
     // Check failure by JSON path, never by substring: page-returned strings may contain "error".
     if (body->find("error") || body->find("result.exceptionDetails")) {
-      warn(std::format("devtools: {} returned an error", method));
+      const json::Value* why = body->find("error.message");
+      if (!why) why = body->find("result.exceptionDetails.exception.description");
+      if (!why) why = body->find("result.exceptionDetails.text");
+      const std::string* text = why ? why->as_string() : nullptr;
+      warn(std::format("devtools: {} returned an error: {} [{}]", method,
+                       text ? text->substr(0, 120) : std::string("?"), params_json.substr(0, 60)));
       return std::nullopt;
     }
     return body;
@@ -315,6 +320,7 @@ class CdpSession {
 
  public:
   static constexpr long kRequestTimeoutMs = 2500;
+  static constexpr long kUnreachableWarnMs = 5000;
 
  private:
   struct Pending {
@@ -355,6 +361,7 @@ class CdpSession {
   void drop_connection() {
     {
       std::lock_guard lk(conn_mu_);
+      local_drop_ = true;
       shutdown_locked();
     }
     fail_all_pending();
@@ -402,13 +409,16 @@ class CdpSession {
 
     auto path = discover_ws_path();
     if (!path) {
-      if (!warned_unreachable_) {
+      // The engine takes a moment to open its port; only a target missing for a while is news.
+      if (unreachable_since_ms_ == 0) unreachable_since_ms_ = mono_ms();
+      if (!warned_unreachable_ && mono_ms() - unreachable_since_ms_ >= kUnreachableWarnMs) {
         warn(std::format("devtools: no debug target on {}:{} (is remote-debugging-port set?)",
                          host_, port_));
         warned_unreachable_ = true;
       }
       return false;
     }
+    unreachable_since_ms_ = 0;
     const int fd = connect_tcp(host_, port_, 1500);
     if (fd < 0) return false;
     // Publish the fd only after the WebSocket upgrade, so no sender writes into raw HTTP.
@@ -424,6 +434,7 @@ class CdpSession {
       }
       fd_ = fd;
       armed_ = false;
+      local_drop_ = false;
       arming_thread_ = std::this_thread::get_id();
     }
     warned_unreachable_ = false;
@@ -453,15 +464,17 @@ class CdpSession {
   // Sole owner of the read side. Runs until the socket dies, then fails everything in flight.
   void read_loop() {
     std::string rx;
+    std::string why;
     for (;;) {
       pollfd pfd{fd_, POLLIN, 0};
-      const int pr = poll(&pfd, 1, 250);
+      const int pr = poll(&pfd, 1, -1);  // shutdown() of fd_ (stop or drop) wakes it
       {
         std::lock_guard lk(conn_mu_);
         if (stopping_) break;
       }
       if (pr < 0) {
         if (errno == EINTR) continue;
+        why = std::format("poll: {}", std::strerror(errno));
         break;
       }
       if (pr == 0) continue;
@@ -470,27 +483,28 @@ class CdpSession {
       const ssize_t n = recv(fd_, buf, sizeof buf, 0);
       if (n <= 0) {
         if (n < 0 && errno == EINTR) continue;
+        why = n == 0 ? "end of stream" : std::format("recv: {}", std::strerror(errno));
         break;
       }
       rx.append(buf, static_cast<size_t>(n));
 
-      bool fatal = false;
       for (;;) {
         ws::DecodeResult dr = ws::decode_frame(rx);
         if (dr.status == ws::DecodeResult::NeedMore) break;
         if (dr.status == ws::DecodeResult::Error) {
-          fatal = true;
+          why = "undecodable frame";
           break;
         }
         rx.erase(0, dr.consumed);
         if (!on_frame(dr.frame)) {
-          fatal = true;
+          why = "the engine sent Close";
           break;
         }
       }
-      if (fatal) break;
+      if (!why.empty()) break;
     }
 
+    bool stopped, local;
     {
       // Both locks: closing under a sender that already checked fd_ >= 0 could let a recycled fd
       // receive our frame.
@@ -500,7 +514,13 @@ class CdpSession {
         fd_ = -1;
       }
       armed_ = false;
+      stopped = stopping_;
+      local = local_drop_;
+      local_drop_ = false;
     }
+    if (!stopped)
+      info(std::format("devtools: session closed ({})",
+                       local ? "dropped after a failed request" : why));
     fail_all_pending();
   }
 
@@ -657,6 +677,8 @@ class CdpSession {
   std::thread::id arming_thread_;  // the thread re-arming it, which alone may use it before armed_
   bool stopping_ = false;
   bool warned_unreachable_ = false;  // reconnect_mu_
+  long unreachable_since_ms_ = 0;    // reconnect_mu_; 0 = the target was found last time
+  bool local_drop_ = false;          // conn_mu_; drop_connection() shut the socket down
   std::thread reader_;
 
   std::mutex send_mu_;  // serializes writers on the socket
@@ -700,11 +722,20 @@ bool DevToolsClient::connected() { return session_->connected(); }
 
 // The evaluated primitive at its exact CDP path (`result.result.value` of a RemoteObject),
 // returned by value because the parsed reply dies with this call.
-std::optional<json::Value> DevToolsClient::eval_value(std::string_view expression) {
+std::optional<json::Value> DevToolsClient::eval_value(std::string_view expression,
+                                                      long timeout_ms) {
+  const std::string escaped = js_string_escape(expression);
   auto body =
-      session_->request("Runtime.evaluate",
-                        std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
-                                    js_string_escape(expression)));
+      timeout_ms > 0
+          ? session_->request(
+                "Runtime.evaluate",
+                std::format(R"({{"expression":"{}","returnByValue":true,"awaitPromise":true}})",
+                            escaped),
+                timeout_ms)
+          : session_->request(
+                "Runtime.evaluate",
+                std::format(R"({{"expression":"{}","returnByValue":true,"timeout":1500}})",
+                            escaped));
   if (!body) return std::nullopt;
   const json::Value* v = body->find("result.result.value");
   if (!v) return std::nullopt;  // an `undefined` result carries no `value` at all
@@ -725,6 +756,14 @@ std::optional<std::string> DevToolsClient::eval_string(std::string_view expressi
   auto v = eval_value(expression);
   if (!v) return std::nullopt;
   const std::string* s = v->as_string();  // already unescaped by the parser
+  return s ? std::optional(*s) : std::nullopt;
+}
+
+std::optional<std::string> DevToolsClient::eval_string_await(std::string_view expression,
+                                                             long timeout_ms) {
+  auto v = eval_value(expression, timeout_ms);
+  if (!v) return std::nullopt;
+  const std::string* s = v->as_string();
   return s ? std::optional(*s) : std::nullopt;
 }
 
@@ -872,29 +911,6 @@ bool DevToolsClient::dispatch_key(std::string_view name, int modifiers) {
            .has_value() &&
        ok;
   return ok;
-}
-
-bool DevToolsClient::dispatch_mouse(std::string_view type, double x, double y,
-                                    std::string_view button, int buttons, int click_count) {
-  return session_
-      ->request(
-          "Input.dispatchMouseEvent",
-          std::format(R"({{"type":"{}","x":{},"y":{},"button":"{}","buttons":{},"clickCount":{}}})",
-                      type, x, y, button, buttons, click_count))
-      .has_value();
-}
-
-bool DevToolsClient::mouse_press(double x, double y) {
-  return dispatch_mouse("mousePressed", x, y, "left", 1, 1);
-}
-
-bool DevToolsClient::mouse_release(double x, double y) {
-  return dispatch_mouse("mouseReleased", x, y, "left", 0, 1);
-}
-
-bool DevToolsClient::mouse_click(double x, double y) {
-  const bool down = mouse_press(x, y);
-  return mouse_release(x, y) && down;
 }
 
 }  // namespace deckback

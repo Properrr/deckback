@@ -78,6 +78,9 @@ class DevToolsClient {
   // Like eval_bool but for a string result (e.g. `document.location.href`); nullopt if the value is
   // absent/non-string or on any error. The returned string is JSON-unescaped.
   std::optional<std::string> eval_string(std::string_view expression);
+  // eval_string for an expression that may return a Promise: the reply waits for it to settle, for
+  // up to `timeout_ms` (a long-poll).
+  std::optional<std::string> eval_string_await(std::string_view expression, long timeout_ms);
 
   // Evaluate for side effects (e.g. `video.play()`); returns true if the engine accepted the call.
   bool eval_void(std::string_view expression);
@@ -121,19 +124,10 @@ class DevToolsClient {
   // single printable ASCII character (dispatched with `text` so Blink produces a char event).
   static bool key_supported(std::string_view name);
 
-  // Trusted synthetic mouse events (Input.dispatchMouseEvent). Coordinates are CSS pixels, so a
-  // getBoundingClientRect() feeds straight in. press/release are separate so a button can be held.
-  // Voice search needs this: kSbKeyMicrophone does nothing on Chrobalt; only a soft-mic click
-  // works.
-  bool mouse_press(double x, double y);
-  bool mouse_release(double x, double y);
-  bool mouse_click(double x, double y);  // press then release at the same point
-
  private:
-  bool dispatch_mouse(std::string_view type, double x, double y, std::string_view button,
-                      int buttons, int click_count);
-  // Runtime.evaluate `expression` and return the reply's `result.result.value`.
-  std::optional<json::Value> eval_value(std::string_view expression);
+  // Runtime.evaluate `expression` and return the reply's `result.result.value`. With
+  // `timeout_ms` > 0 a returned Promise is awaited and the request may take that long.
+  std::optional<json::Value> eval_value(std::string_view expression, long timeout_ms = 0);
 
   // Never null; shared by every client for the same host:port.
   std::shared_ptr<CdpSession> session_;

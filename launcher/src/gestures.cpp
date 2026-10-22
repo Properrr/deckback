@@ -5,15 +5,25 @@
 #include "json.hpp"
 #include "log.hpp"
 #include "scripts.hpp"
+#include "util.hpp"
 
 namespace deckback {
 namespace {
 
-// The page's drain entry point. Guarded so a poll that lands before the document-start injection
-// returns '' rather than an evaluation failure indistinguishable from a dead engine.
-constexpr const char* kDrainExpr =
-    "(function(){var g=window.__deckbackGestures;"
-    "return g?JSON.stringify(g.drain()):'';})()";
+// Long-poll window: the page answers as soon as a gesture is queued, else after this long. Inside
+// the CDP session's request timeout, with room for the round trip.
+constexpr long kWaitMs = 1000;
+
+// The page's long-poll entry point. Returns '' before the document-start injection (rather than an
+// evaluation failure indistinguishable from a dead engine) and drains at once for a script without
+// wait().
+std::string wait_expr() {
+  return std::format(
+      "(function(){{var g=window.__deckbackGestures;if(!g)return '';"
+      "if(!g.wait)return JSON.stringify(g.drain());"
+      "return g.wait({}).then(function(d){{return JSON.stringify(d);}});}})()",
+      kWaitMs);
+}
 
 std::string configure_expr(const GestureRouterConfig& c) {
   return std::format(
@@ -193,6 +203,7 @@ void GestureRouter::act(DevToolsClient& client, const Gesture& g) {
 
 void GestureRouter::loop() {
   DevToolsClient client(cfg_.cdp_host, cfg_.cdp_port);
+  const std::string wait = wait_expr();
   bool announced = false;
   for (;;) {
     if (push_enabled_.exchange(false, std::memory_order_acq_rel)) {
@@ -208,9 +219,12 @@ void GestureRouter::loop() {
       }
     }
 
-    std::optional<std::string> raw = client.eval_string(kDrainExpr);
+    const long asked = mono_ms();
+    std::optional<std::string> raw = client.eval_string_await(wait, kWaitMs + 1500);
+    bool got_gestures = false;
     if (raw && !raw->empty()) {
       GestureBatch batch = parse_drain(*raw);
+      got_gestures = batch.ok && !batch.gestures.empty();
       if (batch.ok) {
         if (!announced) {
           info("gestures: touch gesture router connected to the page");
@@ -231,7 +245,10 @@ void GestureRouter::loop() {
           if (!drop || gesture_hold_phase(g.kind, g.on) < 0) act(client, g);
       }
     }
-    if (worker_.wait_or_stop(cfg_.poll_ms)) break;
+    // An empty answer that came back at once (no page yet, a script without wait(), a failed
+    // request) must not spin: wait the poll interval before asking again.
+    const bool instant_empty = !got_gestures && mono_ms() - asked < kWaitMs / 2;
+    if (instant_empty ? worker_.wait_or_stop(cfg_.poll_ms) : worker_.stopping()) break;
   }
 }
 

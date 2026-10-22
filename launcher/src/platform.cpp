@@ -48,13 +48,6 @@ constexpr const char* kLogind = "org.freedesktop.login1";
 constexpr const char* kLogindPath = "/org/freedesktop/login1";
 constexpr const char* kManager = "org.freedesktop.login1.Manager";
 
-constexpr const char* kSystemd = "org.freedesktop.systemd1";
-constexpr const char* kSystemdPath = "/org/freedesktop/systemd1";
-constexpr const char* kSystemdManager = "org.freedesktop.systemd1.Manager";
-constexpr const char* kSystemdUnit = "org.freedesktop.systemd1.Unit";
-// GetUnit's error for a unit that is not loaded — a real "not installed", not a failure to ask.
-constexpr const char* kNoSuchUnit = "org.freedesktop.systemd1.NoSuchUnit";
-
 // The power contract against logind: a "sleep" delay inhibitor so on_suspend runs before sleep, and
 // an "idle" block inhibitor while playing. All sd-bus calls happen on one owned event-loop thread
 // (sd-bus is not thread-safe); other threads request idle changes via an atomic + the wake pipe.
@@ -95,8 +88,7 @@ class SdBusPlatform final : public Platform {
   }
 
   void set_idle_inhibited(bool inhibited) override {
-    want_idle_.store(inhibited);
-    wake_.nudge();
+    if (want_idle_.exchange(inhibited) != inhibited) wake_.nudge();
   }
 
   bool backend_live() const override { return live_.load(); }
@@ -284,44 +276,6 @@ std::unique_ptr<Platform> Platform::create() {
 #else
   warn("platform: no libsystemd — sleep/idle-inhibit disabled (stub backend)");
   return std::make_unique<StubPlatform>();
-#endif
-}
-
-UnitState user_unit_state(const char* unit) {
-#if DECKBACK_HAVE_SDBUS
-  sd_bus* bus = nullptr;
-  if (sd_bus_open_user(&bus) < 0 || !bus) {
-    sd_bus_unref(bus);
-    return UnitState::Unknown;
-  }
-  sd_bus_error err = SD_BUS_ERROR_NULL;
-  sd_bus_message* reply = nullptr;
-  UnitState out = UnitState::Unknown;
-  if (sd_bus_call_method(bus, kSystemd, kSystemdPath, kSystemdManager, "GetUnit", &err, &reply, "s",
-                         unit) < 0) {
-    if (err.name && std::string_view(err.name) == kNoSuchUnit) out = UnitState::Inactive;
-  } else {
-    const char* path = nullptr;
-    if (sd_bus_message_read(reply, "o", &path) >= 0 && path) {
-      sd_bus_error perr = SD_BUS_ERROR_NULL;
-      char* state = nullptr;
-      if (sd_bus_get_property_string(bus, kSystemd, path, kSystemdUnit, "ActiveState", &perr,
-                                     &state) >= 0 &&
-          state) {
-        const std::string_view sv(state);
-        out = (sv == "active" || sv == "activating") ? UnitState::Active : UnitState::Inactive;
-        free(state);
-      }
-      sd_bus_error_free(&perr);
-    }
-  }
-  sd_bus_message_unref(reply);
-  sd_bus_error_free(&err);
-  sd_bus_unref(bus);
-  return out;
-#else
-  (void)unit;
-  return UnitState::Unknown;
 #endif
 }
 

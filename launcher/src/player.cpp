@@ -74,12 +74,10 @@ PlayState PlayerController::last_state() const {
 }
 
 PlayerController::PlayerController(Platform& platform, std::string host, int port, int poll_ms,
-                                   bool synthetic_fallback, ResumeProbe resume_probe,
-                                   long reload_after_suspend_ms)
+                                   ResumeProbe resume_probe, long reload_after_suspend_ms)
     : platform_(platform),
       client_(std::move(host), port),
       poll_ms_(poll_ms < 100 ? 100 : poll_ms),
-      synthetic_fallback_(synthetic_fallback),
       resume_probe_(std::move(resume_probe)),
       reload_after_suspend_ms_(reload_after_suspend_ms) {}
 
@@ -92,6 +90,7 @@ void PlayerController::start() {
 void PlayerController::stop() { worker_.stop(); }
 
 bool PlayerController::poll_once() {
+  if (app_ready_ && !app_ready_->load(std::memory_order_acquire)) return false;
   // value_or(-1): an unreachable engine must decode to all-false, not to a stale or lucky value.
   const double raw = client_.eval_number(play_state_js()).value_or(-1);
   const int bits = raw >= 0 ? (static_cast<int>(raw) & 7) : 0;  // NaN fails the comparison too
@@ -99,10 +98,6 @@ bool PlayerController::poll_once() {
   const PlayState s = decode_play_state(bits);
 
   platform_.set_idle_inhibited(s.playing);
-  if (s.playing && synthetic_fallback_ && !platform_.backend_live() && !warned_synthetic_) {
-    warn("player: idle-inhibit backend unavailable; synthetic-activity fallback not implemented");
-    warned_synthetic_ = true;
-  }
   if (s.playing && keep_awake_probe_ && !warned_keep_awake_) {
     warned_keep_awake_ = true;
     if (keep_awake_probe_() == UnitState::Inactive) {
@@ -133,12 +128,18 @@ void PlayerController::poll_loop() {
 std::optional<double> PlayerController::on_suspend() {
   suspend_gen_.fetch_add(1);
   suspend_boottime_ms_.store(boottime_ms());
+  const bool was_connected = client_.connected();
   auto pos = client_.eval_number(pause_js());
+  if (!pos) pos = client_.eval_number(pause_js());  // once more: a dead socket reconnects in ms
   if (pos && *pos >= 0) {
     info(std::format("player: paused + checkpointed at {:.1f}s before suspend", *pos));
     return pos;
   }
-  info("player: suspend — no active video to checkpoint");
+  if (pos)
+    info("player: suspend — no active video to checkpoint");
+  else
+    warn(std::format("player: suspend — the page did not answer (session was {})",
+                     was_connected ? "connected" : "down"));
   return std::nullopt;
 }
 

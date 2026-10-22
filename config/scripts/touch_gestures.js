@@ -37,12 +37,23 @@
   var queue = [];
   var stats = {multiFinger: 0, sequences: 0, dropped: 0, emitted: 0};
   var configured = false;
+  // The launcher's pending long-poll (wait()): {resolve, timer}, answered by wake().
+  var waiter = null;
+
+  var wake = function () {
+    if (!waiter) return;
+    var w = waiter;
+    waiter = null;
+    W.clearTimeout(w.timer);
+    w.resolve(W.__deckbackGestures.drain());
+  };
 
   var push = function (g) {
     if (!cfg.enabled) return;
     if (queue.length >= cfg.maxQueue) { queue.shift(); stats.dropped++; }
     queue.push(g);
     stats.emitted++;
+    wake();
   };
 
   // ---- one touch sequence ----
@@ -265,13 +276,22 @@
   };
 
   W.__deckbackGestures = {
-    version: 2,
+    version: 3,
     // Launcher poll. `configured` is false until configure() reaches this instance (a reload
     // installs a fresh copy with defaults).
     drain: function () {
       var out = queue;
       queue = [];
       return {v: 1, configured: configured, enabled: !!cfg.enabled, q: out, stats: stats};
+    },
+    // Launcher long-poll: resolves with drain() as soon as a gesture is queued (at once if one is
+    // already queued or the page is unconfigured), else after `ms` with an empty batch.
+    wait: function (ms) {
+      if (queue.length || !configured) return Promise.resolve(this.drain());
+      wake();  // a superseded wait answers now
+      return new Promise(function (resolve) {
+        waiter = {resolve: resolve, timer: W.setTimeout(wake, ms)};
+      });
     },
     configure: function (p) {
       if (p) for (var key in p) if (key in cfg && typeof p[key] === typeof cfg[key]) cfg[key] = p[key];
@@ -286,6 +306,7 @@
         if (pendingTap) { W.clearTimeout(pendingTap); pendingTap = null; }
         seq = null;
       }
+      wake();
       return cfg.enabled;
     },
     stats: function () { return stats; },

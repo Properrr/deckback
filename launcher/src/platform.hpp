@@ -34,8 +34,4 @@ class Platform {
 // silent on it rather than warn about something they cannot see.
 enum class UnitState { Unknown, Inactive, Active };
 
-// ActiveState of `unit` from the host user systemd manager. Opens its own short-lived session-bus
-// connection, so it is safe from any thread; meant for one-shot checks, not a poll loop.
-UnitState user_unit_state(const char* unit);
-
 }  // namespace deckback

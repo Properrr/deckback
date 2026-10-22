@@ -61,8 +61,7 @@ PlayState decode_play_state(double bitmask);
 class PlayerController {
  public:
   PlayerController(Platform& platform, std::string host, int port, int poll_ms,
-                   bool synthetic_fallback, ResumeProbe resume_probe = ResumeProbe{},
-                   long reload_after_suspend_ms = 0);
+                   ResumeProbe resume_probe = ResumeProbe{}, long reload_after_suspend_ms = 0);
   ~PlayerController();
 
   PlayerController(const PlayerController&) = delete;
@@ -71,6 +70,8 @@ class PlayerController {
   // Publish the observed context to `layers` on every poll tick, so the input layer can switch
   // keymaps. Must be called before start(); the LayerState must outlive this controller.
   void set_layer_sink(LayerState* layers) { layers_ = layers; }
+  // While *ready is false the poll skips the page entirely. Set before start().
+  void set_app_ready(const std::atomic<bool>* ready) { app_ready_ = ready; }
 
   // Checked once, on the first tick that observes playback, and warned about only if Inactive.
   // Leave unset to disable the check entirely.
@@ -105,7 +106,6 @@ class PlayerController {
   Platform& platform_;
   DevToolsClient client_;
   int poll_ms_;
-  bool synthetic_fallback_;
   ResumeProbe resume_probe_;
   // After a suspend at least this long (CLOCK_BOOTTIME; 0 = disabled), reload on resume instead of
   // nudging, so stale stream URLs / auth tokens are refreshed.
@@ -116,10 +116,10 @@ class PlayerController {
   std::atomic<unsigned> suspend_gen_{0};  // bumped by every on_suspend
   std::atomic<bool> resume_pending_{false};
   std::atomic<unsigned> resume_gen_{0};  // suspend_gen_ when the pending resume was requested
-  bool warned_synthetic_ = false;
   std::function<UnitState()> keep_awake_probe_;
   bool warned_keep_awake_ = false;
   LayerState* layers_ = nullptr;  // optional context sink for the input layer
+  const std::atomic<bool>* app_ready_ = nullptr;
   // Raw bitmask: std::atomic<PlayState> is not lock-free and would need -latomic on GCC.
   std::atomic<int> state_bits_{0};
 

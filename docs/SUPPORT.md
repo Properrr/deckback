@@ -269,11 +269,11 @@ profile and sign-in.
 
 ```sh
 # On the Deck, in Desktop Mode konsole:
-flatpak run io.github.properrr.deckback --collect-logs
-# → writes ~/deckback-logs-<date>.tar.gz  (no telemetry leaves the device)
+flatpak run io.github.properrr.deckback --collect-logs > ~/deckback-logs.txt
+# → the version, your settings overlay (user.json) and the recent app log; nothing leaves the device
 ```
 
-Attach that archive to a GitHub issue along with:
+Attach that file to a GitHub issue along with:
 
 - Deck model (LCD / OLED) and SteamOS version (`Settings → System`).
 - Whether you were in Game Mode or Desktop Mode.
