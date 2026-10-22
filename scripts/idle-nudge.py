@@ -1,12 +1,9 @@
 #!/usr/bin/env python3
-# Host-side helper: keeps the Deck awake while Deckback plays video by nudging a synthetic pointer,
-# so gamescope/Steam's input-idle timer never fires. Runs on the host because /dev/uinput is outside
-# the Flatpak sandbox and gamescope ignores sandbox-emulated input for idle.
-#
-# Playback is detected from logind's inhibitor list over D-Bus, never by grepping
-# `systemd-inhibit --list` (that table truncates the WHY column and silently loses the marker).
-# Self-uninstalls once Deckback is gone. Rationale + on-Deck results:
-# .internal/findings/durable/keep-awake.md
+# Host-side helper: keeps the Deck awake while Deckback plays video by nudging a synthetic uinput
+# pointer, so gamescope/Steam's input-idle timer never fires (/dev/uinput is outside the sandbox).
+# Playback = the launcher's logind inhibitor, read over D-Bus (`systemd-inhibit --list` truncates
+# the WHY column). Self-uninstalls once Deckback is gone.
+# usage: deckback-idle-nudge [interval] [--check] [--force [SECS]]   env: DECKBACK_NUDGE_INTERVAL
 import argparse
 import glob
 import os
@@ -21,18 +18,11 @@ INHIBIT_MARKER = "playback active"
 DEFAULT_INTERVAL = 25   # seconds; must stay < SteamOS's 1-minute minimum sleep timer
 MIN_INTERVAL = 5
 MAX_INTERVAL = 55       # margin under the 60 s floor even if over-tuned
-# Continuous absence before self-removal. Installing/updating Deckback is an uninstall immediately
-# followed by an install, so a short grace period makes the helper delete itself mid-update — which
-# is what disabled it on this Deck. It is inert without Deckback, so waiting costs nothing.
+# Continuous absence before self-removal; must outlast an update's uninstall+install.
 MISSING_GRACE_SECONDS = 900
 HOME = os.path.expanduser("~")
-# Liveness hand-off to the sandboxed app. The launcher cannot ask systemd whether this unit is
-# running: that needs --talk-name=org.freedesktop.systemd1, and adding it to the manifest is what
-# broke self-update in v0.0.7 (flatpak-portal refuses any update that widens the sandbox, stranding
-# every installed user — findings/durable/self-update.md). So the helper reports its own liveness by
-# touching a file in the app's data dir instead. Same path inside and outside the sandbox: the
-# Flatpak points $XDG_DATA_HOME at ~/.var/app/<id>/data, so the app reads exactly what we write here,
-# and it costs no permission at all. Keep in sync with launcher/src/player.hpp.
+# Liveness file in the app's data dir ($XDG_DATA_HOME inside the sandbox), stat'ed by the launcher.
+# Keep in sync with launcher/src/player.hpp.
 HEARTBEAT_NAME = "idle-nudge.alive"
 
 
@@ -65,9 +55,7 @@ def heartbeat_path(home=HOME):
 
 
 def write_heartbeat(path=None):
-    """Stamp the heartbeat. Best-effort: the app treats an absent file as 'cannot tell' and stays
-    quiet, so a failure here degrades to no warning rather than a wrong one — never to a crash that
-    would stop the nudging this helper actually exists to do."""
+    """Stamp the heartbeat. Best-effort: returns False on failure, never raises."""
     path = path or heartbeat_path()
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -111,11 +99,7 @@ def read_inhibitors():
 
 
 def inhibitor_active(text, marker=INHIBIT_MARKER):
-    """True if the launcher's playback inhibitor appears in a logind inhibitor listing.
-
-    Correct for both sources: each carries the WHY verbatim when untruncated, and the marker has no
-    characters JSON would escape.
-    """
+    """True if the launcher's playback inhibitor appears in a logind inhibitor listing (either source)."""
     return marker in (text or "")
 
 
@@ -126,10 +110,10 @@ def deckback_playing():
 
 
 def self_uninstall():
-    """Deckback is gone — take the helper with it.
+    """Remove the helper and its unit, then exit.
 
-    The cleanup runs as a transient unit (its own cgroup) because it stops this very service, and
-    KillMode=control-group would SIGTERM a plain detached child mid-cleanup.
+    The cleanup runs as a transient unit: it stops this very service, and KillMode=control-group
+    would SIGTERM a plain detached child mid-cleanup.
     """
     cleanup = (
         "systemctl --user disable --now deckback-idle-nudge.service; "
@@ -213,9 +197,7 @@ def run_daemon(interval):
         f"self-remove after {limit} absent polls (~{limit * interval}s)")
     try:
         while True:
-            # Before anything that can fail: the heartbeat means "this helper is alive", not
-            # "playback is active", so it must be stamped on every pass whatever else happens.
-            write_heartbeat()
+            write_heartbeat()  # "helper alive", not "playing": every pass, first
             if deckback_installed():
                 missing = 0
             else:

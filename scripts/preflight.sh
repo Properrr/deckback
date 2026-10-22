@@ -35,13 +35,10 @@ run_shell() {
   local bad=0 sc
   sc="$(pinned_tool shellcheck shellcheck shellcheck-py)"
   "$sc" -S warning scripts/*.sh scripts/sim/*.sh tests/harness/*.sh || bad=1
-  # The harness suite includes test_cdp_lib.py / test_video_corruption.py, which import Pillow. A
-  # missing Pillow ERRORs the run — surface it as an environment gap, not a mystery test failure.
+  # The harness suite imports Pillow; a missing one is an environment gap, not a test failure.
   python3 -c 'import PIL' 2>/dev/null || die_env "the harness suite needs Pillow (CI: python3-pil). Install it: pip install Pillow"
   ./tests/harness/run.sh || bad=1
-  # A manifest that adds a sandbox permission strands every installed user on their current version
-  # — flatpak-portal refuses the self-update outright (findings/durable/self-update.md). Cheap to
-  # check, invisible until a user reports "it says it updated but it didn't", so it runs every push.
+  # A manifest that adds a sandbox permission strands installed users: the portal refuses the update.
   ./scripts/check-permissions.sh || bad=1
   return "$bad"
 }
@@ -62,8 +59,7 @@ run_launcher() {
     bad=1
   fi
 
-  # 2. gcc: Release build + ctest.  3. clang: build. Built in throwaway dirs so the push never dirties
-  # the tree (the whole point of a pre-push gate is to leave the tree exactly as the user staged it).
+  # 2. gcc: Release build + ctest.  3. clang: build. Throwaway build dirs leave the tree as staged.
   local gdir cdir
   gdir="$(mktemp -d "${TMPDIR:-/tmp}/deckback-preflight-gcc.XXXXXX")"
   cdir="$(mktemp -d "${TMPDIR:-/tmp}/deckback-preflight-clang.XXXXXX")"

@@ -3,22 +3,16 @@
 require_cobalt_checkout
 pin="$(deps_pin)"
 
-# Refuse real local edits (tracked or untracked). EOL-only differences don't count: Cobalt commits a
-# few CRLF files that its own .gitattributes normalizes to LF (third_party/cpuinfo's Windows
-# sources), so even a pristine checkout reports them as modified and a plain `status --porcelain`
-# check refused every sync.
+# Refuse real local edits (tracked or untracked). EOL-only differences don't count: Cobalt commits CRLF
+# files its own .gitattributes normalizes, so even a pristine checkout reports them as modified.
 if ! git -C "$COBALT_TREE" diff --quiet --ignore-cr-at-eol HEAD -- 2>/dev/null \
     || [ -n "$(git -C "$COBALT_TREE" ls-files --others --exclude-standard | head -1)" ]; then
   die "cobalt tree is dirty. Commit/stash or 'just patch-refresh' first — sync refuses a dirty tree."
 fi
 
-# A synced tree is the pin plus one commit per patches/series entry (applied with `git am` below), so
-# it is clean, the next sync accepts it, and `just patch-refresh` exports exactly those commits. Sync
-# used to `git apply --index` them uncommitted: the tree it produced was one it then refused as
-# dirty, and the next `git commit` swallowed the whole series into the developer's own patch.
-#
-# Anything else on top of the last synced pin is work that checking out the pin would orphan, so
-# refuse it. Compared by patch-id, which ignores commit metadata and line offsets.
+# A synced tree is the pin plus one commit per patches/series entry (`git am` below). Any other commit
+# on top of the last synced pin would be orphaned by the checkout, so refuse it. Compared by patch-id,
+# which ignores commit metadata and line offsets.
 synced="$(git -C "$COBALT_TREE" rev-parse -q --verify refs/deckback/synced-pin 2>/dev/null || true)"
 if [ -n "$synced" ] && [ "$(git -C "$COBALT_TREE" rev-parse HEAD)" != "$synced" ]; then
   series_ids() {
@@ -38,17 +32,11 @@ if [ -n "$synced" ] && [ "$(git -C "$COBALT_TREE" rev-parse HEAD)" != "$synced" 
   fi
 fi
 
-# The `src` solution is `--unmanaged` (bootstrap.sh), and gclient never moves an unmanaged checkout:
-# `gclient sync -r` alone re-syncs the DEPS of whatever revision is already checked out, so a
-# DEPS.pin bump silently kept the old engine. Move src to the pin first, then let gclient sync its
-# DEPS. --force is safe here: the check above already refused real edits, so it only discards the
-# EOL noise that would otherwise block the checkout. -D deletes the dependency checkouts the new
-# DEPS dropped; without it a pin bump leaves the old ones behind as untracked trees (~1 GB on the
-# m114 -> M138 bump), and the dirty check above then refuses every later sync.
-#
-# --depth=1 / --no-history: shallow, single revision. We never care about Cobalt's internal git
-# history (DEPS.pin is our reproducible pin), and full history is tens of GB. Our own patch commits
-# sit on top of the shallow root, so `git format-patch $pin..HEAD` still works (scripts/patch.sh).
+# The `src` solution is `--unmanaged` (bootstrap.sh) and gclient never moves an unmanaged checkout, so
+# check out the pin first, then let gclient sync its DEPS. --force only discards EOL noise (real edits
+# were refused above). -D deletes dependency checkouts the new DEPS dropped, which would otherwise
+# stay behind as untracked trees. --depth=1 / --no-history: shallow, single revision; patch commits
+# sit on the shallow root, so `git format-patch $pin..HEAD` still works.
 info "Checking out $pin in src, then gclient sync (shallow, --no-history) ..."
 in_container bash -lc "
   set -e
@@ -62,9 +50,8 @@ in_container bash -lc "
 
 if [ -s patches/series ] && grep -qv '^\s*#' patches/series 2>/dev/null; then
   info "Re-applying patches/series ..."
-  # The checkout above ran in the container, which recorded its own view of each file's stat data
-  # (uid, ctime) in the index; without a refresh, `git am` here refuses every file the patch touches
-  # with "does not match index".
+  # The container's checkout recorded its own stat data (uid, ctime) in the index; without a refresh
+  # `git am` refuses every touched file with "does not match index".
   git -C "$COBALT_TREE" update-index -q --refresh >/dev/null || true
   while read -r p; do
     case "$p" in ''|\#*) continue ;; esac

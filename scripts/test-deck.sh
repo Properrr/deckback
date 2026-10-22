@@ -1,14 +1,9 @@
 #!/usr/bin/env bash
-# L2: run the on-Deck automated suite from the workstation (TEST-PLAN §3).
+# L2: run the on-Deck automated suite (tests/deck) from the workstation, over SSH + a CDP tunnel.
+# Nothing is installed on the Deck.
 #
-# The Deck is a dumb target: nothing is installed there, and everything is driven over SSH + a CDP
-# tunnel. Runs on the WORKSTATION, never on the Deck.
-#
-# Exit codes (.internal/HARNESS.md): 0 pass · 2 a test failed (the product is wrong) ·
-#                                    3 no Deck / no pytest (environment) · 5 usage.
-#
-# A SKIPPED suite is not a passing suite. If every test skips because the Deck is unreachable, this
-# exits 3, not 0 — the same distinction `just power` once got wrong, in the same direction.
+# Exit codes: 0 pass · 2 a test failed (the product is wrong) · 3 no Deck configured / no pytest ·
+#             4 Deck unreachable · 5 usage. A missing Deck is never reported as a pass.
 #
 # Usage:
 #   scripts/test-deck.sh                    # gates + probes
@@ -22,14 +17,11 @@ command -v python3 >/dev/null 2>&1 || die_env "python3 not found on this worksta
 python3 -c 'import pytest' 2>/dev/null || die_env \
   "pytest not installed. Install it on the workstation (never on the Deck): pip install pytest"
 
-# Fails with exit 3 (no host configured) or 4 (configured but unreachable) — the distinction the
-# unattended runner needs in order to decide whether to retry.
 require_deck
 
 info "test-deck: target ${DECK_HOST} (port ${DECK_PORT})"
 
-# `-p no:cacheprovider`: the repo is bind-mounted into the build container, and a root-owned
-# .pytest_cache would break later container runs.
+# `-p no:cacheprovider`: a root-owned .pytest_cache in the bind-mounted repo breaks container runs.
 set +e
 DECK_HOST="$DECK_HOST" DECK_PORT="$DECK_PORT" \
   python3 -m pytest tests/deck \

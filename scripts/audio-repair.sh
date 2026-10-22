@@ -7,9 +7,8 @@ APP="io.github.properrr.deckback"
 BIN="$HOME/.local/bin/deckback-audio-repair"
 UNIT="deckback-audio-repair.service"
 UNIT_PATH="$HOME/.config/systemd/user/$UNIT"
-# Continuous absence before self-removal. Installing/updating Deckback is an uninstall immediately
-# followed by an install, so a short grace period makes the helper delete itself mid-update. It is
-# inert without Deckback, so waiting costs nothing.
+# How long Deckback must be continuously absent before the helper removes itself. A Deckback update
+# is an uninstall followed by an install, so the grace period must outlast it.
 TICK_SECONDS=2
 MISSING_GRACE_SECONDS=900
 MISSING_LIMIT=$((MISSING_GRACE_SECONDS / TICK_SECONDS))

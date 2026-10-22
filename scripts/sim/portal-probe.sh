@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# Phase-1 feasibility probe for the containerized test sim (findings/durable/test-sim.md).
+# Feasibility probe for the containerized test sim: the Flatpak update portal runs and answers inside
+# a plain container (no GPU, no SteamOS image). Negative control: a non-flatpak caller's
+# CreateUpdateMonitor must be refused with "Updates only supported by flatpak apps".
 #
-# Proves, reproducibly, that the Flatpak update portal — the thing the self-updater + D-Bus reconnect
-# talk to — runs and answers inside a plain container, with NO GPU and NO SteamOS image. It asserts
-# the portal's caller contract as a negative control: a non-flatpak caller's CreateUpdateMonitor must
-# be refused with "Updates only supported by flatpak apps". That exact refusal proves the portal (and,
-# in the log, the PermissionStore the consent seed uses) activated and is enforcing its contract — so
-# the real harness just needs a flatpak-instance caller (`flatpak run` of a minimal app).
-#
-# This is groundwork, not the final `just sim` harness. Needs Docker; runs an Arch container with
-# --security-opt seccomp=unconfined (so flatpak's bwrap userns is allowed).
+# Needs Docker; runs with seccomp=unconfined so flatpak's bwrap userns is allowed.
+# Env: SIM_BASE_IMAGE (default archlinux:latest).
 #
 # Exit: 0 portal reachable + contract enforced · 3 no Docker · 4 the portal never activated.
 set -euo pipefail
@@ -18,8 +13,7 @@ command -v docker >/dev/null 2>&1 || { echo "error: docker not found" >&2; exit 
 
 image="${SIM_BASE_IMAGE:-archlinux:latest}"
 
-# In-container probe: install the flatpak stack, then call CreateUpdateMonitor from a non-flatpak
-# caller over a fresh session bus and print the portal's reply.
+# In-container: install the flatpak stack, call CreateUpdateMonitor as a non-flatpak caller.
 read -r -d '' probe <<'INCONTAINER' || true
 set -e
 pacman -Sy --noconfirm --needed flatpak glib2 >/tmp/pac.log 2>&1 || { tail -5 /tmp/pac.log; exit 3; }

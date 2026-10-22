@@ -1,30 +1,12 @@
 #!/usr/bin/env python3
 """L3 conformance: run the self-hosted `js_mse_eme` suites and adjudicate against a baseline.
 
-TEST-PLAN §6. Two tiers, one script:
-
     scripts/cert.py --suite conformance-test              # workstation, Xvfb + content_shell
     scripts/cert.py --suite conformance-test --deck       # real hardware, over SSH + reverse tunnel
 
-**Passing this suite is NOT YouTube certification** and must never be described as such
-(`docs/legal.md`). It is a regression net built from the harness Google used to certify devices.
-That is a strong claim on its own and does not need inflating.
-
-Why self-hosted at all: the public runners are gone (verified 2026-07-09). `ytlr-cert.appspot.com`
-and `yts.devicecertification.youtube` serve a sunset stub and the `yt-dash-mse-test` unit-test URLs
-404. `github.com/youtube/js_mse_eme` is archived read-only but live, and the media vectors still
-serve from GCS. We pin the harness (`tests/cert/HARNESS.pin`) and mirror the vectors.
-
-Serving from `localhost` is load-bearing twice over, not a convenience:
-
-  * **EME needs a secure context.** `requestMediaKeySystemAccess` is gated on a potentially-trustworthy
-    origin. `http://localhost` qualifies; `http://192.168.x.y:8000` does not. Serve over a LAN IP and
-    every EME test fails at the first call, for a reason that has nothing to do with our engine.
-  * **It silences the phone-home.** The harness POSTs results to `qual-e.appspot.com` when the page
-    URL contains `appspot.com`/`googleapis.com` (`harness/test.js`). A localhost origin never does.
-
-Both are asserted before a single test runs, so a misconfiguration fails loudly instead of
-masquerading as a product bug.
+Passing this suite is NOT YouTube certification (`docs/legal.md`). The harness is pinned in
+`tests/cert/HARNESS.pin` and served from `localhost`: EME needs a secure context, and the harness
+phones results home only from appspot.com/googleapis.com origins.
 
 Exit codes (.internal/HARNESS.md §1):
 
@@ -70,14 +52,12 @@ HARNESS_DIR = _REPO / ".cache" / "js_mse_eme"
 VECTOR_DIR = _REPO / ".cache" / "cert-vectors"
 PIN_FILE = _REPO / "tests" / "cert" / "HARNESS.pin"
 
-# `/echo` exists to reflect eight bytes (ch.ECHO_ROUTE). Nothing legitimate posts more.
 ECHO_MAX_BYTES = 64 * 1024
 EXPECT_DIR = _REPO / "tests" / "cert" / "expectations"
 VECTOR_MANIFEST = _REPO / "tests" / "cert" / "vectors.sha256"
 RESULT_DIR = _REPO / "artifacts" / "cert"
 
-# TEST-PLAN §6.3. `playbackperf-*` is a trend, not a gate: its results depend on TDP, refresh rate,
-# and thermals, so on a handheld it is not deterministic. Recorded, never used to fail a build.
+# `playbackperf-*` depends on TDP, refresh rate and thermals: recorded as a trend, never a gate.
 GATE_SUITES = ("conformance-test", "msecodec-test", "encryptedmedia-test")
 TREND_SUITES = ("playbackperf-sfr-vp9-test", "playbackperf-sfr-h264-test",
                 "playbackperf-sfr-av1-test", "playbackperf-hfr-test")
@@ -88,12 +68,7 @@ def _say(msg):
 
 
 def _rel(path):
-    """Repo-relative if we can, absolute otherwise.
-
-    `Path.relative_to` RAISES when the path is outside the repo, so building an error message with it
-    turned a clean exit 3 ("no baseline") into a ValueError traceback and exit 1 — the error handler
-    failing louder than the error.
-    """
+    """Repo-relative if we can, absolute otherwise. Never raises."""
     try:
         return Path(path).relative_to(_REPO)
     except ValueError:
@@ -101,7 +76,7 @@ def _rel(path):
 
 
 class Env(Exception):
-    """Something about the setup is wrong. Exit 3, and never mistake it for a decoder regression."""
+    """Something about the setup is wrong. Exit 3."""
 
 
 # ---- vendoring the harness -----------------------------------------------------------------------
@@ -118,8 +93,8 @@ class Pin:
 
 
 def read_pins():
-    """Parse `<name> <url> <sha> <subdir>` records. The harness record must come first — the others
-    are checked out *inside* its tree, so it has to exist before they can land."""
+    """Parse `<name> <url> <sha> <subdir>` records. The `harness` record must come first: the others
+    are checked out inside its tree."""
     pins = []
     for line in PIN_FILE.read_text().splitlines():
         line = line.strip()
@@ -140,7 +115,7 @@ def read_pins():
 
 
 def _fetch_pin(pin):
-    """Fetch exactly the pinned commit into `pin.path`. Shallow: we want a tree, not a history."""
+    """Shallow-fetch exactly the pinned commit into `pin.path`."""
     dest = pin.path
     if (dest / ".git").exists():
         got = subprocess.run(["git", "-C", str(dest), "rev-parse", "HEAD"],
@@ -159,19 +134,15 @@ def _fetch_pin(pin):
     if not (dest / ".git").exists():
         git("init", "-q")
         git("remote", "add", "origin", pin.url)
-    # `fetch --depth 1 <sha>` pulls that one commit; a branch clone would drift under the pin.
     git("fetch", "-q", "--depth", "1", "origin", pin.sha)
     git("checkout", "-q", "-f", "FETCH_HEAD")
     _say(f"{pin.name}: {pin.url} @ {pin.sha[:12]}")
 
 
 def sync_harness(pins):
-    """Vendor the harness AND the two trees it forgets to ship.
+    """Vendor every pinned tree; upstream does not ship the `third_party/` scripts `main.html` loads.
 
-    `main.html` lists 86 script sources; 44 of them are under `third_party/` and upstream provides
-    none of them — no submodule, no `.gitmodules`, no fetch script. Without Closure and protobuf's
-    JS runtime the page renders blank, `window.globalRunner` is never created, and `cert.py` reports
-    "the harness never installed window.globalRunner". Nothing about the source says so.
+    Raises Env when any of `main.html`'s script sources is still missing.
     """
     for pin in pins:
         _fetch_pin(pin)
@@ -186,12 +157,7 @@ def sync_harness(pins):
 
 
 def missing_script_sources(root):
-    """Which of `main.html`'s `scriptSources` do not exist on disk?
-
-    Run after every sync. The failure it prevents is silent and expensive: the harness page loads,
-    44 script tags 404, nothing throws where we can see it, and the only symptom 60 seconds later is
-    "window.globalRunner is missing" — which reads like an engine bug.
-    """
+    """Which of `main.html`'s `scriptSources` do not exist on disk? (Missing ones load a blank page.)"""
     import re
 
     html = (root / "main.html").read_text()
@@ -202,13 +168,8 @@ def missing_script_sources(root):
 
 
 # ---- the vector mirror ---------------------------------------------------------------------------
-#
-# The harness fetches ~244 media files from a third-party bucket whose sibling endpoints Google has
-# already sunset. We rewrite MEDIA_PATH/CERT_PATH to our own origin and serve from a local cache that
-# is filled on first miss and SHA-256 verified thereafter.
-#
-# A hash mismatch exits 3, not 2. "Google changed the bucket" and "our decoder broke" are different
-# sentences, and at 3 a.m. only one of them is worth waking up for.
+# Media/cert vectors are served from a local cache, filled from the upstream bucket on first miss and
+# SHA-256 verified against tests/cert/vectors.sha256. A mismatch exits 3 (upstream changed), not 2.
 
 def load_manifest():
     if not VECTOR_MANIFEST.exists():
@@ -274,27 +235,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     manifest = {}
     recorded = {}
 
-    def log_message(self, *_a):  # silence: one line per media range request is unreadable
+    def log_message(self, *_a):
         pass
 
     def do_GET(self):
         return self._route()
 
     def do_HEAD(self):
-        # §6.5 preflights the vectors with HEAD. Delegating to do_GET would ship a body on a HEAD,
-        # which most clients tolerate and none should have to.
         return self._route()
 
     def _route(self):
-        # `BYPASS_CACHE` in harness/xhr.js appends `?<epoch-ms>` to every URL, so never match on
-        # self.path raw.
+        # harness/xhr.js appends `?<epoch-ms>` to every URL.
         path = self.path.split("?", 1)[0]
         if path == ch.ECHO_ROUTE:
             return self._serve_echo()
         if path == "/harness/util.js":
             return self._serve_rewritten_util()
-        # Vectors live under `/__vectors/`, NOT `/media/`: the harness has its own `media/` directory
-        # full of suite definitions, and shadowing it sends those script tags to Google's bucket.
+        # Not `/media/`: that is the harness's own directory of suite definitions.
         if path.startswith(ch.VECTOR_PREFIX):
             rest = path[len(ch.VECTOR_PREFIX):]
             kind, _, rel = rest.partition("/")
@@ -317,8 +274,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         except ValueError:
             self.send_error(400, "bad Content-Length")
             return
-        # Bound it. The route exists for an 8-byte test; an unbounded read here is a way to hang the
-        # only thread that can tell you the suite hung.
         if n < 0 or n > ECHO_MAX_BYTES:
             self.send_error(413, f"echo body must be 0..{ECHO_MAX_BYTES} bytes")
             return
@@ -330,10 +285,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self._write(body)
 
     def _write(self, blob):
-        """The harness aborts range requests by design (XHRAbort issues 100 and cancels 99). Each
-        abort lands here as a BrokenPipeError, and socketserver answers it with a full traceback on
-        stderr — a hundred of them, in the middle of the one log a human reads to find out why the
-        suite failed. The client hanging up is not our error."""
+        """Write `blob`, treating a client hang-up as normal (the harness aborts range requests)."""
         try:
             self.wfile.write(blob)
         except (BrokenPipeError, ConnectionResetError):
@@ -360,11 +312,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         try:
             blob = fetch_vector(kind, rel, self.manifest, self.recorded)
         except Env as e:
-            # 502: the *upstream* is at fault. The harness will fail the test; cert.py's preflight
-            # and the recorded reason are what tell you which of the two happened.
             self.send_error(502, str(e))
             return
-        # The harness byte-ranges everything, so range support is not optional.
+        # The harness byte-ranges everything.
         rng = self.headers.get("Range")
         total = len(blob)
         if rng and rng.startswith("bytes="):
@@ -394,9 +344,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
     allow_reuse_address = True
 
     def handle_error(self, request, client_address):
-        # Same reason as Handler._write: a client that hung up is not a server error. Anything else
-        # still gets its traceback, because a server bug during a conformance run is exactly the sort
-        # of thing that otherwise gets blamed on the decoder.
+        # A client hang-up is not a server error; anything else keeps its traceback.
         exc = sys.exc_info()[1]
         if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
             return
@@ -405,8 +353,7 @@ class Server(socketserver.ThreadingMixIn, http.server.HTTPServer):
 
 @contextlib.contextmanager
 def serve(root, port):
-    """Bind 127.0.0.1 only: the harness must never be reachable from the LAN, and the origin must be
-    `localhost` for both the secure-context and the phone-home reasons above."""
+    """Serve `root` on 127.0.0.1 only (the origin must be `localhost`, see the module docstring)."""
     Handler.manifest = load_manifest()
     Handler.recorded = {}
     handler = functools.partial(Handler, directory=str(root))
@@ -421,13 +368,7 @@ def serve(root, port):
 
 
 def port_is_free(port):
-    """Answer the question `Server` will actually ask, not a stricter one.
-
-    `Server.allow_reuse_address` sets SO_REUSEADDR, so it binds over a TIME_WAIT socket left by the
-    previous run. This guard did not, so it reported "port 8000 is busy" for a port the server was
-    about to bind without complaint — two `just cert` runs in a row, second one exit 3. A precondition
-    check that is stricter than the precondition is a false alarm generator.
-    """
+    """Can `Server` bind `port`? Uses the same SO_REUSEADDR, so a TIME_WAIT socket counts as free."""
     with socket.socket() as s:
         if Server.allow_reuse_address:
             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -443,14 +384,7 @@ def port_is_free(port):
 def run_suite(cdp, base_url, suite, args):
     """Navigate, then poll `globalRunner.testList` until nothing is UNKNOWN.
 
-    Two independent deadlines, because a conformance harness that wedges on one test will otherwise
-    hold a runner forever:
-
-      * a per-suite wall clock, and
-      * a **no-progress watchdog** — if the number of finished tests does not increase within
-        `--no-progress` seconds, abort and name the test that was in flight.
-
-    `stoponfailure` stays off. We want the whole result vector, not the first failure.
+    Raises TimeoutError past `--suite-timeout`, or when no test finishes within `--no-progress`.
     """
     url = f"{base_url}/main.html?test_type={suite}&command=run&timeout={args.test_timeout_ms}"
     _say(f"cert: navigating to {url}")
@@ -491,11 +425,7 @@ def run_suite(cdp, base_url, suite, args):
 
 
 def rerun_failures(cdp, base_url, suite, tests, args):
-    """Re-run only the failed indices for flake isolation. A test that passes on re-run is `flaky`.
-
-    §0's rule reaches here: retry transport, never adjudication. A green re-run does not delete the
-    red one, it renames it — so the second result is recorded as `flaky` and reported, never as a pass.
-    """
+    """Re-run only the failed tests. Returns {name: verdict}; a pass on re-run is `flaky`, never a pass."""
     failed = [t for t in tests if t["outcome"] in (ch.FAILED, ch.TIMEOUT)]
     if not failed:
         return {}
@@ -539,10 +469,7 @@ def report(suite, tests, verdict, flakes, meta):
     counts = ch.summarize(tests)
     _say(f"\ncert: {suite}: " + ", ".join(f"{k}={v}" for k, v in counts.items() if v))
 
-    # Every non-passing test, with the harness's own error text. Printed on EVERY run, including
-    # `--update-baseline`, because a baseline is a claim about what should pass and nobody can review
-    # that claim without seeing why the failures failed. Rubber-stamping the first run bakes today's
-    # bugs in as tomorrow's expectations.
+    # Printed on every run, including --update-baseline, so a new baseline can be reviewed.
     failures = [t for t in tests if t["outcome"] != ch.PASSED]
     if failures:
         _say(f"cert: {len(failures)} test(s) did not pass — READ THESE before trusting a baseline:")
@@ -618,8 +545,6 @@ def main():
         raise Env(f"port {args.port} is busy; the harness cannot be served there")
 
     meta = {"suite": args.suite, "target": "deck" if args.deck else "workstation"}
-    # Every pin goes into the result JSON. A baseline whose harness you cannot name is not a baseline
-    # — and "the harness" here is three repositories, not one.
     for pin in pins:
         meta[f"{pin.name}_commit"] = pin.sha
 
@@ -635,13 +560,10 @@ def main():
                 if not sshlib.reachable(host, port):
                     _say(f"{host}:{port} unreachable")
                     return EX_TRANSPORT
-                # -R makes the workstation's server appear at localhost:PORT *on the Deck*, which is
-                # the only way the engine there gets a secure context for EME.
+                # -R serves the harness at localhost:PORT on the Deck: a secure context for EME.
                 stack.enter_context(reverse_tunnel(host, port, args.port))
                 stack.enter_context(sshlib.Tunnel(host, port, args.cdp_port))
-            # On the Deck the app under test is driven by deckback-launcher, whose Navigator owns the
-            # existing page and pulls it back to youtube.com/tv the moment we navigate away -- the
-            # suite then reports "the harness never installed window.globalRunner". Take our own page.
+            # On the Deck the launcher's Navigator owns the existing page; take our own.
             cdp = stack.enter_context(cdplib.CDP(args.cdp_port, own_target=args.deck))
             cdp.call("Page.enable")
             cdp.call("Runtime.enable")
@@ -673,7 +595,6 @@ def main():
         return EX_OK
 
     if args.suite in TREND_SUITES:
-        # §6.3: playbackperf depends on TDP, refresh rate, and thermals. Recorded, never a gate.
         _say(f"cert: {args.suite} is a TREND, not a gate — results recorded, exit 0 regardless.")
         return EX_OK
     return EX_ASSERT if verdict.failed else EX_OK
@@ -707,7 +628,6 @@ if __name__ == "__main__":
         _say(f"harness: {e}")
         sys.exit(EX_ENV)
     except TimeoutError as e:
-        # A wedged suite has no opinion about the tests it never reached, and silence is not assent.
         _say(f"assertion: {e}")
         sys.exit(EX_ASSERT)
     except sshlib.DeckUnreachable as e:

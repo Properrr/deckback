@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
 # Launch the installed Flatpak through Steam's non-Steam shortcut URI over SSH (headless Game Mode).
+# `steam://rungameid/...` is fire-and-forget, so success means the launcher process appeared AND its
+# DevTools endpoint answered.
 #
 # Exit codes: 0 the app is up and its CDP endpoint answers · 2 the launch did not produce a running
 #             app · 3 no Steam shortcut / no Steam session · 4 Deck unreachable.
-#
-# `steam://rungameid/...` is fire-and-forget: Steam returns 0 whether or not it launched anything. So
-# this script used to print "launch request sent" and exit 0 with the app dead — a stale shortcut id,
-# a dead D-Bus session or the wrong DISPLAY all looked like success. We now WAIT for the process and
-# for the DevTools endpoint, because every automated on-Deck test starts by trusting this exit code.
 . "$(dirname "$0")/lib.sh"
 
 require_deck
@@ -16,7 +13,7 @@ app="io.github.properrr.deckback"
 cdp_port="${DECKBACK_CDP_PORT:-9222}"
 boot_timeout="${DECKBACK_BOOT_TIMEOUT:-40}"
 
-# The Deck's login uid: hardcoding 1000 breaks on any Deck whose primary user is not `deck`.
+# The Deck's login uid; not always 1000.
 deck_uid="$(deck_ssh "$DECK_HOST" 'id -u')" || die_transport "cannot read the Deck's uid"
 steam_bin="$(deck_ssh "$DECK_HOST" 'ls "$HOME/.local/share/Steam/ubuntu12_32/steam" 2>/dev/null || true')"
 [ -n "$steam_bin" ] || die_env "Steam client binary not found on ${DECK_HOST} (is Steam installed?)"
@@ -35,8 +32,6 @@ deck_ssh "$DECK_HOST" env DISPLAY="$display" "XDG_RUNTIME_DIR=/run/user/${deck_u
   "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${deck_uid}/bus" "$steam_bin" \
   "steam://rungameid/${steam_uri_id}" >/dev/null 2>&1 || true # Steam's own exit code is meaningless here
 
-# Verification, in two stages. The process appearing proves Steam honored the URI; the CDP endpoint
-# answering proves the engine actually came up rather than crashing on startup.
 info "Waiting up to ${boot_timeout}s for the launcher process ..."
 for _ in $(seq 1 "$boot_timeout"); do
   if deck_ssh "$DECK_HOST" 'pgrep -f deckback-launcher >/dev/null 2>&1'; then

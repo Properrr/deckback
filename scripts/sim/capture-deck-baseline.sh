@@ -1,29 +1,14 @@
 #!/usr/bin/env bash
-# Capture the REAL Deck's userspace baseline into docker/steamos-baseline.env, so the test sim can be
-# pinned to the device instead of guessing at it.
+# Capture the real Deck's userspace baseline (OS, glibc/gcc, linked packages, pacman repos) into
+# docker/steamos-baseline.env, which docker/steamos.Dockerfile pins to. Re-run after a SteamOS update.
 #
 #   scripts/sim/capture-deck-baseline.sh [--print]
 #
-# WHY THIS EXISTS. The sim's base used to be `FROM archlinux:latest`, under a comment reading "Arch
-# base — honouring 'SteamOS is Arch-based'". That is true and it is not enough: archlinux:latest is a
-# ROLLING release that drifts continuously ahead of SteamOS 3.x, which is a FROZEN Arch snapshot plus
-# Valve's holo/jupiter packages. So `ok - launcher builds + L0 green on Arch` proved the launcher
-# builds against tomorrow's glibc/gcc/libsystemd, not against the Deck's — measured, GCC 16 / glibc
-# 2.43 in the sim vs GCC 15.1.1 / glibc 2.41 on the device. The sentence was honest and read far
-# stronger than it was: the same family of defect as `just power` reporting `mean 0.00 W ... PASS`
-# off a missing battery node. A check that answers a different question than the one you asked is not
-# a check. docker/steamos.Dockerfile now pins to what this script captures.
+# Repos are read off the unit (/etc/pacman.conf, /etc/pacman.d/*mirrorlist*), never hardcoded.
+# Matching userspace makes only the build and D-Bus layers faithful; scripts/sim/run.sh still refuses
+# the hardware gates.
 #
-# THE RULE THIS FOLLOWS. We do not hardcode Valve's mirror URLs or branch names from memory. The Deck
-# knows which repos it tracks — /etc/pacman.conf and /etc/pacman.d/*mirrorlist* are the authority —
-# so we read them off the unit. When SteamOS updates, re-run this: the diff IS the upgrade note.
-#
-# WHAT THIS DOES NOT BUY. Matching userspace makes the BUILD and D-BUS layers faithful. It does not
-# conjure a GPU, VA-API, gamescope, a battery or ACPI. scripts/sim/run.sh must keep refusing the
-# hardware gates with exit 6, and this script exists to make the sim honest, never to widen its
-# claims. See .internal/findings/durable/test-sim.md.
-#
-# Exit (harness §1): 0 ok · 3 env (no Deck configured) · 4 transport (Deck unreachable).
+# Exit: 0 ok · 3 env (no Deck configured) · 4 transport (Deck unreachable).
 set -euo pipefail
 # shellcheck source=scripts/lib.sh
 . "$(dirname "$0")/../lib.sh"
@@ -36,9 +21,7 @@ require_deck
 
 info "capturing baseline from $DECK_HOST ..."
 
-# One SSH round trip: ask the Deck everything at once. Missing values come back empty rather than
-# failing the run — an absent key is data ("this unit has no such package"), and the consumer decides
-# whether that is fatal.
+# One SSH round trip. A missing value comes back empty (data, not a failure); the consumer decides.
 raw="$(
   deck_ssh "$DECK_HOST" 'bash -s' <<'REMOTE'
 set -u
@@ -83,9 +66,7 @@ echo "---END---"
 REMOTE
 )" || die_transport "baseline capture failed over SSH"
 
-# `^[A-Z][A-Za-z0-9_]*=`, not `^[A-Z_]+=`: the latter silently dropped every PKG_* line the Deck
-# sent, because a package name can carry digits. A filter that discards data instead of failing is
-# the same silent-drop this whole baseline exists to stop.
+# `^[A-Z][A-Za-z0-9_]*=`, not `^[A-Z_]+=`: package names (PKG_* keys) can carry digits.
 kv="$(printf '%s\n' "$raw" | sed -n '1,/---PACMAN_CONF---/p' | grep -E '^[A-Z][A-Za-z0-9_]*=' || true)"
 repos="$(printf '%s\n' "$raw" | sed -n '/---PACMAN_CONF---/,/---END---/p')"
 

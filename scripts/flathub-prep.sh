@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# Assemble a Flathub-PR-ready manifest set from the current tree. READ flathub/SUBMISSION.md first —
-# Flathub cannot build Cobalt from source, so the engine ships as an extra-data tarball pinned by
-# sha256; this script builds that tarball, checksums it, pins the source commit, and fills the
-# manifest template's placeholders into flathub/build/ (the repo's own copy stays a template).
+# Assemble a Flathub-PR-ready manifest set into flathub/build/ (see flathub/SUBMISSION.md). Flathub
+# cannot build Cobalt, so the engine ships as an extra-data tarball pinned by sha256: pack and checksum
+# it, pin the source commit, and fill the manifest template's placeholders.
 #
 #   scripts/flathub-prep.sh <release-tag>
 #
@@ -32,8 +31,8 @@ commit="$(git rev-parse HEAD)"
 mkdir -p "$out"
 tarball="$out/cobalt-prebuilt-${pin}.tar.gz"
 
-# The engine tarball extracts FLAT (apply_extra untars in /app/extra, so content_shell lands at
-# /app/extra/content_shell — matching flathub/cobalt-zypak.sh). Deterministic-ish: sorted, no mtimes.
+# The tarball extracts FLAT: apply_extra untars in /app/extra, so content_shell lands at
+# /app/extra/content_shell (flathub/cobalt-zypak.sh). Sorted, no mtimes.
 info "Packing engine runtime -> ${tarball} ..."
 tar --sort=name --mtime='@0' --owner=0 --group=0 --numeric-owner \
     -czf "$tarball" -C "$stage" .
@@ -42,7 +41,6 @@ sha256="$(sha256sum "$tarball" | cut -d' ' -f1)"
 size="$(stat -c%s "$tarball")"
 info "  sha256=${sha256}  size=${size} bytes  pin=${pin}  commit=${commit}"
 
-# Fill the template placeholders into the PR-ready manifest (template itself stays untouched).
 sed -e "s|<COMMIT>|${commit}|g" \
     -e "s|<TAG>|${tag}|g" \
     -e "s|<PIN>|${pin}|g" \
@@ -50,14 +48,12 @@ sed -e "s|<COMMIT>|${commit}|g" \
     -e "s|<SIZE>|${size}|g" \
     "$tmpl" > "$out/${app}.yaml"
 
-# Sanity: no placeholder survived.
 if grep -qE '<(COMMIT|TAG|PIN|SHA256|SIZE)>' "$out/${app}.yaml"; then
   die_assert "a placeholder was left unfilled in $out/${app}.yaml"
 fi
 
 cp flathub/flathub.json flathub/apply_extra "$out/"
 
-# Validate the metainfo the manifest installs (same gate as flatpak-lint, no engine needed).
 metainfo="flatpak/assets/${app}.metainfo.xml"
 if command -v appstreamcli >/dev/null 2>&1; then
   appstreamcli validate --no-net "$metainfo" >/dev/null 2>&1 &&

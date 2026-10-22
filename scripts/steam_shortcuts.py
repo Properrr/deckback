@@ -1,30 +1,14 @@
 #!/usr/bin/env python3
 """Manage the Deckback non-Steam shortcut + library artwork on a Steam Deck.
 
-Runs ON the Deck (no third-party deps — Steam ships no `vdf` module, so we parse the binary
-shortcuts.vdf ourselves). Two jobs:
+Runs ON the Deck, stdlib only (binary shortcuts.vdf parsed here).
 
-  * `remove`      — delete every shortcut whose AppName matches from shortcuts.vdf (with a backup),
-                    and delete its grid artwork.
-  * `art`         — find the matching shortcut, derive its grid appid, and install the capsule /
-                    hero / logo / header / icon PNGs into userdata/<id>/config/grid/.
+  * `add`     — write the shortcut with appid = crc32(exe+appname) | 0x80000000 (backup kept).
+  * `remove`  — delete every matching shortcut (backup kept) and its grid artwork.
+  * `art`     — install capsule/hero/logo/header/icon PNGs into userdata/<id>/config/grid/.
 
-Steam caches shortcuts.vdf in memory and rewrites it on exit, so an edit to the file only sticks
-if Steam is NOT running. `remove` refuses to run while Steam is up. `art` only *adds* files to the
-grid dir (Steam never rewrites those), so it is safe any time and simply appears on the next Steam
-restart.
-
-The grid-image filenames are keyed by the shortcut's appid:
-    grid/<appid>.png        landscape / header capsule
-    grid/<appid>p.png       portrait library capsule
-    grid/<appid>_hero.png   hero background
-    grid/<appid>_logo.png   transparent logo overlay
-    grid/<appid>_icon.png   icon
-The <appid> is whatever value Steam stored in the shortcut's own `appid` field (see art_id()).
-For shortcuts Steam or `steamos-add-to-steam` created, that appid is NOT reproducible from
-crc32(exe+appname) — so we read it from the entry and only fall back to the widely-used
-crc convention (SteamGridDB / boilr / steamgrid: crc32(exe+appname) | 0x80000000) when the
-entry carries no appid, i.e. a shortcut we authored ourselves.
+Steam rewrites shortcuts.vdf from memory on exit, so `add`/`remove` refuse while Steam runs.
+Grid files are named grid/<appid>{,p,_hero,_logo,_icon}.png after the entry's stored `appid`.
 """
 import argparse
 import glob
@@ -92,8 +76,7 @@ def dump_shortcuts(path, root_key, items):
     out += root_key.encode("utf-8") + b"\x00"
     _write_map(out, items)   # entries + the 0x08 that closes the "shortcuts" map
     out.append(0x08)         # ... and the 0x08 that closes the implicit root map (the file wrapper)
-    # Atomic replace: Steam may re-read this file the instant it restarts, so it must never observe a
-    # half-written shortcuts.vdf (that would drop every non-Steam game). Write a temp + rename.
+    # Atomic replace: a half-written shortcuts.vdf would drop every non-Steam game.
     tmp = path + ".deckback.tmp"
     with open(tmp, "wb") as f:
         f.write(out)
@@ -135,14 +118,8 @@ def _matches(entry, appname):
 
 
 def art_id(entry, exe, appname):
-    """The appid grid artwork must be named after.
-
-    Steam looks up a non-Steam shortcut's art by the `appid` it stored in that shortcut's own
-    entry — and modern Steam (and `steamos-add-to-steam`) assigns that appid by a scheme our
-    crc32(exe+appname) formula does NOT reproduce. So when the entry carries an `appid` field, that
-    value wins; the crc fallback is only for shortcuts we authored ourselves and wrote no appid for.
-    Read unsigned: Steam names the grid files with the unsigned 32-bit value.
-    """
+    """The appid grid artwork must be named after: the entry's stored `appid` (unsigned), else
+    grid_id(). Steam-assigned appids are not reproducible from the crc."""
     aid = _entry_field(entry, "appid")
     if isinstance(aid, int):
         return aid & 0xFFFFFFFF
@@ -150,7 +127,7 @@ def art_id(entry, exe, appname):
 
 
 def grid_id(exe, appname):
-    """Legacy 32-bit grid appid used for custom-artwork filenames."""
+    """crc32(exe+appname) | 0x80000000, the conventional non-Steam grid appid."""
     crc = zlib.crc32((exe + appname).encode("utf-8")) & 0xFFFFFFFF
     return crc | 0x80000000
 
@@ -174,9 +151,6 @@ def _find_shortcuts_vdf(explicit):
 
 
 def cmd_remove(args):
-    # Steam rewrites shortcuts.vdf from memory when it exits, so editing the file while Steam is up
-    # silently loses the edit (and this is the destructive path over ALL non-Steam games). Refuse,
-    # as the docstring and README promise, unless the caller insists with --force.
     if _steam_running() and not args.force:
         print("Steam is running — close it first (edits are lost when Steam exits), or pass --force",
               file=sys.stderr)
@@ -201,8 +175,7 @@ def cmd_remove(args):
             print(f"{vdf}: no '{args.appname}' entries"); continue
         # re-index the surviving entries 0..n-1 (Steam keys them by ordinal)
         reindexed = [(t, str(i), e) for i, (t, _k, e) in enumerate(kept)]
-        # Back up ONCE: never overwrite an existing backup, or a second run would replace the pristine
-        # original with the already-edited file and there would be nothing to restore.
+        # Back up once: never overwrite the pristine original.
         bak = vdf + ".deckback.bak"
         if not os.path.exists(bak):
             shutil.copy2(vdf, bak)
@@ -210,7 +183,6 @@ def cmd_remove(args):
         removed = len(items) - len(kept)
         total += removed
         print(f"{vdf}: removed {removed} '{args.appname}' entries (backup: {vdf}.deckback.bak)")
-        # clean grid art for the removed entries
         grid = os.path.join(os.path.dirname(vdf), "grid")
         for gid in removed_ids:
             for suf in ("", "p", "_hero", "_logo", "_icon"):
@@ -259,13 +231,8 @@ def cmd_art(args):
 
 
 def _new_shortcut_entry(appid, appname, exe, start_dir, icon, launch_opts):
-    """A shortcuts.vdf entry with the field set Steam writes for a non-Steam game.
-
-    We set `appid` explicitly to grid_id(exe, appname) so both Steam AND our `art` command name the
-    grid files with the SAME id — the whole reason `add` exists (a `steamos-add-to-steam` shortcut
-    gets a Steam-assigned appid our crc can't reproduce, so its art can't be applied in one shot).
-    appid is stored as an unsigned int32 (tag 0x02); art_id reads it back unsigned, matching grid_id.
-    """
+    """A shortcuts.vdf entry with the field set Steam writes for a non-Steam game, with an explicit
+    unsigned `appid` so Steam and `art` name the grid files alike."""
     return [
         (0x02, "appid", appid & 0xFFFFFFFF),
         (0x01, "AppName", appname),
@@ -299,8 +266,6 @@ def _fresh_shortcuts_vdf_path():
 
 
 def cmd_add(args):
-    # Steam rewrites shortcuts.vdf from memory on exit, so an edit made while it runs is lost. Refuse,
-    # like `remove` does, unless forced.
     if _steam_running() and not args.force:
         print("Steam is running — close it first (edits are lost when Steam exits), or pass --force",
               file=sys.stderr)
@@ -308,7 +273,6 @@ def cmd_add(args):
     vdfs = _find_shortcuts_vdf(args.vdf)
     created = False
     if not vdfs:
-        # A Deck that never added a non-Steam game has no shortcuts.vdf yet — create one.
         path = args.vdf or _fresh_shortcuts_vdf_path()
         if not path:
             print("no Steam userdata found — has Steam ever run on this Deck?", file=sys.stderr)

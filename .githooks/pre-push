@@ -1,14 +1,6 @@
 #!/usr/bin/env bash
-# Pre-push hook: run the SAME gate CI runs, so a push never lands red. It delegates to
-# scripts/preflight.sh — the one definition shared with .github/workflows/lint.yml — which runs the
-# harness suite, clang-format-18, the launcher gcc/clang builds, the gn-args check and shellcheck,
-# bootstrapping pinned clang-format-18/shellcheck into a cached venv if the system lacks them.
-#
-# This replaces the old hook that mirrored only clang-format + shellcheck: it let a stale test and a
-# clang-only -Werror land red because it never ran the harness suite or the launcher builds locally.
-#
-# Enable once per clone:  just hooks   (sets core.hooksPath to .githooks)
-# Bypass a single push (use sparingly, CI is still the backstop):  git push --no-verify
+# Pre-push hook: runs scripts/preflight.sh, the same gate CI runs (.github/workflows/lint.yml).
+# Enable once per clone:  just hooks   ·   bypass a single push:  git push --no-verify
 set -uo pipefail
 cd "$(git rev-parse --show-toplevel)" || exit 1
 

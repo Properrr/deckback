@@ -3,15 +3,10 @@
 #
 #   curl -fsSL https://properrr.github.io/deckback/install.sh | bash
 #
-# Published verbatim to the GitHub-Pages site AS install.sh (scripts/publish-repo.sh stages it there,
-# next to deckback.flatpakrepo, steam_shortcuts.py and steam/*.png, so every fetch below resolves).
-# It is STANDALONE — it does NOT source scripts/lib.sh, because a new user fetches only this one file.
-#
-# What it does, in order: add the Deckback update repo + install --user (so self-update works),
-# confirm the app got evdev (input) access, then — with Steam OFF — write the "Deckback" Steam
-# shortcut + full tile artwork itself (steam_shortcuts.py, using an explicit crc appid so the art
-# matches; findings/durable/one-line-install.md). Reversible: the shortcut edit backs up shortcuts.vdf
-# and can be undone with `steam_shortcuts.py remove`.
+# Published AS install.sh by scripts/publish-repo.sh, next to every file fetched below. STANDALONE:
+# does not source scripts/lib.sh. Adds the update repo + installs --user (so self-update works),
+# confirms evdev access, then with Steam off writes the Steam shortcut + artwork (steam_shortcuts.py;
+# undo with `steam_shortcuts.py remove`). Env: DECKBACK_SITE overrides the site base URL.
 set -euo pipefail
 
 APP=io.github.properrr.deckback
@@ -35,9 +30,9 @@ if [ -n "$host_fp" ] && [ "$(printf '%s\n%s\n' 1.16.0 "$host_fp" | sort -V | hea
      the gamepad and touch lock depend on). Update SteamOS (3.5+ ships flatpak 1.16.x) and retry."
 fi
 
-# --- 1. Repo + install --user (a --user install is what lets the app self-update via the portal). --
+# --- 1. Repo + install --user (what lets the app self-update via the portal). ------------------------
 say "Adding the runtime + Deckback repos ..."
-# The Freedesktop runtime comes from Flathub; --if-not-exists so an existing remote is left alone.
+# The Freedesktop runtime comes from Flathub.
 flatpak remote-add --user --if-not-exists flathub "$FLATHUB" >/dev/null 2>&1 || true
 flatpak remote-add --user --if-not-exists deckback "$BASE/deckback.flatpakrepo"
 # An install from another remote (a bundle's "deckback-origin") cannot be switched over in place:
@@ -48,12 +43,11 @@ if [ -n "$origin" ] && [ "$origin" != deckback ]; then
      sign-in and settings are kept): flatpak uninstall --user $APP — then run this again."
 fi
 say "Installing or updating Deckback (first run also pulls the Freedesktop runtime — a few minutes) ..."
-# --or-update: re-running this is ALSO the documented fix when a release adds a sandbox permission,
-# which the in-app self-update cannot accept (findings/durable/self-update.md). A plain install
-# prints "already installed" and changes nothing, so that fix used to be a no-op.
+# --or-update: re-running this is also the fix when a release adds a sandbox permission, which the
+# in-app self-update cannot accept.
 flatpak install --user -y --or-update deckback "$APP"
 
-# --- 2. Confirm evdev access. Without 'input', the gamepad + touch lock fail SILENTLY (F1). --------
+# --- 2. Confirm evdev access. Without 'input', the gamepad + touch lock fail silently. -------------
 # Mirrors scripts/lib.sh:flatpak_grants_input — only the devices= line counts; 'all' is a superset.
 perms="$(flatpak info --show-permissions "$APP" 2>/dev/null || true)"
 case "$(printf '%s\n' "$perms" | sed -n 's/^devices=//p')" in
@@ -75,8 +69,7 @@ for png in capsule header hero logo icon; do
   curl -fsSL "$BASE/steam/${png}.png" -o "$tmp/steam/${png}.png"
 done
 
-# --- 4. Steam must be OFF: it caches the shortcut list in memory and rewrites shortcuts.vdf on exit,
-# so an edit made while it runs is lost. Don't force-kill (disruptive) — ask, then wait. ------------
+# --- 4. Steam must be OFF: it rewrites shortcuts.vdf from memory on exit. Ask, don't force-kill. --
 if pgrep -x steam >/dev/null 2>&1; then
   warn "Steam is running. It would overwrite the new shortcut when it next exits."
   echo "    Fully quit Steam now (Game Mode: hold the STEAM button > Power > Exit to Desktop), then" >&2

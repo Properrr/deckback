@@ -26,37 +26,32 @@ build preset="dev":
 launcher *args:
     ./scripts/launcher.sh "$@"
 
-# Enable the repo's git hooks (pre-push runs `just preflight`, the exact checks CI runs).
-# Run once per clone — REQUIRED before you push. Bypass a single push with `git push --no-verify`.
+# REQUIRED once per clone: enable the repo's git hooks (pre-push runs `just preflight`).
 hooks:
     git config core.hooksPath .githooks
     @echo "git hooks enabled — .githooks/pre-push runs 'just preflight' before every push."
 
-# The pre-push / pre-release gate: the SAME checks CI runs (.github/workflows/lint.yml), one script.
-# shellcheck + harness suite + clang-format + launcher gcc/clang builds + gn-args sanity. Needs no
-# Chromium tree, no Deck, no Docker — run it anywhere before you push. target: shell|launcher|gn|all.
+# No Chromium tree, Deck or Docker needed. target: shell|launcher|gn|all.
+# The pre-push / pre-release gate: the same script CI runs.
 preflight target="all":
     ./scripts/preflight.sh "{{target}}"
 
-# L0 tests for the harness itself (shell/awk logic + the tests/deck pure helpers).
-# No Deck, no container, no Chromium tree. CI runs this on every push.
+# L0 tests for the harness itself (no Deck, container or Chromium tree). CI runs this on every push.
 test-harness:
     ./tests/harness/run.sh
 
-# Containerized test sim: the GPU-INDEPENDENT layers only (launcher build, installer Steam-tile
-# writing, the Flatpak-portal self-update foundation, the D-Bus reconnect drive). REFUSES hardware
-# gates (vaapi/power/soak/…) with exit 6 — never fakes a pass. Needs Docker. See test-sim.md.
-# suite: all (default) | launcher | shortcut | portal | reconnect.
+# Refuses hardware gates (vaapi/power/soak/…) with exit 6, never fakes a pass. Needs Docker.
+# Containerized sim of the GPU-independent layers. suite: all|launcher|shortcut|portal|reconnect.
 sim suite="all":
     ./scripts/sim/run.sh "{{suite}}"
 
-# Unattended on-Deck run: deploy -> launch -> gate -> cert, then tear down. `--full` adds probe,
-# power and soak. A run that adjudicates nothing exits 3, never 0. `just deck-ci --dry-run` to look.
+# `--full` adds probe, power and soak; `--dry-run` to look. A run that adjudicates nothing exits 3.
+# Unattended on-Deck run: deploy -> launch -> gate -> cert, then tear down.
 deck-ci *args:
     ./scripts/deck-ci.sh "$@"
 
-# L2 on-Deck suite over SSH + CDP tunnel. App must be running there (`just remote-run`).
 #   -m gate  = must pass · -m probe = discovery of still-unverified things · -k touch = the grab test
+# L2 on-Deck suite over SSH + CDP tunnel. App must be running there (`just remote-run`).
 test-deck *args:
     ./scripts/test-deck.sh "$@"
 
@@ -65,9 +60,6 @@ compdb:
     ./scripts/compdb.sh
 
 # Xvfb headless boot + DevTools-protocol assertion + screenshot (the CI gate).
-# The preset was not a parameter until 2026-07-10, so `just smoke` could only ever look at out/dev.
-# On a tree that has only out/deck it started nothing, waited for a DevTools endpoint nobody was
-# serving, and reported TRANSPORT (4) — "retry me" — for a build that did not exist.
 smoke preset="dev":
     ./scripts/smoke.sh "{{preset}}"
 
@@ -103,9 +95,9 @@ logs:
 debug:
     ./scripts/debug.sh
 
-# Shrink the Deck's Flatpak-portal update poll (~30 min default) for fast self-update debugging, then
-# restore it. `just portal-poll set [seconds]` (default 60) | `restore` | `status` (default). Set
-# FIRST, then relaunch Deckback — a portal restart orphans a running app's monitor (self-update.md).
+# `set [seconds]` (default 60) | `restore` | `status` (default). Set FIRST, then relaunch Deckback:
+# a portal restart orphans a running app's update monitor.
+# Shrink the Deck's Flatpak-portal update poll (~30 min) for fast self-update debugging, or restore it.
 portal-poll *args:
     ./scripts/portal-poll.sh {{args}}
 
@@ -121,58 +113,44 @@ patch-new name:
 patch-refresh:
     ./scripts/patch.sh refresh
 
-# Refuses to sample unless a video is really playing on the VA-API decoder: an average taken over a
-# paused video passes 9 W effortlessly and measures nothing. Needs a video playing on the Deck.
+# Needs a video playing on the VA-API decoder; refuses to sample otherwise.
 # Poll Deck battery draw during playback -> CSV, adjudicated against the P4 <=9 W gate.
 power seconds="300":
     ./scripts/power.sh "{{seconds}}"
 
-# Reports the post-resume EPP change (steamos#2383) without gating on it -- root-only, unfixable.
-# Still NOT checked: audio restored, screen did not dim. Needs a video playing on the Deck.
+# Reports the post-resume EPP change (steamos#2383) without gating on it. Needs a video playing.
 # n x suspend/resume over SSH: app alive AND playback position advanced after every resume.
 soak n="25":
     ./scripts/soak.sh "{{n}}"
 
-# Does gamescope's touch mode 4 (passthrough) deliver REAL touch events to Blink, or only the pointer
-# emulation we already discard? Needs a human tapping the Deck's panel, and the app running with
-# disable_touch:false -- no_pointer.js would otherwise swallow the events before the probe sees them
-# and it would read zero for the wrong reason. Answers whether a mobile-style gesture layer is
-# buildable on wl_touch or must fall back to pointerdown.
+# Needs a human tapping the panel and the app running with disable_touch:false.
+# Does gamescope touch mode 4 (passthrough) deliver real touch events to Blink, or only pointer emulation?
 touch-probe *args:
     python3 scripts/touch-probe.py {{args}}
 
-# Does touch still reach the gesture router? Runs the 2x2 OFF-DECK in the build container: each
-# engine preset (deck vs release/gold) x {router, router+hide_cursor}, dispatching REAL touch through
-# CDP Input.dispatchTouchEvent. Answers the page-script half of touch-gestures.md §7.0 without a
-# Deck. It does NOT exercise gamescope->Xwayland->XI2, so a FAILURE here is conclusive and a pass
-# narrows the question to the layer below. `just touch-bisect "deck release"` to pick presets.
+# Each engine preset x {router, router+hide_cursor}, real touch via CDP Input.dispatchTouchEvent. Skips
+# gamescope/XI2, so only a FAILURE is conclusive. `just touch-bisect "deck release"` picks presets.
+# Off-Deck check (in the build container) that touch still reaches the gesture router.
 touch-bisect *args:
     ./scripts/touch-bisect.sh {{args}}
 
-# P12.0 feature probes (durable/feature-landscape.md §7): classify a mechanism BEFORE building on it.
-#   player   what the TVHTML5 player exposes for playback rate/quality -> decides P12.5, P12.1, P12.9.
-#            Needs a video actually PLAYING: on the browse screen every quality getter answers []
-#            because nothing is loaded, which reads exactly like "this build has no quality API".
-#   pairing  is Leanback's "Link with TV code" reachable under our UA -> decides P12.3 outright.
-#            Needs a human to open Leanback's own Settings; a miss on the wrong screen is not a no.
-# A negative answer exits 0 -- it is a finding to register. Only "could not observe" is an error (3).
+# player: the TVHTML5 player's rate/quality API (needs a video PLAYING) · pairing: is "Link with TV
+# code" reachable under our UA (needs a human in Leanback Settings). A negative answer exits 0.
+# Feature probes (player|pairing): classify a mechanism before building on it; exit 3 = could not observe.
 feature-probe *args:
     python3 scripts/feature-probe.py {{args}}
 
-# L3 conformance. Serves the pinned js_mse_eme on 127.0.0.1 (secure context for EME + no phone-home),
-# fails only on a REGRESSION against tests/cert/expectations/. NOT YouTube certification (docs/legal.md).
-# Self-hosted js_mse_eme, headless in the container. No Deck needed -- MSE/codec is engine behaviour.
+# Fails only on a REGRESSION against tests/cert/expectations/. NOT YouTube certification (docs/legal.md).
+# L3 conformance: self-hosted js_mse_eme on 127.0.0.1, headless in the container. No Deck needed.
 cert suite="conformance-test" preset="dev" *args:
     ./scripts/cert.sh "{{suite}}" "{{preset}}" {{args}}
 
-# Adds real GPU decode. `playbackperf-*` is recorded as a TREND and never fails a build.
+# Adds real GPU decode; `playbackperf-*` is recorded as a trend and never fails a build.
 # Same suites against the Deck. The app must already be running there (just run / just remote-run).
 cert-deck suite="conformance-test" *args:
     ./scripts/cert.sh --deck "{{suite}}" {{args}}
 
-# Static gates on the manifest + shipped metadata. Needs the pack image; needs NO engine, no
-# checkout, no Deck — so CI can run it on every push, which is the only reason a gate ever catches
-# anything. `just flatpak` runs it first.
+# Static gates on the manifest + shipped metadata. Needs only the pack image (no engine, no Deck).
 flatpak-lint:
     ./scripts/flatpak-lint.sh
 
@@ -184,8 +162,8 @@ flatpak preset="deck":
 install:
     ./scripts/install.sh
 
-# Assemble a Flathub-PR-ready manifest set (extra-data engine tarball + checksums + pinned commit).
 # Needs a staged engine (run `just flatpak` first). See flathub/SUBMISSION.md.
+# Assemble a Flathub-PR-ready manifest set (extra-data engine tarball + checksums + pinned commit).
 flathub-prep tag:
     ./scripts/flathub-prep.sh "{{tag}}"
 
@@ -197,9 +175,9 @@ release-prep version:
 release tag:
     ./scripts/release.sh "{{tag}}"
 
-# Build the hostable ostree repo from the .flatpak bundle + stage the GitHub-Pages site locally.
 # Continues the LIVE repo's history by default (needs network); DECKBACK_REPO_FRESH=1 for an
 # offline/local test site. See scripts/publish-repo.sh for the environment knobs.
+# Build the hostable ostree repo from the .flatpak bundle + stage the GitHub-Pages site locally.
 publish-repo bundle="io.github.properrr.deckback.flatpak" site="flatpak/pages-site":
     ./scripts/publish-repo.sh "{{bundle}}" "{{site}}"
 
@@ -207,13 +185,12 @@ publish-repo bundle="io.github.properrr.deckback.flatpak" site="flatpak/pages-si
 audio-repair:
     ./scripts/install-audio-repair.sh
 
-# Install the host-side idle-nudge user service (keeps the screen on / no auto-suspend while a video
-# plays). Runs ON the Deck in Desktop Mode, not from the workstation. See docs/SUPPORT.md.
+# Runs ON the Deck in Desktop Mode, not from the workstation. See docs/SUPPORT.md.
+# Install the host-side idle-nudge user service (keeps the screen on while a video plays).
 idle-nudge:
     ./scripts/install-idle-nudge.sh
 
-# Remove Deckback + every host-side trace (both helpers, the Steam shortcut). Keeps app data (the
-# YouTube sign-in) unless you pass --purge. Runs ON the Deck in Desktop Mode. See docs/SUPPORT.md.
 #   just uninstall            # keep sign-in    ·    just uninstall --purge   # full wipe
+# Remove Deckback + every host-side trace; keeps app data (the sign-in) unless --purge. Runs ON the Deck.
 uninstall *args:
     ./scripts/uninstall.sh "$@"

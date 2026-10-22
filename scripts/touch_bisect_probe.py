@@ -1,15 +1,11 @@
 #!/usr/bin/env python3
 """One cell of the touch bisect: inject the page scripts, dispatch REAL touch, count what arrived.
 
-Driven by scripts/touch-bisect.sh, which supplies the engine and the mode. See that file for what
-the experiment can and cannot prove.
+Driven by scripts/touch-bisect.sh. CDP `Input.dispatchTouchEvent` produces trusted events at the
+browser layer, so page-script suppression shows up here; a compositor-level cause does not.
 
-The touch is dispatched with CDP `Input.dispatchTouchEvent`, which enters at the browser layer and
-produces trusted events — the same kind a panel produces, minus the compositor path. So a page
-script that suppresses touch WILL show up here; a compositor-level cause will not.
-
-Exit codes: 0 the cell ran and touch arrived · 2 touch did NOT arrive (a real regression) ·
-3 the cell could not be set up (no DevTools, script would not install) — never a silent pass.
+Exit codes: 0 the cell ran and touch arrived · 2 touch did NOT arrive ·
+3 the cell could not be set up (no DevTools, script would not install).
 """
 
 from __future__ import annotations
@@ -28,13 +24,7 @@ EX_OK, EX_ASSERT, EX_ENV = 0, 2, 3
 
 
 def verdict(stats, taps):
-    """Exit code for one cell. Pure, so tests/harness/test_touch_bisect.py can pin it.
-
-    The distinction that matters: a cell that could not be SET UP (no router, no engine, an
-    exception) is ENV, never OK. This whole experiment exists to answer "did touch arrive?", and a
-    harness that answers "yes" because it never asked is the failure mode the project keeps
-    registering.
-    """
+    """Exit code for one cell: ENV when there are no usable stats, else OK iff every tap arrived."""
     if not stats:
         return EX_ENV
     seen = stats.get("sequences")
@@ -42,8 +32,7 @@ def verdict(stats, taps):
         return EX_ENV
     return EX_OK if seen >= taps else EX_ASSERT
 
-# A page that is not youtube.com/tv: this cell is about the ENGINE and the scripts, and pulling in
-# Leanback would add a network dependency and its own listeners to the measurement.
+# A blank local page: no Leanback listeners or network in the measurement.
 PAGE = (
     "data:text/html,<html><body style='margin:0'>"
     "<div id='t' style='width:100vw;height:100vh'>bisect</div></body></html>"

@@ -1,9 +1,4 @@
-"""The harness exit-code taxonomy, once, for Python.
-
-`.internal/HARNESS.md` §1 defines it; `scripts/lib.sh` declares it for shell. This is the third
-declaration and the last: `tests/harness/test_deckci.py` asserts it matches `lib.sh`, because these
-numbers are how one script tells the next one what happened, and a silent disagreement between two
-copies reclassifies a regression as an environment problem.
+"""The harness exit-code taxonomy for Python (tests/harness/test_deckci.py asserts it matches lib.sh).
 
     0  ok
     1  FAIL       generic; a tool we shelled out to crashed

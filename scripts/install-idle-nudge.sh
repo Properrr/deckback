@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 # Installs the Deckback idle-nudge host helper (keeps the screen on / prevents auto-suspend while a
-# video plays). Run this ON the Deck, in Desktop Mode. Like the audio-repair helper, it lives on the
-# host — outside the Flatpak sandbox — because /dev/uinput is not available inside it and gamescope
-# ignores sandbox-emulated input for idle purposes (see docs/SUPPORT.md).
+# video plays). Run ON the Deck, in Desktop Mode. It runs on the host because /dev/uinput is not
+# available in the Flatpak sandbox and gamescope ignores sandbox-emulated input for idle purposes.
 set -euo pipefail
 
 python3 -c 'import evdev' 2>/dev/null || {
@@ -17,9 +16,7 @@ python3 -c 'import evdev' 2>/dev/null || {
 
 here="$(cd "$(dirname "$0")" && pwd)"
 # Seed the liveness heartbeat the app stats (scripts/idle-nudge.py heartbeat_path). The daemon
-# refreshes it every poll; creating it here is what makes a helper that is installed but FAILS to
-# start detectable — the file simply goes stale and the app warns. Without this seed a dead service
-# is indistinguishable from one that was never installed, and the app stays silent about both.
+# refreshes it every poll, so a helper that is installed but fails to start leaves it stale.
 heartbeat="$HOME/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive"
 mkdir -p "$(dirname "$heartbeat")" && : >"$heartbeat"
 

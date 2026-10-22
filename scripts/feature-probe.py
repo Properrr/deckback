@@ -1,32 +1,16 @@
 #!/usr/bin/env python3
 """P12.0 — the probes that classify a mechanism before any feature is built on it.
 
-Runs on the WORKSTATION, drives the running app on the Deck over SSH + CDP. Each subcommand answers
-exactly one question from `durable/feature-landscape.md` §7, and none of them writes code or config:
+Runs on the WORKSTATION, drives the running app on the Deck over SSH + CDP (read-only):
 
     player    P12.0b  what does the TVHTML5 player expose for playback RATE and QUALITY?
-                      -> decides P12.5 (playback speed) and the quality-drop half of P12.1
-                         (audio-only), and P12.9's cap needs whatever this finds.
     pairing   P12.0a  is Leanback's own "Link with TV code" pairing reachable under our Cobalt UA?
-                      -> decides P12.3 outright. If it is there, phone-as-keyboard is a SUPPORT.md
-                         section and not code -- the cheapest answer available to R9 (no auto-OSK
-                         under Xwayland, input-ux §8.3).
     dock      P12.0c  what does gamescope do to our fixed 1280x800 surface when a TV is attached?
-                      -> decides P12.2's shape: a runtime resize, or a relaunch at the new mode
-                         through the existing watchdog. Takes a snapshot undocked and docked and
-                         diffs them.
-
-Why a script and not a one-off `Runtime.evaluate`: the answers become findings that later work is
-built on, and the two ways to print a confident wrong answer are both cheap. A method dump on a page
-with no player is an empty list, which reads exactly like "the player exposes nothing"; a text search
-for "TV code" on a page that never opened Settings is zero hits, which reads exactly like "our UA
-suppresses pairing". Both are ENV (3), not a negative finding, and `*_verdict()` is pure so that
-distinction is pinned by tests/harness/test_feature_probe.py rather than by care.
+                      (snapshot undocked and docked, then diff)
 
 Exit codes (.internal/HARNESS.md §1):
 
-    0  the probe ran and produced an answer -- a NEGATIVE answer is still 0. "The player has no rate
-       API" is a finding to register, not a regression.
+    0  the probe ran and produced an answer -- a NEGATIVE answer is still 0
     2  ASSERT     an invariant of the probe itself broke
     3  ENV        cannot observe: app not on Leanback, no player, nothing was navigated to
     4  TRANSPORT  the Deck or its DevTools endpoint went away
@@ -50,16 +34,13 @@ from lib import probes, ssh as sshlib  # noqa: E402
 
 EX_OK, EX_FAIL, EX_ASSERT, EX_ENV, EX_TRANSPORT, EX_USAGE = 0, 1, 2, 3, 4, 5
 
-# input-ux §18: the selector is `.html5-video-player`, NEVER `#movie_player`. The TVHTML5 app does
-# not use the desktop id, and a probe that looks for the wrong node reports "no player" on a page
-# that has one -- which is how chapter-via-/player wasted a session.
+# Not `#movie_player`: the TVHTML5 app does not use the desktop id.
 PLAYER_SELECTOR = ".html5-video-player"
 
 RATE_PATTERN = re.compile(r"rate|speed|tempo", re.I)
 QUALITY_PATTERN = re.compile(r"quality|resolution|format|itag|level|bitrate|abr", re.I)
 
-# Names the desktop/iframe player is documented to carry. Presence is not assumed -- this list only
-# decides what gets called explicitly, because a method can exist under a name no pattern predicts.
+# Names the desktop/iframe player is documented to carry; always called explicitly, never assumed.
 KNOWN_RATE_METHODS = (
     "getPlaybackRate",
     "setPlaybackRate",
@@ -74,9 +55,8 @@ KNOWN_QUALITY_METHODS = (
     "getPreferredQuality",
 )
 
-# Every function-valued property along the prototype chain, plus what the <video> itself reports.
-# Walking the chain matters: the player's methods live on its prototype, so Object.keys() alone
-# returns almost nothing and would read as "exposes no API".
+# Every function-valued property along the prototype chain (the player's methods live on its
+# prototype), plus what the <video> itself reports.
 PLAYER_DUMP_EXPR = """(function(){
   var el = document.querySelector('%s');
   if (!el) return JSON.stringify({found: false});
@@ -107,11 +87,8 @@ PLAYER_DUMP_EXPR = """(function(){
 
 
 def _call_expr(method_names):
-    """Call each named method with no arguments, capturing value-or-throw for each.
-
-    No-arg calls only: a getter answers, and a setter that needs an argument throws, which is itself
-    the useful signal ("the name exists"). Nothing here changes playback.
-    """
+    """Call each named method with no arguments, capturing value-or-throw for each. Never changes
+    playback: a setter that needs an argument just throws."""
     return """(function(){
   var el = document.querySelector('%s');
   if (!el) return JSON.stringify({found: false});
@@ -128,11 +105,7 @@ def _call_expr(method_names):
 
 
 def rate_write_expr(target):
-    """Set `<video>.playbackRate` and read it straight back. The caller re-reads later for a snap-back.
-
-    `<video>.playbackRate` is certain to exist -- the open question is whether the TVHTML5 player
-    lets it stand or resets it, which one immediate read cannot answer and two reads can.
-    """
+    """Set `<video>.playbackRate` and read it straight back. The caller re-reads later for a snap-back."""
     return """(function(){
   var v = document.querySelector('video');
   if (!v) return JSON.stringify({video: false});
@@ -172,13 +145,8 @@ PAIRING_CONFIG_EXPR = """(function(){
   return JSON.stringify({keys: out.sort(), hasCfg: cfgs.length > 0});
 })()"""
 
-# What is on screen right now, as text. The human navigates; this reads.
-#
-# innerText alone is not enough. It returns only *rendered* text, and Leanback labels a great deal of
-# its chrome with aria-label on nodes that render as icons -- so a menu row reading "Link with TV
-# code" to a user can be invisible to innerText. A probe that searched innerText alone would answer
-# "no pairing entry" for a reason that has nothing to do with pairing. Both are collected, and the
-# verdict sees their union.
+# What is on screen right now: innerText plus aria-label/title/alt, since Leanback labels much of its
+# chrome on icon nodes that innerText never sees.
 SCREEN_TEXT_EXPR = """(function(){
   var t = (document.body && document.body.innerText) || '';
   var labels = [];
@@ -209,11 +177,8 @@ PAIRING_PATTERN = re.compile(
 
 
 def classify_methods(names):
-    """Bucket a method dump into {'rate', 'quality', 'other'} by what the name claims to be.
-
-    Pattern-matched, not whitelisted: the whole point of a dump is to find names nobody predicted.
-    A name matching both patterns lands in both buckets rather than being silently assigned to one.
-    """
+    """Bucket a method dump into {'rate', 'quality', 'other'} by name pattern. A name matching both
+    patterns lands in both buckets."""
     rate = sorted(n for n in names if RATE_PATTERN.search(n))
     quality = sorted(n for n in names if QUALITY_PATTERN.search(n))
     interesting = set(rate) | set(quality)
@@ -225,14 +190,8 @@ def classify_methods(names):
 
 
 def video_is_loaded(video):
-    """Is there real media in the element, or just an idle player shell?
-
-    The browse screen carries a `.html5-video-player` with a `<video>` that has never loaded
-    anything: `duration` null, `videoWidth` 0, `paused` true. Every quality getter answers `[]` or
-    `"unknown"` there -- which is indistinguishable from "this build has no quality API" unless the
-    element's state is checked first. Same false-negative shape as an empty method list on a page
-    with no player, one level down.
-    """
+    """Is there real media in the element, or just an idle player shell (as on the browse screen,
+    where every quality getter answers `[]`)?"""
     if not video:
         return False
     duration = video.get("duration")
@@ -240,13 +199,8 @@ def video_is_loaded(video):
 
 
 def player_verdict(dump, calls, rate_test):
-    """(exit_code, headline, lines) for P12.0b. Pure, so the ENV/negative distinction is testable.
-
-    The trap this exists to avoid: `methods == []` is what a page with no player produces AND what a
-    player exposing nothing would produce. The first is ENV (3) -- nothing was observed -- and the
-    second is a real, registerable negative. They are only distinguishable by `found`, so `found` is
-    checked before anything else is concluded.
-    """
+    """(exit_code, headline, lines) for P12.0b. No player on the page (`found` false) is ENV, never
+    a negative."""
     if not dump.get("found"):
         return (
             EX_ENV,
@@ -272,15 +226,11 @@ def player_verdict(dump, calls, rate_test):
     named_rate = [n for n in KNOWN_RATE_METHODS if ((calls or {}).get(n) or {}).get("exists")]
     named_quality = [n for n in KNOWN_QUALITY_METHODS if ((calls or {}).get(n) or {}).get("exists")]
 
-    # `<video>.playbackRate` is the fallback that needs no player API at all, so it decides P12.5 on
-    # its own -- but only if the player lets the value stand. A snap-back is the whole question.
+    # `<video>.playbackRate` needs no player API, but counts only if the player lets the value stand.
     rt = rate_test or {}
     held = rt.get("held")
     if rt.get("video") and held is True and not loaded:
-        # An idle element has nothing to reassert against: the player only reapplies its own rate as
-        # part of loading a stream. Reporting this as "the element holds our rate" would be a false
-        # pass of exactly the kind that shipped green-band corruption -- the measurement is real,
-        # the conclusion is not licensed by it.
+        # The player reapplies its rate only while loading a stream, so an idle hold proves nothing.
         lines.append(f"<video>.playbackRate held at {rt.get('after')}, but on an element with NO")
         lines.append("media loaded — the player had nothing to reassert. This does NOT establish")
         lines.append("that a rate survives playback. Re-run with a video actually playing.")
@@ -348,17 +298,10 @@ def pairing_hits(text):
     return out
 
 
-# A menu screen carries hundreds of characters. The watch screen carries ~28 -- a video and no
-# chrome. Searching that for "TV code" and reporting the miss as "pairing is absent under our UA"
-# would be a confident answer about a screen nobody opened, which is the one thing this file exists
-# to prevent. Below this, a capture is "thin": recorded, shown, and not counted as having looked.
+# Below this a capture is "thin" (the watch screen carries ~28 chars) and does not count as a look.
 MIN_SCREEN_TEXT = 80
 
-# Length alone is not enough either, and this is not hypothetical: once aria-labels joined the
-# capture, the watch screen's 32 icon labels pushed it past MIN_SCREEN_TEXT and the probe printed a
-# confident "NO PAIRING ENTRY" about a video that was playing at the time. What a capture *is*
-# matters more than how long it is, so the negative additionally requires a screen that could
-# plausibly host the entry -- i.e. not the player.
+
 def screen_is_substantive(text, minimum=MIN_SCREEN_TEXT):
     """Did this capture actually see a screen with content, or a bare player?"""
     return len((text or "").strip()) >= minimum
@@ -369,12 +312,8 @@ def is_watch_screen(hash_):
     return (hash_ or "").lstrip("#/").lower().startswith("watch")
 
 
-# Rows that appear on a settings screen and nowhere else in Leanback. The browse screen is long,
-# text-rich and has a sidebar (Home / Shorts / Subscriptions / Library / Music / ...), so "it is not
-# the player and it has plenty of text" was ALSO not enough to license a negative -- the probe
-# happily reported "NO PAIRING ENTRY" off the recommendation feed, which is not where a pairing row
-# would ever be. Two distinct markers are required so a lone "Settings" sidebar entry (which browse
-# does carry) cannot pass for the settings screen itself.
+# Rows that appear on Leanback's settings screen. Two distinct markers are required: the browse
+# screen's sidebar carries a lone "Settings".
 SETTINGS_MARKERS = (
     re.compile(r"linked\s+devices?", re.I),
     re.compile(r"restricted\s+mode", re.I),
@@ -396,12 +335,8 @@ def settings_markers(text):
 
 
 def could_host_pairing(screen):
-    """Is this a screen where a 'Link with TV code' entry could appear at all?
-
-    Three things have to hold, each learned by getting it wrong: it must have content (the player
-    has ~28 characters), it must not BE the player (icon aria-labels padded it past any length
-    bar), and it must look like a settings screen rather than the browse feed.
-    """
+    """Could a 'Link with TV code' entry appear here? Needs content, not the watch screen, and at
+    least MIN_SETTINGS_MARKERS settings markers."""
     text = screen.get("text")
     return (
         screen_is_substantive(text)
@@ -413,15 +348,12 @@ def could_host_pairing(screen):
 def pairing_verdict(screens, config_keys):
     """(exit_code, headline, lines) for P12.0a.
 
-    `screens` is [{'label', 'text', 'hash'}, ...] for everything captured, where `text` is innerText
-    and aria-labels joined. Nothing captured, or nothing but the player, means nowhere the entry
-    could have appeared was looked at -- ENV, not "pairing is absent". Zero hits on a screen that
-    COULD have shown it is the real negative.
+    `screens` is [{'label', 'text', 'hash'}, ...] (`text` = innerText + aria-labels). With no
+    screen that could host the entry this is ENV; zero hits on one that could is the negative.
     """
     lookable = [s for s in screens if could_host_pairing(s)]
 
-    # Thinness and screen identity gate the NEGATIVE only. Seeing the phrase is seeing it, wherever
-    # it turns up, so hits are collected across everything captured.
+    # Hits count from any screen; only the negative needs a lookable one.
     found = [(s.get("label"), h) for s, h in ((s, pairing_hits(s.get("text"))) for s in screens) if h]
     if not lookable and not found:
         seen = ", ".join(
@@ -480,8 +412,7 @@ def pairing_verdict(screens, config_keys):
 
 # ---- P12.0c: docked output ----
 
-# The page's view of its own surface. If gamescope resizes us, these change; if it upscales an 800p
-# buffer, they do not -- which is exactly the fork P12.2's design hangs on.
+# The page's view of its own surface: changes if gamescope resizes us, not if it upscales.
 VIEWPORT_EXPR = """JSON.stringify({
   innerWidth: window.innerWidth,
   innerHeight: window.innerHeight,
@@ -496,15 +427,10 @@ VIEWPORT_EXPR = """JSON.stringify({
   })()
 })"""
 
-# Kernel-side truth about what is physically plugged in. This is the control that makes a "nothing
-# changed" reading interpretable: without it, "the dock does nothing to our surface" and "nobody
-# plugged anything in" are the same diff.
+# What is physically plugged in: the control for a "nothing changed" diff.
 DRM_STATUS_CMD = "grep -H . /sys/class/drm/card*/status 2>/dev/null"
 
-# What the attached panel says it can do. Paired with gamescope's own screen size this is the whole
-# P12.0c answer: a display advertising 1920x1200 next to a compositor screen still at 1280x800 says
-# the mode never reached the nested Xwayland, so there is no larger surface for us to resize into.
-# Same `<path>:<value>` shape as the status read, so parse_drm_connectors handles both.
+# Each connector's preferred mode, in the same `<path>:<value>` shape (parse_drm_connectors reads both).
 DRM_MODES_CMD = (
     'for f in /sys/class/drm/card*/modes; do echo "$f:$(head -1 "$f" 2>/dev/null)"; done 2>/dev/null'
 )
@@ -539,12 +465,8 @@ def external_outputs(connectors):
 
 
 def dock_verdict(before, after):
-    """(exit_code, headline, lines) for P12.0c.
-
-    Refuses to conclude unless an external output actually appeared between the two snapshots. A
-    dock that was never plugged in produces an identical diff to a dock that changes nothing, and
-    only the DRM connector list tells them apart.
-    """
+    """(exit_code, headline, lines) for P12.0c. ENV unless an external output appeared between the
+    two snapshots."""
     gained = sorted(set(external_outputs(after.get("drm"))) - set(external_outputs(before.get("drm"))))
     if not gained:
         present = external_outputs(after.get("drm"))
@@ -702,8 +624,6 @@ def cmd_player(cdp, args, sh=None, disp=None):
             later = cdp.evaluate(RATE_READ_EXPR)
             rate_test["later"] = later
             rate_test["settle_s"] = args.settle
-            # "Held" means the value we asked for is still there after the player has had a chance to
-            # reassert. Compared with a tolerance because playbackRate is a double.
             rate_test["held"] = later is not None and abs(float(later) - float(args.rate)) < 1e-6
             _say(f"    after {args.settle}s: {later}  -> {'HELD' if rate_test['held'] else 'RESET'}")
             back = cdp.evaluate(restore_rate_expr(rt.get("before") or 1.0))
@@ -754,12 +674,9 @@ def cmd_pairing(cdp, args, sh=None, disp=None):
 
 
 def find_display(sh):
-    """The Xwayland display where OUR content_shell is focused.
+    """The Xwayland display where OUR content_shell is focused, or None.
 
-    Twin of `scripts/touch-probe.py:find_display` -- SteamOS runs `--xwayland-count 2`, so Steam is
-    on :0 and a Steam-launched game on :1, and reading :0 silently measures Steam's compositor state
-    (durable/touch-lock.md). Kept local rather than shared because two probes is not yet a library;
-    if a third needs it, it moves to tests/deck/lib/probes.py.
+    SteamOS runs `--xwayland-count 2`: Steam is on :0, a Steam-launched game on :1.
     """
     for disp in (":0", ":1", ":2"):
         _, cls, _ = sh.run(
@@ -795,8 +712,7 @@ def cmd_dock(cdp, args, sh=None, disp=None):
     _say("")
     _say("--- snapshots " + "-" * 58)
 
-    # Three ways to run, because the interactive one needs a terminal this probe does not always
-    # have: --save takes one snapshot and stops, --against takes the second and compares.
+    # --save takes one snapshot and stops; --against takes the second and compares; else interactive.
     if args.save:
         snap = snapshot("snapshot")
         Path(args.save).write_text(json.dumps(snap, indent=2))

@@ -1,7 +1,5 @@
 # Publish the self-hosted Flatpak repo to GitHub Pages from a GitHub Release's .flatpak bundle.
-# The engine is NOT built here (Chromium-scale builds run on the self-hosted runner via `just
-# release`); this only imports the already-built bundle into an ostree repo and deploys the static
-# site — so it runs fine on the free runner.
+# Nothing is built here: the bundle (from `just release`) is imported into an ostree repo.
 name: release-pages
 on:
   release:
@@ -32,8 +30,7 @@ jobs:
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
     env:
-      # Job-level so the step `if:` can see it (secrets aren't visible in `if` directly). Empty when
-      # the repo has no signing key configured — the site is then published unsigned.
+      # Job-level so the step `if:` can see it (secrets aren't visible in `if`). Empty = publish unsigned.
       FLATPAK_GPG_KEY: ${{ secrets.FLATPAK_GPG_KEY }}
     steps:
       - uses: actions/checkout@v5
@@ -63,9 +60,8 @@ jobs:
           keyid=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/{print $5; exit}')
           echo "keyid=$keyid" >> "$GITHUB_OUTPUT"
 
-      # Continues the live repo's history (parent = what users run, from-parent delta, the previous
-      # releases kept) and refuses a bundle that adds a sandbox permission against the live head.
-      # A live repo it cannot reach fails the job rather than silently starting over.
+      # Continues the live repo's history and refuses a bundle that adds a sandbox permission against
+      # the live head; an unreachable live repo fails the job.
       - name: Build repo + stage site
         env:
           DECKBACK_GPG_KEY: ${{ steps.gpg.outputs.keyid }}

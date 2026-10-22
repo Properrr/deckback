@@ -15,17 +15,15 @@ bundle="$outdir/bundle"
 info "Assembling runtime bundle at $bundle ..."
 rm -rf "$bundle"; mkdir -p "$bundle/locales" "$outdir/symbols"
 
-# Binary: keep unstripped copy host-side for symbolication, ship the stripped one.
 cp -a "$bin" "$outdir/symbols/${COBALT_TARGET}.debug"
 strip -s "$bin" -o "$bundle/${COBALT_TARGET}"
 
-# Required runtime resources — fail loudly if a core file is missing (build misconfig).
 require_files="content_shell.pak icudtl.dat snapshot_blob.bin v8_context_snapshot.bin"
 for f in $require_files; do
   [ -f "$outdir/$f" ] || die "missing required runtime file: out/${preset}/$f"
   cp -a "$outdir/$f" "$bundle/"
 done
-# Optional resources / libs — copy whatever this build produced (official vs component differ).
+# Optional resources / libs: official and component builds produce different sets.
 for f in shell_resources.pak ui_resources_100_percent.pak ui_resources_200_percent.pak resources.pak \
          libEGL.so libGLESv2.so libvk_swiftshader.so libvulkan.so.1 vk_swiftshader_icd.json \
          libGLESv2.so.TOC libEGL.so.TOC; do
@@ -33,22 +31,16 @@ for f in shell_resources.pak ui_resources_100_percent.pak ui_resources_200_perce
 done
 cp -a "$outdir"/locales/*.pak "$bundle/locales/" 2>/dev/null || true
 
-# App config + CDP helper (UA injection / debugging until the launcher owns it).
 cp -a "$REPO_ROOT/config" "$bundle/"
 cp -a "$REPO_ROOT/scripts/cdp.py" "$bundle/"
 
-# AppStream metainfo, staged at the exact relative path about.cpp probes (candidate #3, after
-# $DECKBACK_METAINFO and the Flatpak's /app/share/metainfo). Without it the OSD's About tab renders
-# only the version — name/summary/description/features all come from this file — which reads as a
-# regression against the Flatpak and was reported as one on 2026-07-16. The dev bundle is not a
-# Flatpak, so /app/share/metainfo does not exist here; run.sh cd's to ~/cobalt-yt, which makes this
-# relative path resolve. Keep the layout: about.cpp hardcodes 'flatpak/assets/<file>'.
+# The OSD About tab's content. Outside the Flatpak, about.cpp probes the relative path
+# 'flatpak/assets/<file>', which resolves because run.sh cd's to ~/cobalt-yt. Keep the layout.
 meta_src="$REPO_ROOT/flatpak/assets/io.github.properrr.deckback.metainfo.xml"
 [ -f "$meta_src" ] || die "missing $meta_src — the About tab would silently degrade to version-only"
 mkdir -p "$bundle/flatpak/assets"
 cp -a "$meta_src" "$bundle/flatpak/assets/"
 
-# Launcher (out-of-tree; builds anywhere).
 ./scripts/launcher.sh build
 cp -a "$REPO_ROOT/launcher/build/deckback-launcher" "$bundle/"
 

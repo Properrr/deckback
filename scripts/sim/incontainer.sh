@@ -8,8 +8,7 @@ fail=0
 
 note() { echo "== $* =="; }
 
-# The sim's whole value is that it is the DEVICE's userspace. Trusting the image tag for that would be
-# the same unchecked assumption the base swap exists to remove, so prove it inside the container.
+# Prove the image is the SteamOS base rather than trusting its tag.
 if [ "${DECKBACK_SIM_BASE:-}" != "steamos" ]; then
   echo "sim: image is not the SteamOS base (DECKBACK_SIM_BASE='${DECKBACK_SIM_BASE:-unset}')." >&2
   echo "     Refusing: a green here would claim SteamOS fidelity the image does not have." >&2
@@ -21,13 +20,8 @@ bad() {
   fail=$((fail + 1))
 }
 
-# The launcher is the out-of-tree C++23 shim; building it on the SteamOS userspace (not the repo's
-# Debian toolchain) proves it isn't distro-locked AND that it compiles against the versions the Deck
-# actually carries. Out-of-source build so /src can stay read-only.
-#
-# The image is a real SteamOS 3.8.1x rootfs pinned to the device's own gcc/glibc, not archlinux:latest
-# -- which drifts ahead of SteamOS and had this suite compiling with GCC 16 against glibc 2.43 while
-# the Deck runs GCC 15.1.1 / glibc 2.41 (durable/test-sim.md ★ CORRECTION).
+# Build the launcher against the Deck's own gcc/glibc (the SteamOS rootfs) and run its L0 tests.
+# Out-of-source build so /src can stay read-only.
 run_launcher() {
   note "suite: launcher — build the out-of-tree launcher on the SteamOS userspace + run its L0 tests"
   if ! cmake -S "$SRC/launcher" -B /tmp/lbuild -G Ninja -DCMAKE_BUILD_TYPE=Release >/tmp/cmake.log 2>&1; then
@@ -49,8 +43,7 @@ run_launcher() {
   fi
 }
 
-# The installer's Steam-tile writing: exactly what the one-line installer does on a new Deck, minus the
-# GPU. Faithful — shortcuts.vdf + the grid/ art dir are plain files Steam reads on next start.
+# The one-line installer's Steam-tile writing: shortcuts.vdf + grid/ art are plain files Steam reads.
 run_shortcut() {
   note "suite: shortcut — installer Steam tile + artwork (steam_shortcuts.py add/art)"
   local uid=1000000001
@@ -89,8 +82,7 @@ PY
   fi
 }
 
-# The Flatpak update portal is what the self-updater + D-Bus reconnect talk to. Proving it activates
-# and enforces its caller contract here is the foundation the reconnect suite (Phase 2) builds on.
+# The Flatpak update portal (what the self-updater talks to) activates and refuses a non-flatpak caller.
 run_portal() {
   note "suite: portal — Flatpak update portal answers in-container (self-update/reconnect foundation)"
   local out
@@ -115,8 +107,8 @@ wait_log() {
   return 1
 }
 
-# Start a session dbus-daemon at a FIXED socket path (so the reconnect drive can drop and restore the
-# bus at the same address, which is what case A needs). Sets DBUS_PID. 0 once the socket is listening.
+# Start a session dbus-daemon at a fixed socket path (case A restores the bus at the same address).
+# Sets DBUS_PID. 0 once the socket is listening.
 start_bus() {
   dbus-daemon --session --address="$DBUS_SESSION_BUS_ADDRESS" --nofork --nopidfile >/tmp/dbus.log 2>&1 &
   DBUS_PID=$!
@@ -128,10 +120,9 @@ start_bus() {
   return 1
 }
 
-# Run the real updater loop as a flatpak instance (bwrap with a synthetic /.flatpak-info, so the portal
-# treats us as a flatpak app and CreateUpdateMonitor succeeds) for up to $1 seconds, logging to /tmp/
-# watch.log. Sets WATCH_PID. No --unshare-pid: the portal reads /proc/<pid>/root/.flatpak-info, so our
-# pid must stay visible in the container's pid namespace.
+# Run the real updater loop for up to $1 seconds as a flatpak instance (bwrap + a synthetic
+# /.flatpak-info), logging to /tmp/watch.log. Sets WATCH_PID. No --unshare-pid: the portal reads
+# /proc/<pid>/root/.flatpak-info, so our pid must stay visible in the container's pid namespace.
 start_watch() {
   : >/tmp/watch.log
   bwrap --unshare-user --uid 0 --gid 0 \
@@ -154,10 +145,8 @@ cleanup_reconnect() {
   pkill -f flatpak-portal 2>/dev/null || true
 }
 
-# The heart of Phase 2: drive the launcher's D-Bus reconnect logic (durable/dbus-reconnect.md) off
-# hardware. Case B = flatpak-portal restarts (our bus survives, the orphaned monitor is rebuilt via
-# NameOwnerChanged); case A = the session bus itself drops and returns. This is the real PortalUpdater
-# loop, not a stub — it retires the on-Deck reconnect drive that a sleeping Deck kept blocking.
+# Drive the real PortalUpdater's D-Bus reconnect: case B = flatpak-portal restarts (the bus survives,
+# the orphaned monitor is rebuilt via NameOwnerChanged); case A = the session bus drops and returns.
 run_reconnect() {
   note "suite: reconnect — drive the updater's D-Bus reconnect (case A bus drop, case B portal restart)"
   if [ ! -x /tmp/lbuild/deckback-launcher ]; then
@@ -189,8 +178,7 @@ run_reconnect() {
 
   start_watch 60
 
-  # Positive control: without an accepted flatpak-instance caller the monitor never comes up and the
-  # whole drive proves nothing (a NON-flatpak caller is what the `portal` suite already rejects).
+  # Positive control: the portal must accept the flatpak-instance caller, or the drive proves nothing.
   if wait_log /tmp/watch.log "watching for updates to this app" 15; then
     ok "positive control: portal accepted the flatpak-instance caller, monitor up"
   else

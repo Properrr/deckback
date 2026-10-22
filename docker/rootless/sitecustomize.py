@@ -1,7 +1,5 @@
-# Loaded via PYTHONPATH only under rootless Docker (scripts/lib.sh: compose_run), where we run as a
-# container root that cannot chown to uids outside its user namespace. Python's tarfile treats that
-# chown failure as non-fatal and then silently SKIPS the member's chmod, so extracted executables
-# lose their exec bit (e.g. Chromium's third_party/node). Ownership is meaningless in this setup.
+# Loaded via PYTHONPATH under rootless Docker only. Container root cannot chown to unmapped uids, and
+# tarfile then silently skips the member's chmod (executables lose their exec bit), so chown is a no-op.
 import tarfile
 
 tarfile.TarFile.chown = lambda self, *args, **kwargs: None

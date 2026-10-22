@@ -1,25 +1,17 @@
 #!/usr/bin/env bash
-# Switch the Deck's Deckback install between channels, over SSH, WITHOUT losing user data (the
-# YouTube sign-in under ~/.var/app/<id>). Three operations:
+# Switch the Deck's Deckback install between channels over SSH, preserving user data (the YouTube
+# sign-in under ~/.var/app/<id>) and failing if it did not survive.
 #
 #   scripts/deck-flatpak.sh dev [bundle]   overwrite the install with a locally-built .flatpak
 #   scripts/deck-flatpak.sh repo           (re)point the install at the published repo for updates
 #   scripts/deck-flatpak.sh status         report which channel the Deck is on
 #
-# Why this exists: `flatpak install --reinstall <bundle>` FAILS when the installed app came from a
-# remote whose gpg-verify differs from the bundle's (the published repo is gpg-verified; a local
-# bundle is not), with "GPG verification enabled, but no signatures found". The robust move is
-# uninstall-keeping-data then install — but `flatpak uninstall` deletes ~/.var/app unless you are
-# careful, and a dev who loses their sign-in on every rebuild stops testing on real accounts. This
-# script does the careful version and PROVES the data survived (it measures the data dir before and
-# after and fails if it vanished).
+# `flatpak install --reinstall <bundle>` fails over a gpg-verified origin, so the install is replaced
+# by uninstall (keeping data) + install. Does not add the Steam shortcut (`just install`, on the Deck).
+# Env: DECKBACK_REPO_URL overrides the repo base from flatpak/deckback.flatpakrepo.
 #
-# Runs from the workstation and drives the Deck over `deck_ssh`/`deck_rsync` (harness §2/§6). It does
-# NOT add the Steam shortcut — that needs the Deck's GUI session (`just install`, run on the Deck).
-# An existing shortcut keeps working across all three operations because the app id never changes.
-#
-# Exit codes (harness §1): 0 ok · 2 the install ended up wrong (missing grant, lost data, wrong
-# origin) · 3 environment (no bundle, repo unreachable) · 4 transport (Deck/rsync) · 5 usage.
+# Exit codes: 0 ok · 2 the install ended up wrong (missing grant, lost data, wrong origin) ·
+# 3 environment (no bundle, repo unreachable) · 4 transport (Deck/rsync) · 5 usage.
 . "$(dirname "$0")/lib.sh"
 . "$(dirname "$0")/lib/flatpak_channel.sh"
 
@@ -32,12 +24,11 @@ installed_commit() { deck_ssh "$DECK_HOST" "flatpak info $app 2>/dev/null | sed 
 installed_version() { deck_ssh "$DECK_HOST" "flatpak info $app 2>/dev/null | sed -n 's/^ *Version: *//p'"; }
 is_installed() { [ -n "$(installed_origin)" ]; }
 app_data_bytes() {
-  # 0 when the dir is absent; a plain integer otherwise. Used by data_preserved().
+  # 0 when the dir is absent; a plain integer otherwise.
   deck_ssh "$DECK_HOST" "du -sb ~/.var/app/$app 2>/dev/null | cut -f1 || true" | grep -oE '^[0-9]+' || echo 0
 }
 
-# Verify the install landed where we intended and left the data intact. Shared by dev + repo.
-# verify_install <channel: dev|official> <data-bytes-before>
+# verify_install <channel: dev|official> <data-bytes-before>: right channel, input grant, data intact.
 verify_install() {
   local want_channel="$1" data_before="$2"
   is_installed || die_assert "after install, $app is not present — the install did not take"
@@ -84,22 +75,18 @@ do_dev() {
   local data_before; data_before="$(app_data_bytes)"
   kill_running
   if is_installed; then
-    # KEEP data: no --delete-data. The reinstall-over-a-gpg-verified-origin path is why we uninstall
-    # first rather than `flatpak install --reinstall <bundle>`.
+    # KEEP data: no --delete-data.
     info "removing the current install (keeping user data) ..."
     deck_ssh "$DECK_HOST" "flatpak uninstall --user -y $app" >/dev/null 2>&1 ||
       die_assert "could not remove the existing install"
   fi
-  # Drop any leftover bundle-origin remotes first, so flatpak reuses the canonical name instead of
-  # disambiguating to deckback2-origin, deckback3-origin, ... They are `noenumerate`, so they are
-  # invisible to a plain `flatpak remotes` and accumulate silently.
+  # Drop leftover bundle-origin remotes so flatpak reuses the canonical name instead of
+  # deckback2-origin, ... They are `noenumerate`, invisible to a plain `flatpak remotes`.
   deck_ssh "$DECK_HOST" \
     "for r in \$(flatpak remotes --user --all --columns=name 2>/dev/null | grep -E '^deckback[0-9]*-origin\$'); do flatpak remote-delete --user --force \"\$r\" 2>/dev/null || true; done" \
     >/dev/null 2>&1 || true
 
   info "installing the dev bundle ..."
-  # Keep the real message: this used to be discarded, so a failure said only "run it by hand to see
-  # why" — sending the reader to reproduce something the script had already been told.
   local install_err
   install_err="$(deck_ssh "$DECK_HOST" "flatpak install --user -y ~/$base 2>&1" || true)"
   is_installed ||
@@ -119,7 +106,7 @@ do_repo() {
   [ -n "$repo_url" ] || die_env "no repo Url in flatpak/deckback.flatpakrepo and DECKBACK_REPO_URL unset"
   local ref_url; ref_url="$(flatpakrepo_url_from_repo "$repo_url")"
 
-  # The Deck is the machine that pulls, so probe reachability FROM the Deck.
+  # Probe reachability from the Deck, the machine that pulls.
   info "checking the repo is reachable from the Deck: $ref_url"
   deck_ssh "$DECK_HOST" "curl -sfI --max-time 10 '$ref_url' >/dev/null 2>&1" ||
     die_env "the published repo descriptor is not reachable from the Deck at:

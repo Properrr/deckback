@@ -6,22 +6,16 @@
     scripts/deck-ci.py --stages launch,gate
     scripts/deck-ci.py --dry-run           # print the plan and the exit-code policy; touch nothing
 
-Runs on the WORKSTATION. The Deck is a dumb target reached over SSH; nothing is installed there by
-this script beyond what `just deploy` already puts in `~/cobalt-yt/`.
+Runs on the WORKSTATION; the Deck is reached over SSH. Exit codes (.internal/HARNESS.md §1),
+aggregated in precedence order:
 
-Exit codes (.internal/HARNESS.md §1) are aggregated, not concatenated:
-
-    2  ASSERT     some gate says the product is wrong. Outranks everything below it: a regression
-                  must not be masked by an SSH drop in a later stage.
+    2  ASSERT     some gate says the product is wrong (outranks everything below)
     4  TRANSPORT  the wire broke and retries did not fix it. Retry the run.
-    3  ENV        a precondition was missing — OR NOTHING ADJUDICATED. A run that deployed, launched
-                  and then skipped every test proves nothing, and 0 would be a lie.
+    3  ENV        a precondition was missing, or nothing adjudicated
     1  FAIL       something else went wrong.
     0  ok         at least one adjudicating stage ran and passed, and nothing that matters failed.
 
-Every decision above is `scripts/lib/deckci.py`, which is pure and covered by
-`tests/harness/test_deckci.py`. This file only runs processes and writes files, because this file is
-the part that cannot be tested without a Deck.
+The policy lives in `scripts/lib/deckci.py`; this file only runs processes and writes files.
 """
 
 from __future__ import annotations
@@ -104,9 +98,7 @@ def run_stage(stage, logdir, attempts):
                 rc = subprocess.call(stage.argv, cwd=_REPO, stdout=fh,
                                      stderr=subprocess.STDOUT, timeout=stage.timeout)
             except subprocess.TimeoutExpired:
-                # A stage that never returns is not a passing stage, and it is not the wire's fault
-                # either -- retrying a hang just doubles the wait. Call it what it is.
-                rc = deckci.EX_FAIL
+                rc = deckci.EX_FAIL  # a hang is not TRANSPORT: never retried
                 note = f"timed out after {stage.timeout}s"
                 fh.write(f"\n!! timed out after {stage.timeout}s\n".encode())
             except FileNotFoundError:
@@ -121,18 +113,12 @@ def run_stage(stage, logdir, attempts):
 
 
 def teardown(logdir):
-    """Always attempted, never able to change the verdict — and never silent.
+    """Kill the app on the Deck. Always attempted, never changes the verdict, never silent.
 
-    Leaving the app running on a Deck poisons the next run: `just power` would sample a video that
-    the previous run started and report a number about the wrong thing.
-
-    Goes through `deck_ssh` in lib.sh rather than calling `ssh` directly, because that helper is
-    where DECK_PORT and the optional sshpass live. A hand-rolled `ssh $DECK_HOST` here would silently
-    connect to the wrong port on any Deck that is not on 22.
+    Goes through lib.sh's `deck_ssh` (DECK_PORT, optional sshpass).
     """
     host = os.environ.get("DECK_HOST", "")
     if not host:
-        # This is the failure mode the export in deck-ci.sh exists to prevent. Say it out loud.
         _say("deck-ci: teardown SKIPPED — DECK_HOST is not in the environment. If you invoked "
              "deck-ci.py directly, use scripts/deck-ci.sh (or `just deck-ci`); the app may still be "
              "running on the Deck.")
@@ -147,8 +133,7 @@ def teardown(logdir):
 
 
 def main():
-    # Parser, not ArgumentParser: a mistyped flag must exit 5 (usage), never 2 (the product is
-    # wrong). This runner is the thing that decides whether to page someone.
+    # Parser, not ArgumentParser: a usage error exits 5, never 2.
     ap = Parser(description=__doc__.splitlines()[0],
                 formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--stages", help=f"comma-separated. Default: {','.join(DEFAULT)}")

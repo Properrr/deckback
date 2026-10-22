@@ -1,19 +1,12 @@
 #!/usr/bin/env bash
-# scripts/check-permissions.sh — refuse a manifest that adds a sandbox permission any released
-# version lacks.
-#
-# flatpak-portal compares the new build's permissions against the build INSTALLED on the user's
-# machine and refuses the self-update outright if anything was added (see scripts/lib/permissions.sh
-# for the traced source). It does not compare against the previous release, so it is not enough to
-# be a subset of the newest tag: the working tree must add nothing relative to EVERY release still
-# in the field, or the users on that release are stranded on it for good.
+# Refuse a manifest that adds a sandbox permission any released version lacks. flatpak-portal refuses
+# a self-update that adds permissions relative to the INSTALLED build, so the tree must add nothing
+# relative to EVERY release still in the field (see scripts/lib/permissions.sh).
 #
 # Usage:  scripts/check-permissions.sh [ref ...]      (default: every v* tag)
 #
-# Set ALLOW_PERMISSION_ADD=1 to downgrade the failure to a warning — for the rare change where the
-# permission is genuinely required and stranding existing installs is a deliberate, documented call.
-# Ship that release with instructions to re-run the one-line installer, which updates from the host
-# (`flatpak install --user -y`) and so is not subject to the portal's rule.
+# ALLOW_PERMISSION_ADD=1 downgrades the failure to a warning. Users on older releases must then re-run
+# the one-line installer, which updates from the host (`flatpak install --user -y`), not the portal.
 #
 # Exit: 0 no additions · 2 a permission was added (the tree is wrong) · 3 environment (not a git
 # repo / manifest missing).
@@ -32,8 +25,7 @@ if [ "${#refs[@]}" -eq 0 ]; then
   mapfile -t refs < <(git tag -l 'v*' | LC_ALL=C sort -V)
 fi
 if [ "${#refs[@]}" -eq 0 ]; then
-  # A shallow/tagless clone must not pass vacuously: that is a gate reporting "clean" precisely
-  # where it cannot see anything, which is how a check that cannot fail gets trusted.
+  # A shallow clone without tags must not pass vacuously.
   [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ] &&
     die_env "no v* tags in a shallow clone — fetch tags before running this gate (CI: actions/checkout with fetch-depth: 0)"
   info "check-permissions: no release tags yet — nothing to compare against"

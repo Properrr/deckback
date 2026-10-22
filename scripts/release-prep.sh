@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
-# Prepare a release on a dedicated branch: bump VERSION, roll the CHANGELOG's [Unreleased] section
-# into a dated version, and add a matching AppStream <release> entry. It does NOT build, tag, or
-# push — it produces one reviewable commit on a `release/vX.Y.Z` branch that you merge into main and
-# then tag (see RELEASING.md).
+# Prepare a release: bump VERSION, roll the CHANGELOG's [Unreleased] section into a dated version, and
+# add a matching AppStream <release>, as one commit on a new `release/vX.Y.Z` branch. Does NOT build,
+# tag, or push (see RELEASING.md).
 #
 #   scripts/release-prep.sh <version>        # version WITHOUT a leading 'v', e.g. 0.0.2
 #
-# Exit: 0 ok · 1 usage · 2 tree/input wrong.
+# Exit: 0 ok · 2 tree/input wrong · 5 usage.
 . "$(dirname "$0")/lib.sh"
 
 ver="${1:-}"
@@ -55,8 +54,7 @@ open(p, "w").write(s)
 print(f"CHANGELOG rolled to {ver} ({today})")
 PY
 
-# AppStream: insert a new <release> right after <releases>. Notes are intentionally terse and point at
-# the changelog; AppStream release descriptions are a summary, not the full log.
+# AppStream: insert a new <release> right after <releases>, with notes that point at the changelog.
 python3 - "$ver" "$today" "$metainfo" <<'PY'
 import sys
 ver, today, p = sys.argv[1], sys.argv[2], sys.argv[3]

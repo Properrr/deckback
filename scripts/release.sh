@@ -5,21 +5,20 @@
 #   scripts/release.sh <tag>            # tag is vX.Y.Z and MUST match the VERSION file
 #
 # Prereqs: run this on the build host AFTER `just release-prep <X.Y.Z>` has landed on main and the tag
-# exists (see RELEASING.md). Exit: 0 ok · 1 usage · 2 input wrong · 3 environment.
+# exists (see RELEASING.md).
+# Env: FORCE=1 (or a --force 2nd arg) skips the CI-green gate · RELEASE_ENGINE_PRESET (see below).
+# Exit: 0 ok · 2 input wrong / CI not green · 3 environment · 4 transport · 5 usage.
 . "$(dirname "$0")/lib.sh"
 tag="${1:-}"
 [ -n "$tag" ] || die_usage "usage: release.sh <tag>   (e.g. v0.0.1)"
 
-# The tag must match VERSION, or the GitHub release, the repo commit, and the changelog disagree.
+# The tag must match VERSION, or the GitHub release, the repo commit and the changelog disagree.
 ver="${tag#v}"
 file_ver="$(tr -d '[:space:]' < VERSION 2>/dev/null)"
 [ "$ver" = "$file_ver" ] ||
   die_assert "tag '$tag' does not match VERSION '$file_ver' — run 'just release-prep $ver' first"
 
-# Gate: the tagged commit must be GREEN in CI before we burn a Chromium-scale build on it. 0.0.3
-# nearly shipped from a commit whose launcher job was red; a build that takes an hour is the wrong
-# place to discover a red tag. Every check-run on the tagged commit must be completed+success.
-# Override for an offline/emergency build:  FORCE=1 just release <tag>   (or a --force 2nd arg).
+# Gate: every check-run on the tagged commit must be completed+success before the build.
 force="${FORCE:-0}"
 [ "${2:-}" = "--force" ] && force=1
 if [ "$force" = 1 ]; then
@@ -45,10 +44,8 @@ preset="${RELEASE_ENGINE_PRESET:-release}"
 if [ "$preset" = release ]; then
   info "Release build (gold + ThinLTO) ..."
   in_container bash -c "cd $CTR_TREE && python3 cobalt/build/gn.py --no-rbe -p $COBALT_PLATFORM -c gold out/release"
-  # Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO for the tagged build. Strip
-  # concurrent_links (ThinLTO manages its own link concurrency and GN asserts against an explicit
-  # value: "can't explicitly set concurrent_links with thinlto") and deck.gn's use_thin_lto=false,
-  # which the appended `use_thin_lto = true` below replaces.
+  # Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO. Strip concurrent_links (GN asserts
+  # against an explicit value with ThinLTO) and deck.gn's use_thin_lto, replaced by the appended line.
   { cat args/common.gn args/deck.gn 2>/dev/null \
       | grep -vE '^\s*#|^\s*$|^\s*concurrent_links\b|^\s*use_thin_lto\b'; echo 'use_thin_lto = true'; } \
     >> "$COBALT_TREE/out/release/args.gn"
@@ -62,8 +59,8 @@ fi
 info "Flatpak bundle (preset=$preset) ..."
 ./scripts/flatpak.sh "$preset"
 
-# Engine tarball: the extra-data payload the Flathub manifest references (and a convenient standalone
-# artifact). Same flat layout apply_extra expects. Staged by flatpak.sh at flatpak/cobalt-prebuilt/.
+# Engine tarball: the extra-data payload the Flathub manifest references, in the flat layout
+# apply_extra expects (staged by flatpak.sh at flatpak/cobalt-prebuilt/).
 pin="$(tr -d '[:space:]' < DEPS.pin)"
 engine="cobalt-prebuilt-${pin}.tar.gz"
 if [ -d flatpak/cobalt-prebuilt ] && [ -e flatpak/cobalt-prebuilt/content_shell ]; then
@@ -75,8 +72,7 @@ fi
 info "Checksums ..."
 sha256sum io.github.properrr.deckback.flatpak ${engine:+"$engine"} > "SHA256SUMS-${tag}.txt"
 
-# Release notes: the section for this version from the changelog (everything between this version's
-# heading and the next `## [` heading).
+# Release notes: this version's CHANGELOG section, up to the next `## [` heading.
 notes="$(mktemp)"
 awk -v v="## [$ver]" '
   index($0, v)==1 {grab=1; next}

@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
 # Does the gesture router still receive touch events? Answered OFF-DECK, in the build container.
 #
-# durable/touch-gestures.md §7.0: on the v0.0.9 build a real finger produced ZERO events of any
-# family, and TWO things had changed at once — the cursor-hiding script, and the whole engine binary
-# (`gold`+ThinLTO from out/release, where every hand-tested build was `deck`/qa from out/deck).
-# Arguing about which is cheap and unconvincing; this runs the 2x2.
+# For each engine preset in $1 (default "deck release") x {router, router+hide_cursor}: boot the
+# engine headless under Xvfb, inject the page scripts, dispatch a real touch sequence through CDP
+# `Input.dispatchTouchEvent`, and report what the router counted. This covers Blink's touch dispatch
+# and above, NOT gamescope -> Xwayland -> XI2: a failure is conclusive, a pass narrows it to below.
 #
-# For each engine, with and without hide_cursor.js, it boots the engine headless under Xvfb, injects
-# the real page scripts, dispatches a REAL touch sequence through CDP `Input.dispatchTouchEvent`
-# (trusted, engine-level — not a synthetic DOM event), and reports what the router counted.
-#
-# WHAT THIS CAN AND CANNOT SHOW. CDP injects touch inside the browser, so this exercises Blink's
-# touch dispatch and everything above it — which is exactly where a page script could interfere. It
-# does NOT exercise gamescope -> Xwayland -> XI2, so a compositor-level cause would pass here.
-# A FAILURE here is therefore conclusive; a pass narrows the question to the layer below.
-#
-# Exit codes (.internal/HARNESS.md §1): 0 ran and reported · 2 a cell regressed (see the table) ·
-# 3 environment (no engine, no container) · 5 usage.
+# Exit codes: 0 ran and reported · 2 a cell regressed (see the table) · 3 environment (no engine,
+# no container) · 5 usage.
 . "$(dirname "$0")/lib.sh"
 
 port=9223

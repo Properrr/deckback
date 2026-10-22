@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
-# Phase 8 packaging: stage the prebuilt content_shell runtime, then build the Flatpak in the `pack`
-# container (dev image + flatpak-builder). Chromium/Cobalt is never built here — only zypak and the
-# out-of-tree launcher compile against the SDK; content_shell ships as a staged prebuilt. Output:
-# io.github.properrr.deckback.flatpak at the repo root (install on the Deck with 'just install').
+# Stage the prebuilt content_shell runtime, then build the Flatpak in the `pack` container. Only zypak
+# and the launcher compile against the SDK. Output: io.github.properrr.deckback.flatpak at the repo
+# root (install on the Deck with 'just install').
 #
-# Usage: flatpak.sh [preset]   (default: deck)
-# The preset selects which out/<preset> tree is packaged. `release.sh` builds out/release and MUST
-# pass it here — this used to be hardcoded to `deck`, so `just release` silently bundled whatever
-# stale binary happened to sit in out/deck instead of the gold+ThinLTO build it had just produced.
+# Usage: flatpak.sh [preset]   (default: deck; the out/<preset> tree to package — release.sh passes it)
 . "$(dirname "$0")/lib.sh"
 require_engine
 require_cobalt_checkout
@@ -16,9 +12,7 @@ app="io.github.properrr.deckback"
 manifest="flatpak/${app}.yml"
 [ -f "$manifest" ] || die_env "manifest missing: $manifest"
 
-# 0. Lint before staging 1.2 GB and downloading 2 GB of runtime. `appstreamcli compose` runs at the
-#    very END of flatpak-builder, so an invalid metainfo file used to be discovered after the whole
-#    build. Fail in four seconds instead.
+# 0. Lint first: `appstreamcli compose` only runs at the very end of flatpak-builder.
 info "Linting the manifest and shipped metadata ..."
 "$(dirname "$0")/flatpak-lint.sh"
 
@@ -51,18 +45,13 @@ cp -a config/app.json config/steam_input.vdf flatpak/assets/
 
 # 3. Build + bundle inside the pack container. --install-deps-from pulls Platform+Sdk from flathub
 #    (persisted on the /cache/flatpak bind-mount); --disable-rofiles-fuse avoids needing fuse.
-#
-#    `bash -c`, never `bash -lc`. A login shell runs ~/.bash_logout on the way out, Debian's ends in a
-#    command that fails when /usr/bin/clear_console is absent, and under `set -e` that 1 replaces the
-#    real exit status — a green build reported as a failure, or worse (finding F8). It happens not to
-#    fire in the trixie pack image today, which is precisely the kind of luck not to depend on.
+#    `bash -c`, never `bash -lc`: a login shell runs Debian's ~/.bash_logout, whose failing last
+#    command replaces the real exit status under `set -e`.
 runtime_version="$(sed -n "s/^runtime-version: *'\([^']*\)'.*/\1/p" "$manifest")"
 [ -n "$runtime_version" ] || die_env "cannot read runtime-version from $manifest"
 sz="$(du -sh "$stage" | cut -f1)"
 info "Building Flatpak in the pack container (runtime ${runtime_version}, staged ${sz}) ..."
-# The container body is SINGLE-quoted and its inputs arrive as environment variables. The previous
-# form was a double-quoted string full of \$ and \" — every edit to it is a coin flip, and the shell
-# does not tell you when you lose.
+# The container body is single-quoted; its inputs arrive as environment variables.
 compose_rootless_args
 COBALT_COMMIT="$(deps_pin)" "$CONTAINER_ENGINE" compose run --rm "${COMPOSE_ROOTLESS[@]}" \
   -e DB_APP="$app" -e DB_MANIFEST="$manifest" -e DB_RUNTIME="$runtime_version" pack bash -c '

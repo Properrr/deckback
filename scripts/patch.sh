@@ -19,7 +19,6 @@ case "$cmd" in
     git -C "$COBALT_TREE" format-patch -1 --zero-commit --no-signature \
       --start-number "$(($(ls patches/[0-9]*.patch 2>/dev/null | wc -l) + 1))" \
       -o "$REPO_ROOT/patches" HEAD >/dev/null
-    # rename the just-created file to include the friendly name
     latest="$(ls -t patches/[0-9]*.patch | head -1)"
     mv "$latest" "${latest%.patch}-${name}.patch"
     regen_series ;;

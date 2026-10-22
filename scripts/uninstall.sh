@@ -45,7 +45,6 @@ if [ "$assume_yes" -ne 1 ]; then
   esac
 fi
 
-# 1) Host helpers: stop, disable, remove unit + binary.
 for h in idle-nudge audio-repair; do
   unit="deckback-$h.service"
   if systemctl --user disable --now "$unit" 2>/dev/null; then
@@ -55,18 +54,16 @@ for h in idle-nudge audio-repair; do
 done
 systemctl --user daemon-reload 2>/dev/null || true
 
-# 2) Steam library shortcut + grid artwork. Steam rewrites shortcuts.vdf on exit, so an edit while it
-#    runs is lost — skip with a note rather than force a doomed edit.
+# Steam library shortcut + grid artwork. Steam rewrites shortcuts.vdf on exit, so an edit while it
+# runs is lost.
 if pgrep -x steam >/dev/null 2>&1; then
   echo "note: Steam is running — close it and re-run to remove the 'Deckback' library shortcut + art."
 elif [ -f "$here/steam_shortcuts.py" ]; then
   python3 "$here/steam_shortcuts.py" remove --appname Deckback || true
 fi
 
-# 3) Any per-app Flatpak override we may have set (historically --device=input; now in the manifest).
 flatpak override --user --reset "$APP" 2>/dev/null || true
 
-# 4) The Flatpak itself. Keep data unless --purge, so a reinstall resumes the YouTube login.
 if flatpak info "$APP" >/dev/null 2>&1; then
   if [ "$purge" -eq 1 ]; then
     flatpak uninstall -y --delete-data "$APP" 2>/dev/null || flatpak uninstall -y "$APP" 2>/dev/null || true
@@ -78,7 +75,6 @@ else
   echo "$APP is not installed (removed host-side leftovers only)."
 fi
 
-# 5) App data: delete only on --purge.
 if [ "$purge" -eq 1 ]; then
   rm -rf "${HOME:?}/.var/app/$APP"
   echo "deleted app data (~/.var/app/$APP)"

@@ -1,7 +1,6 @@
-# Flatpak manifest (doc §6 Phase 8). Chromium sandbox runs via zypak (Flathub-standard) — never
-# --no-sandbox. Chromium/Cobalt does not build inside flatpak-builder, so content_shell + its runtime
-# resources are staged as a prebuilt bundle (flatpak/cobalt-prebuilt/, produced by scripts/flatpak.sh
-# from out/deck); zypak and the small out-of-tree launcher DO build here against the SDK.
+# Flatpak manifest. The Chromium sandbox runs via zypak — never --no-sandbox. content_shell and its
+# resources are staged prebuilt (flatpak/cobalt-prebuilt/, from scripts/flatpak.sh); zypak and the
+# launcher build here against the SDK.
 app-id: io.github.properrr.deckback
 runtime: org.freedesktop.Platform
 runtime-version: '25.08'
@@ -9,50 +8,35 @@ sdk: org.freedesktop.Sdk
 command: deckback
 separate-locales: false
 
-# Every entry earns its place; the sandbox is not a formality. The arguments we deliberately do NOT
-# pass — --device=all, --no-sandbox, --filesystem=home, --socket=wayland — are argued in
-# .internal/findings/durable/packaging-toolchain.md so nobody adds them back thinking they were an
-# oversight.
+# Deliberately absent: --device=all, --no-sandbox, --filesystem=home, --socket=wayland
+# (.internal/findings/durable/packaging-toolchain.md).
+# NOTHING may be added without reading findings/durable/self-update.md: flatpak-portal refuses a
+# self-update that adds a permission, stranding every existing install. scripts/check-permissions.sh
+# gates this.
 finish-args:
-  # flatpak 1.15.6 introduced --device=input, so 1.16.0 is the first stable release that understands
-  # this app's metadata. A 1.14 host now gets a clear refusal instead of an app whose gamepad is dead
-  # and whose touchscreen lock silently does nothing.
+  # First stable flatpak that understands --device=input.
   - --require-version=1.16.0
   - --share=network
   - --socket=x11                 # Game Mode = gamescope Xwayland; content_shell --ozone-platform=x11
-  # Chromium's X11 backend uses MIT-SHM. Without --share=ipc the shared-memory path fails and every
-  # frame goes over the socket instead. We render 720p60 on a handheld; this is not a rounding error.
+  # MIT-SHM for Chromium's X11 backend; without it every frame goes over the socket.
   - --share=ipc
   - --socket=pulseaudio          # PipeWire via pulse compat — playback AND mic capture (P5 voice)
   - --device=dri                 # GPU (VA-API decode, Phase 4)
-  # evdev. NOT --device=all: this is the only device class we need, and it buys three things — the
-  # gamepad reader, FF_RUMBLE haptics, and the touchscreen EVIOCGRAB. Until 2026-07-10 this lived in
-  # `just install` as a post-install `flatpak override`, because the Debian-12 pack image's flatpak
-  # could not express it. The pack image is now trixie and it can.
+  # evdev only (not --device=all): gamepad reader, FF_RUMBLE haptics, touchscreen EVIOCGRAB.
   - --device=input
   - --talk-name=org.freedesktop.ScreenSaver
   - --system-talk-name=org.freedesktop.login1
-  # NOTHING may be added to this list without reading findings/durable/self-update.md §"permission
-  # adds break self-update". flatpak-portal refuses a self-update whose new metadata asks for any
-  # permission the INSTALLED build lacks, so an addition strands every existing user on their current
-  # version until they update by hand. scripts/check-permissions.sh gates this; `just preflight`
-  # runs it.
-  # Self-update: the Flatpak portal lets this sandboxed app update ONLY itself, from its own remote,
-  # with no root and no password (findings durable/self-update.md). ON by default (app.json:
-  # self_update=true) — the portal path is verified on-Deck; the permission is inert if turned off.
+  # Self-update: the Flatpak portal lets the app update only itself, from its own remote, without root.
   - --talk-name=org.freedesktop.portal.Flatpak
-  # flatpak-portal gates the deploy behind an Access-portal consent dialog that Game Mode cannot
-  # show (no Access backend in the gamescope session). When self_update is on, the launcher records
-  # the consent itself — permission store, flatpak/updates=yes, exactly what the dialog's "allow"
-  # would write — and respects an explicit "no". Inert while the feature is off.
+  # Game Mode has no Access-portal backend for the update consent dialog, so with self_update on the
+  # launcher writes the consent (flatpak/updates=yes) itself and respects an explicit "no".
   - --talk-name=org.freedesktop.impl.portal.PermissionStore
   - --filesystem=xdg-run/pipewire-0:ro
   # content_shell is forked by the launcher, which finds it here (see the deckback wrapper).
   - --env=DECKBACK_COBALT_BIN=/app/bin/cobalt-zypak
 
 modules:
-  # zypak: Chromium sandbox helper for Flatpak (no setuid / nested userns broker). Plain Makefile
-  # build (its ./configure is a no-op); installs into $FLATPAK_DEST. Provides /app/bin/zypak-wrapper.sh.
+  # zypak: Chromium sandbox helper for Flatpak. Plain Makefile build; provides /app/bin/zypak-wrapper.sh.
   - name: zypak
     buildsystem: simple
     build-commands:
@@ -70,16 +54,13 @@ modules:
     config-opts:
       - -DCMAKE_BUILD_TYPE=Release
       - -DBUILD_TESTING=OFF      # don't build the ctest binaries inside the Flatpak
-      # flatpak-builder copies a module's sources FLAT into its build dir, so `../config/` — where
-      # these files live in the repo — does not exist here. config/scripts/ is added as a `dir` source
-      # at ./scripts below, and CMake globs it there. config/scripts/*.js is the single source of
-      # truth for every injected page script (ScriptLibrary); `just smoke` injects the same files.
+      # flatpak-builder copies module sources FLAT, so config/scripts/ is added as a `dir` source at
+      # ./scripts below and CMake globs it there.
       - -DDECKBACK_SCRIPTS_DIR=scripts
     sources:
       - type: dir
         path: ../launcher
-      # The repo VERSION file lives above launcher/, so the flat dir-copy misses it. Add it explicitly
-      # so CMake compiles the real version in (version.hpp) rather than the 0.0.0-dev fallback.
+      # VERSION lives above launcher/; without it CMake falls back to 0.0.0-dev.
       - type: file
         path: ../VERSION
         dest-filename: VERSION
@@ -87,9 +68,8 @@ modules:
         path: ../config/scripts
         dest: scripts
 
-  # Prebuilt Cobalt/content_shell runtime bundle (binary + paks + ICU + V8 snapshots + locales +
-  # ANGLE/SwiftShader libs). Chromium resolves its resources relative to the executable, so the whole
-  # bundle lands in one dir (/app/cobalt) and the launcher points DECKBACK_COBALT_BIN at the zypak shim.
+  # Prebuilt content_shell runtime bundle. Chromium resolves its resources relative to the executable,
+  # so the whole bundle lands in one dir (/app/cobalt).
   - name: cobalt
     buildsystem: simple
     build-commands:
@@ -99,8 +79,8 @@ modules:
       - type: dir
         path: cobalt-prebuilt
 
-  # App config, launch wrappers, desktop entry + icon + appstream. All files (including a staged copy
-  # of config/) are gathered into flatpak/assets/ by scripts/flatpak.sh so this is a single-source dir.
+  # App config, launch wrappers, desktop entry, icon and metainfo, gathered into flatpak/assets/ by
+  # scripts/flatpak.sh.
   - name: deckback-assets
     buildsystem: simple
     build-commands:
@@ -110,11 +90,7 @@ modules:
       - install -Dm644 steam_input.vdf /app/share/deckback/steam_input.vdf
       - install -Dm644 io.github.properrr.deckback.desktop      /app/share/applications/io.github.properrr.deckback.desktop
       - install -Dm644 io.github.properrr.deckback.svg          /app/share/icons/hicolor/scalable/apps/io.github.properrr.deckback.svg
-      # flatpak-builder >=1.4 keeps this at share/metainfo/ and runs `appstreamcli compose` over it,
-      # producing share/app-info/. 1.2.3 renamed it to the retired share/appdata/ and shelled out to
-      # `appstream-compose`, which the 24.08+ SDK does not ship — which is why this line was commented
-      # out until the pack image moved to trixie. scripts/flatpak.sh validates the file before we get
-      # this far.
+      # Needs flatpak-builder >=1.4 (`appstreamcli compose`); scripts/flatpak.sh validates it first.
       - install -Dm644 io.github.properrr.deckback.metainfo.xml /app/share/metainfo/io.github.properrr.deckback.metainfo.xml
     sources:
       - type: dir

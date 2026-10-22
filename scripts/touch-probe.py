@@ -1,44 +1,16 @@
 #!/usr/bin/env python3
 """Does gamescope's touch PASSTHROUGH mode deliver real touch events to our page?
 
-Runs on the WORKSTATION, drives the Deck over SSH + CDP, and needs **a human with a finger on the
-panel**. It answers one question with hardware, because nothing above the compositor can be inferred
-from source alone.
+Runs on the WORKSTATION, drives the Deck over SSH + CDP, and needs a human tapping the panel.
+For each gamescope touch mode (STEAM_TOUCH_CLICK_MODE) it reports which event family a real finger
+produces in the page, press coordinates, max simultaneous touches, and whether the mode held.
 
-Why it exists. `durable/touch-lock.md` proved the app cannot take the panel from gamescope, and
-`disable_touch` works around that by pinning gamescope's touch mode to **hover (0)** — the one mode
-that emits nothing but pointer motion. But gamescope's `wlserver.cpp` shows mode **4 (passthrough)**
-is categorically different: it calls `wlr_seat_touch_notify_down/motion(..., touch_id, ...)`, i.e.
-real `wl_touch` with a per-finger id and no pointer emulation at all. Modes 1-3 only synthesize a
-mouse button. So multitouch may already be reachable and we are discarding it by choice.
-
-The unverified link is everything above gamescope: gamescope -> Xwayland -> XI2 -> Chromium's X11
-ozone -> Blink. Chromium's half is present in the pinned tree (`TouchFactory::UpdateDeviceList`
-accepts an XI2 device only if it carries a touch class in `Direct` mode; `--touch-devices` force-marks
-one when detection fails), but whether gamescope's Xwayland advertises such a device is not knowable
-from here.
-
-What it reports:
-
-  * whether Chromium itself thinks a touchscreen exists (`navigator.maxTouchPoints`, `ontouchstart`,
-    `pointer: coarse`) — the single most informative line, and it needs no `xinput` on the Deck;
-  * per touch mode, what a real finger actually produces in the page (touch vs pointer vs mouse),
-    with coordinates, so we can see whether left/right halves are distinguishable in page space;
-  * the maximum simultaneous `touches.length` Blink sees, which is the multitouch answer;
-  * whether Steam or our own TouchModeGuard fights us for the mode atom.
-
-PREREQUISITE, and the probe refuses to run without it: the app must be running with
-`disable_touch: false`. With it on, `no_pointer.js` installs a document-start capture listener that
-calls `stopImmediatePropagation()`, so a listener this probe registers later on the same target and
-phase **never runs** — the probe would see zero events and report a false negative. Turning it off
-also stops `TouchModeGuard`, which would otherwise yank the mode back to hover every 750 ms.
-
-This probe swallows every event it observes, so taps cannot navigate Leanback while it runs.
+Requires the app running with `disable_touch: false` (no_pointer.js would otherwise swallow every
+event first, and TouchModeGuard would reset the mode). Recorded events are swallowed.
 
 Exit codes (.internal/HARNESS.md §1):
 
-    0  the probe ran and produced an answer -- including "passthrough does not reach Blink", which is
-       a FINDING to register, not a regression
+    0  the probe ran and produced an answer (a negative answer is still 0)
     2  ASSERT     an invariant of the probe itself broke (the mode would not hold at all)
     3  ENV        cannot observe: disable_touch is on, our window is not focused, or nobody tapped
     4  TRANSPORT  the Deck or its DevTools endpoint went away
@@ -95,12 +67,8 @@ UNINSTALL_EXPR = """(function(){
   return true;
 })()"""
 
-# Self-validating check for the no_pointer.js blindness described in the module docstring. A DETACHED
-# node's own listener still fires (so `detached == 1` proves event dispatch works at all); an IN-TREE
-# dispatch that never reaches our window-capture listener means something registered earlier is
-# calling stopImmediatePropagation(), and every measurement below would read zero for the wrong
-# reason. Same shape as tests/deck/test_touch.py's probe, inverted: there a 0 is the pass, here it is
-# the abort.
+# `detached == 1` proves dispatch works at all; `seen == 0` means an earlier capture listener
+# (no_pointer.js) is calling stopImmediatePropagation().
 SWALLOW_SELFTEST_EXPR = """(function(){
   var detached = 0, seen = 0;
   var d = document.createElement('div');
@@ -174,13 +142,7 @@ REPORT_EXPR = "JSON.stringify(window.__dbTouchProbe.report())"
 
 
 def parse_xprop_cardinal(text):
-    """The integer in `xprop -root NAME` output, or None when unset/absent.
-
-    `xprop` answers either `STEAM_TOUCH_CLICK_MODE(CARDINAL) = 4` or
-    `STEAM_TOUCH_CLICK_MODE:  not found.`, and an unreachable X server answers nothing at all. All
-    three must be distinguishable: "not found" is a real state (nobody has set the mode), while a
-    parse failure means the reading is worthless.
-    """
+    """The integer in `xprop -root NAME` output (`NAME(CARDINAL) = 4`), or None when unset/absent."""
     if not text:
         return None
     m = re.search(r"=\s*(-?\d+)", text)
@@ -188,11 +150,7 @@ def parse_xprop_cardinal(text):
 
 
 def classify(counts):
-    """Which event family a sample actually produced: 'touch', 'pointer', 'mouse', or 'none'.
-
-    Ordered by information content, not by count. A single `touchstart` beats a thousand
-    `mousemove`s, because only the former proves real `wl_touch` survived the trip to Blink.
-    """
+    """Which event family a sample produced: 'touch' > 'pointer' > 'mouse' > 'none' (any count wins)."""
     if any(counts.get(t, 0) for t in TOUCH_TYPES):
         return "touch"
     if any(counts.get(t, 0) for t in POINTER_TYPES):
@@ -203,11 +161,7 @@ def classify(counts):
 
 
 def split_sides(downs, width):
-    """(left, right, middle) counts of press coordinates against a viewport width.
-
-    The point is not the tally but whether coordinates arrive in PAGE space at all. If gamescope's
-    letterbox transform were ours to do, these would cluster wrongly or exceed the viewport.
-    """
+    """(left, right, middle) counts of press x against a viewport width (outer thirds at 35%/65%)."""
     left = right = middle = 0
     for d in downs:
         x = d.get("x")
@@ -223,11 +177,7 @@ def split_sides(downs, width):
 
 
 def verdict(samples, caps):
-    """(exit_code, headline, lines) from the per-mode samples. Pure, so it is L0-testable.
-
-    A negative answer is still a successful probe: "passthrough does not reach Blink" is a finding to
-    register, not a product regression. Only an inability to OBSERVE is an error here.
-    """
+    """(exit_code, headline, lines) from the per-mode samples. ENV only when nothing was observed."""
     lines = []
     seen_anything = any(classify(s.get("counts", {})) != "none" for s in samples.values())
     if not seen_anything:
@@ -295,11 +245,9 @@ def _ask(prompt):
 
 
 def find_display(sh):
-    """The Xwayland display where OUR content_shell is focused.
+    """The Xwayland display where OUR content_shell is focused, or None.
 
-    SteamOS runs `--xwayland-count 2`: Steam on :0, a Steam-launched game on :1. The mode atom must
-    be written on the display our window lives on; a naive :0 check always finds Steam and would
-    silently probe the wrong compositor state (durable/touch-lock.md).
+    SteamOS runs `--xwayland-count 2`: Steam on :0, a Steam-launched game on :1.
     """
     for disp in (":0", ":1", ":2"):
         _, cls, _ = sh.run(
@@ -324,11 +272,7 @@ def set_mode(sh, disp, mode):
 
 
 def mode_held(sh, disp, mode, seconds=2.0):
-    """Did the mode we set survive? Something else may own this atom.
-
-    Steam manages it, and our own TouchModeGuard re-asserts hover every 750 ms when disable_touch is
-    on. Either would silently invalidate a whole sample, so we watch rather than assume.
-    """
+    """Did the mode we set hold for `seconds`? Steam and TouchModeGuard also write this atom."""
     deadline = time.time() + seconds
     while time.time() < deadline:
         time.sleep(0.5)
@@ -353,14 +297,7 @@ def describe_environment(sh, disp):
 
 
 def wait_for_taps(instruction, dwell):
-    """Give the human a window to tap in: an Enter key if there is a terminal, else a timed one.
-
-    `--dwell` exists because the operator and the terminal are not always the same party. Driven
-    from an agent or a CI shell there is no stdin to press Enter on, and `_ask` would read EOF
-    instantly and sample an empty window -- which `verdict()` correctly reports as ENV, but only
-    after wasting the human's taps. A fixed window is honest about what it is: sample for N seconds,
-    then report whatever arrived.
-    """
+    """Give the human a window to tap in: wait for Enter, or sleep `dwell` seconds when set."""
     if not dwell:
         _ask(instruction)
         return

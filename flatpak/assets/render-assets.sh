@@ -1,17 +1,11 @@
 #!/usr/bin/env bash
-# Regenerate the raster catalogue art (AppStream screenshots + PNG icon fallbacks) from the SVG
-# sources under branding/. The PNGs are committed to the repo — this script only needs re-running
-# when the SVG sources or the app icon change, and its output is deterministic.
+# Regenerate the committed raster art (AppStream screenshots, Steam artwork, README banner, PNG icon
+# fallbacks) from the SVG sources. Deterministic; re-run only when an SVG source changes.
 #
 #   flatpak/assets/render-assets.sh
 #
-# It picks whatever SVG rasterizer is on the box, in order of fidelity:
-#   1. rsvg-convert (librsvg)         apt: librsvg2-bin
-#   2. cairosvg                       pip: cairosvg   (also honours $CAIROSVG, e.g. a venv python)
-#   3. inkscape
-#
-# Screenshots render at the Steam Deck native panel resolution (1280x800). Icon PNGs are square
-# fallbacks for hosts/README use; the Flatpak itself installs the scalable SVG, so these are optional.
+# Rasterizer, first found: rsvg-convert (librsvg2-bin), cairosvg (pip; honours $CAIROSVG, e.g. a venv
+# python), inkscape.
 set -euo pipefail
 
 here="$(cd "$(dirname "$0")" && pwd)"
@@ -49,16 +43,14 @@ for svg in "$src"/screenshot-*.svg; do
 done
 
 # --- Steam library artwork (exact per-file sizes) ---------------------------------------------
-# These are NOT part of the Flatpak; scripts/steam-artwork.py installs them into Steam's per-user
-# grid folder for the non-Steam shortcut. Sizes follow Steam's capsule/hero/logo conventions.
+# Not part of the Flatpak: installed into Steam's grid folder for the non-Steam shortcut.
 steam="$here/steam"
 if [ -d "$steam" ]; then
   render "$steam/capsule.svg" "$steam/capsule.png" 600 900     # portrait library capsule
   render "$steam/hero.svg"    "$steam/hero.png"    1920 620    # hero background banner
   render "$steam/logo.svg"    "$steam/logo.png"    900 400     # transparent logo overlay
   render "$steam/header.svg"  "$steam/header.png"  920 430     # landscape capsule / header
-  # A square icon alongside the capsules so `steam_shortcuts.py art --assets .../steam` has all five
-  # files it looks for (it expects icon.png here); rendered straight from the app icon.
+  # `steam_shortcuts.py art` also expects an icon.png here.
   [ -f "$icon_svg" ] && render "$icon_svg" "$steam/icon.png" 256 256
   echo "steam art -> steam/{capsule,hero,logo,header,icon}.png"
 fi

@@ -1,26 +1,16 @@
 #!/usr/bin/env bash
-# Headless boot + DevTools-protocol assertion + screenshot. Same script CI runs (doc §14.1).
-# Also runnable nightly against production youtube.com/tv as an R1/R2 Leanback-drift canary.
+# Headless boot + DevTools-protocol assertion + screenshot: the CI gate, and a nightly Leanback-drift
+# canary against production youtube.com/tv.
 #
-# What it gates (T6):
-#   1. the TV UA lands on Leanback: `ytlr-app` present, no `app=desktop` redirect, no cast screen;
-#   2. the UA override SURVIVED that navigation (--assert-ua) — it is sticky in DevToolsClient, and
-#      when it silently is not, every later probe measures the desktop site instead;
-#   3. AV1 steering works through all three APIs YouTube probes, and does not over-reach onto
-#      VP9/H.264 (--assert-av1-steering).
-#
-# (3) injects config/scripts/av1_steering.js — the same file CMake embeds into the launcher — so this
-# tests the script that ships rather than a copy of it. It also runs a BASELINE first: before the
-# script is injected, MediaSource.isTypeSupported(av01...) must be true. An engine built without any
-# AV1 decoder would otherwise satisfy every steering assertion while proving nothing at all, which is
-# `just power` reporting a perfect 0.00 W from a battery with no telemetry, in a different costume.
+# Gates: the TV UA lands on Leanback (`ytlr-app`, no `app=desktop`, no cast screen); the UA override
+# survived that navigation (--assert-ua); AV1 steering holds through all three APIs YouTube probes
+# without over-reaching onto VP9/H.264 (--assert-av1-steering). Steering injects the shipped
+# config/scripts/av1_steering.js, after a baseline that av01 is supported at all.
 #
 # Exit 2 means a check failed and the product is wrong. See scripts/cdp.py:main().
 #
-# NOTE (S0.2): content_shell IGNORES --user-agent (Cobalt hardcodes a Chrome/999 UA), so the TV UA
-# is injected over CDP (Network.setUserAgentOverride) via scripts/cdp.py, not a launch flag.
-# --no-sandbox is for THIS headless harness only (no user-ns/SUID sandbox in the build container);
-# the shipped Flatpak sandboxes via zypak — never --no-sandbox (Flathub rejects it).
+# content_shell ignores --user-agent, so the TV UA is injected over CDP. --no-sandbox is for this
+# headless harness only; the shipped Flatpak sandboxes via zypak.
 . "$(dirname "$0")/lib.sh"
 require_cobalt_checkout
 preset="${1:-dev}"

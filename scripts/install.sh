@@ -6,8 +6,7 @@ bundle="${1:-io.github.properrr.deckback.flatpak}"
 
 app=io.github.properrr.deckback
 
-# The bundle carries --require-version=1.16.0, so `flatpak install` refuses an older host by itself.
-# Say so first, in a sentence a person can act on, rather than letting them read flatpak's.
+# The bundle carries --require-version=1.16.0; explain that before `flatpak install` refuses.
 host_fp="$(flatpak --version 2>/dev/null | awk '{print $NF}')"
 if [ -n "$host_fp" ] && [ "$(printf '%s\n%s\n' 1.16.0 "$host_fp" | sort -V | head -1)" != "1.16.0" ]; then
   die_env "this host has flatpak ${host_fp}; Deckback needs >= 1.16.0 (that is where --device=input
@@ -17,16 +16,8 @@ fi
 info "Installing $bundle ..."
 flatpak install --user -y "$bundle"
 
-# evdev access is baked into finish-args as of 2026-07-10 (--device=input, never --device=all). It is
-# REQUIRED by Phase 3 input: the gamepad reader and the FF_RUMBLE haptic both need it, and BOTH
-# FAIL SILENTLY WITHOUT IT — the app starts, shows the UI, and simply ignores the controller.
-#
-# This used to be a post-install `flatpak override --device=input ... 2>/dev/null && info || info
-# "note: not applied"`. Both branches returned 0. The failure path swallowed flatpak's own error
-# message and printed a note, so `just install` reported success and the user got a dead gamepad.
-# That is finding F1 in a smaller costume: a check that cannot fail is not a check.
-#
-# So: verify what was actually installed, and refuse to call it a success if it cannot see /dev/input.
+# evdev access (--device=input in finish-args) is required by the gamepad reader and the FF_RUMBLE
+# haptic, which fail silently without it: verify the installed permissions and fail if it is missing.
 perms="$(flatpak info --show-permissions "$app" 2>/dev/null || true)"
 [ -n "$perms" ] || die_env "installed $app but cannot read its permissions — is the install broken?"
 if flatpak_grants_input "$perms"; then

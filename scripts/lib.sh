@@ -14,30 +14,22 @@ DECK_PORT="${STEAMDECK_PORT:-22}"
 if [ -n "${STEAMDECK_USER:-}" ] && [ -n "${STEAMDECK_IP:-}" ]; then
   DECK_HOST="${STEAMDECK_USER}@${STEAMDECK_IP}"
 fi
-# EXPORTED, not merely set. Every Deck-facing Python tool -- deckctl.py (so power.sh and soak.sh),
-# cert.py --deck, deck-ci.py -- reads these from os.environ. A plain assignment is visible to this
-# shell and invisible to its children, so those tools saw no Deck at all and exited 3 ("environment"):
-# `just cert-deck` said `no DECK_HOST` against a Deck answering SSH on the next line. deck-ci.sh was
-# patched for exactly this once, in its own shim; a fix that has to be repeated per caller is a fix
-# that will be forgotten by the next caller. Pinned by tests/harness/test_deck_env.sh.
+# Exported: the Deck-facing Python tools (deckctl.py, cert.py --deck, deck-ci.py) read them from the
+# environment.
 export DECK_HOST DECK_PORT
 
 CONTAINER_ENGINE="${CONTAINER_ENGINE:-docker}"
-# COBALT_SRC is the gclient ROOT (holds .gclient + the `src/` solution), bind-mounted at /src.
-# Chrobalt (Chromium-based Cobalt) checks out with a solution named `src`, so the actual engine
-# tree lives one level down. COBALT_TREE is that tree on the host; CTR_TREE is the same in-container.
+# COBALT_SRC is the gclient root (bind-mounted at /src); the engine tree is its `src` solution.
+# COBALT_TREE is that tree on the host, CTR_TREE the same tree in the container.
 COBALT_SRC="${COBALT_SRC:-./cobalt}"
 COBALT_TREE="$COBALT_SRC/src"
 CTR_TREE="/src/src"
 
-# Cobalt 26 build system (findings/milestones/m114.md): builds go through cobalt/build/gn.py, which
-# selects a named platform + build_type. Chrobalt on desktop Linux is `chromium_linux-x64x11`, and
-# the runnable target is `content_shell` (Cobalt's code compiles into it). v1 is Linux-only.
+# cobalt/build/gn.py platform and the runnable target.
 COBALT_PLATFORM="${COBALT_PLATFORM:-chromium_linux-x64x11}"
 COBALT_TARGET="${COBALT_TARGET:-content_shell}"
 
-# Map our preset -> gn.py build_type. deck is the deployable (optimized, keeps diagnostics); dev/asan
-# iterate. gold is reserved for tagged releases (scripts/release.sh).
+# Map our preset -> gn.py build_type (gold is reserved for scripts/release.sh).
 preset_buildtype() {
   case "$1" in
   deck) echo qa ;;
@@ -46,17 +38,12 @@ preset_buildtype() {
 }
 
 # ---- exit-code taxonomy -------------------------------------------------------------------------
-# "The build failed" is useless at 3 a.m. Every script distinguishes *why* it failed, so an
-# unattended runner (and an LLM reading only the exit code) can tell a broken environment from a real
-# regression. TEST-PLAN §6.5 makes this mandatory for the cert harness; it is cheap everywhere else.
-#
 #   0  success
 #   1  generic failure / a tool we shelled out to crashed
-#   2  ASSERTION failed — the thing under test is genuinely wrong. This is the only code that means
-#      "the product is broken". (scripts/cdp.py already exits 2 for a failed DOM assertion.)
-#   3  ENVIRONMENT/precondition missing — no checkout, no Docker, no config. Not a product defect.
-#   4  TRANSPORT — Deck unreachable, SSH died, CDP endpoint absent. Retryable; never a regression.
-#   5  USAGE — the script was invoked wrong.
+#   2  ASSERTION failed — the product is wrong (the only code that means a regression)
+#   3  ENVIRONMENT/precondition missing — no checkout, no Docker, no config
+#   4  TRANSPORT — Deck unreachable, SSH died, CDP endpoint absent. Retryable
+#   5  USAGE — the script was invoked wrong
 readonly EX_OK=0 EX_FAIL=1 EX_ASSERT=2 EX_ENV=3 EX_TRANSPORT=4 EX_USAGE=5
 
 # fail <exit-code> <message...>
@@ -67,7 +54,7 @@ fail() {
   exit "$code"
 }
 
-die() { fail "$EX_FAIL" "$@"; }                # generic failure (legacy callers)
+die() { fail "$EX_FAIL" "$@"; }                # generic failure
 die_assert() { fail "$EX_ASSERT" "$@"; }       # the product is wrong
 die_env() { fail "$EX_ENV" "$@"; }             # our environment is wrong
 die_transport() { fail "$EX_TRANSPORT" "$@"; } # the wire is wrong
@@ -75,8 +62,7 @@ die_usage() { fail "$EX_USAGE" "$@"; }
 info() { echo ">> $*" >&2; }
 
 # ---- pinned lint tools (preflight.sh, fmt.sh and CI all resolve them here) -----------------------
-# clang-format comes from PyPI at exactly this version, locally and in CI; formatting differs between
-# releases. The venv is keyed by the version, so a bump bootstraps a fresh one.
+# clang-format comes from PyPI at exactly this version; the venv is keyed by it.
 CLANG_FORMAT_VERSION=23.1.3
 DECKBACK_PREFLIGHT_VENV="${DECKBACK_PREFLIGHT_VENV:-${TMPDIR:-/tmp}/deckback-lint-cf${CLANG_FORMAT_VERSION}}"
 _pinned_bootstrapped=0
@@ -98,23 +84,9 @@ pinned_tool() { # pinned_tool <system-name, or "" for venv only> <venv-binary> <
 }
 clang_format_bin() { pinned_tool "" clang-format "clang-format==$CLANG_FORMAT_VERSION"; }
 
-# Does this `flatpak info --show-permissions` output grant evdev access?
-#
-#   flatpak_grants_input "$(flatpak info --show-permissions io.github.properrr.deckback)"
-#
-# `all` counts: --device=all is a superset of --device=input, and a user who granted it has a working
-# gamepad. Our own manifest must never ask for it (scripts/flatpak-lint.sh forbids that), but
-# refusing to *recognise* it would make `just install` fail for someone whose app works fine.
-#
-# Only the `devices=` line is consulted. `filesystems=/mnt/input` must not be mistaken for a device.
-# Is the Deck plugged in? Argument is the concatenated contents of every AC/ADP `online` node.
-#
+# Is the Deck plugged in? Argument: the concatenated AC/ADP `online` nodes.
 #   ac_is_online "$(cat /sys/class/power_supply/{AC,ACAD,ADP}*/online)"
-#
-# A power measurement taken on AC is not a smaller version of the right answer, it is an answer to a
-# different question: `current_now` becomes the CHARGE current, so P = V x I describes energy going
-# INTO the battery. On this Deck that is ~4.6 W -- comfortably under the 9 W gate, entirely plausible,
-# and about nothing. Refusing is the only safe reading. (F1's lesson, one layer out.)
+# On AC, `current_now` is the charge current, so a power sample there must be refused.
 ac_is_online() {
   case "$(printf '%s\n' "$1" | tr -d '[:space:]')" in
   *1*) return 0 ;;
@@ -122,12 +94,8 @@ ac_is_online() {
   esac
 }
 
-# Is the panel dark? Arguments: the eDP connector's `dpms`, and the backlight `brightness`.
-#
-# A draw sampled with the screen off understates a real session by watts, on a device whose whole
-# gate is "<= ~9 W". The OLED blank/burn-in scripts people run over SSH turn the panel off AND, if
-# they chvt away, deactivate the seat session -- so this doubles as a check that we are measuring the
-# machine a user would actually be holding.
+# Is the panel dark? Arguments: the eDP connector's `dpms` and the backlight `brightness`.
+# dpms Off or brightness 0 = dark; an unreadable brightness is not proof of darkness.
 panel_is_dark() {
   local dpms="$1" brightness="$2"
   case "$dpms" in
@@ -140,6 +108,8 @@ panel_is_dark() {
   return 1
 }
 
+# Does this `flatpak info --show-permissions` output grant evdev access (`devices=` input or all)?
+#   flatpak_grants_input "$(flatpak info --show-permissions io.github.properrr.deckback)"
 flatpak_grants_input() {
   case "$(printf '%s\n' "$1" | sed -n 's/^devices=//p')" in
   *input*) return 0 ;;
@@ -148,7 +118,7 @@ flatpak_grants_input() {
   esac
 }
 
-# The pinned Cobalt commit. Guards against the placeholder shipped before spike S0.1.
+# The pinned Cobalt commit from DEPS.pin; dies on the placeholder.
 deps_pin() {
   local pin
   pin="$(tr -d '[:space:]' <DEPS.pin)"
@@ -170,8 +140,8 @@ require_cobalt_checkout() {
     die_env "no Cobalt checkout at '$COBALT_TREE'. Run 'just bootstrap' first."
 }
 
-# SSH/rsync to the Deck honoring the configured port and, only if provided, a password (via sshpass;
-# key auth is the norm and needs neither).
+# All Deck access goes through these: SSH/rsync on DECK_PORT, with sshpass only when
+# STEAMDECK_PASSWORD is set.
 deck_ssh() {
   if [ -n "${STEAMDECK_PASSWORD:-}" ] && command -v sshpass >/dev/null 2>&1; then
     sshpass -p "$STEAMDECK_PASSWORD" ssh -p "$DECK_PORT" "$@"
@@ -194,8 +164,7 @@ require_deck() {
     die_transport "cannot SSH to '$DECK_HOST' port $DECK_PORT (Developer Mode + sshd + your key on the Deck?)"
 }
 
-# Skip cleanly (exit 0) when no Deck is attached, instead of failing a CI run that never had one.
-# Used by recipes that are meaningless without hardware. Prints why, so a silent skip is impossible.
+# Exits 0 (with a SKIP line) when no Deck is reachable; for recipes meaningless without hardware.
 deck_or_skip() {
   if [ -z "${DECK_HOST:-}" ] || ! deck_ssh -o ConnectTimeout=5 -o BatchMode=yes "$DECK_HOST" true 2>/dev/null; then
     info "SKIP: no Deck reachable (DECK_HOST='${DECK_HOST:-unset}' port ${DECK_PORT})."
@@ -204,12 +173,8 @@ deck_or_skip() {
 }
 
 # Extra `compose run` options for rootless Docker, in the array COMPOSE_ROOTLESS (empty otherwise).
-# Rootless Docker maps the host user to container root, so the image's uid-1000 `dev` user can
-# neither write the bind mounts nor pass git's ownership check on them ("dubious ownership"): run as
-# root instead (it IS the host user), and make archive extraction ignore the foreign uids that user
-# namespace cannot map — GNU tar via TAR_OPTIONS, Python's tarfile via
-# docker/rootless/sitecustomize.py. FLATPAK_BWRAP routes flatpak's icon validator around a nested
-# network namespace rootless Docker cannot set up (docker/rootless/bwrap).
+# Rootless Docker maps the host user to container root, so run as root, make tar/tarfile ignore
+# unmappable uids, and route flatpak's bwrap around the nested netns it cannot create.
 compose_rootless_args() {
   COMPOSE_ROOTLESS=()
   if [ "$CONTAINER_ENGINE" = docker ] \

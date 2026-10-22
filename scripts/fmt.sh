@@ -20,23 +20,13 @@ else
   info "no modified launcher/*.{cpp,hpp} — nothing for clang-format to do."
 fi
 
-# In-tree patches + .gn: use the tree's own clang-format / gn format inside the container.
-# The checkout guard is the *only* reason to skip. A failure inside the container (gn parse error,
-# missing clang-format, container crash) must propagate: this block used to swallow every one of them
-# under `|| info "(tree fmt skipped — no checkout yet)"`, which reported a real breakage with a
-# message saying nothing was wrong. `grep` returning 1 on "no matching files" is the one expected
-# non-zero, so it is neutralized explicitly rather than by silencing the whole block.
-#
-# Both steps format only what `git diff` says you TOUCHED. `git ls-files "*.gn"` used to feed every
-# .gn/.gni in the tree to `gn format`, which rewrote 148 of them (import reordering, list collapsing)
-# and left a dirty checkout that `just sync` then refuses. A formatter whose blast radius is the
-# whole tree is a formatter nobody dares run.
+# In-tree patches + .gn: the tree's own clang-format / gn format inside the container, on the files
+# `git diff` reports touched only (a dirty tree blocks `just sync`). Container failures propagate;
+# grep's 1 on "no matching files" is the one expected non-zero.
 if [ -d "$COBALT_TREE/.git" ]; then
   info "Tree clang-format + gn format on patch-touched files ..."
-  # No trailing `exit`. `-l` makes this a LOGIN shell, so bash runs ~/.bash_logout on the way out;
-  # Debian's ends with `[ -x /usr/bin/clear_console ] && ...`, which does not exist in our image and
-  # returns 1. Under `set -e` that 1 replaces your status — even a deliberate `exit 3`. End on a
-  # plain successful command instead (finding F8).
+  # No trailing `exit`: `-l` makes this a login shell, and under `set -e` the failing last command of
+  # Debian's ~/.bash_logout replaces the status. End on a plain successful command instead.
   in_container bash -lc '
     set -euo pipefail
     cd /src/src
@@ -51,11 +41,8 @@ else
   info "No Cobalt checkout — skipping tree clang-format / gn format."
 fi
 
-# Same rule for shell. `scripts/` predates shfmt and is not shfmt-clean; a bare `shfmt -w scripts/*.sh`
-# rewrites all 25 of them (~200 lines) and buries the one you actually edited. Formatting the rest is
-# a reviewed change of its own, not a side effect of `just fmt`.
-#
-# -i 2 because this repo indents shell with two spaces; shfmt's default is tabs.
+# Same rule for shell: only modified scripts (scripts/ as a whole is not shfmt-clean).
+# -i 2: this repo indents shell with two spaces; shfmt's default is tabs.
 if command -v shfmt >/dev/null 2>&1; then
   changed=$(
     git diff --name-only -- 'scripts/*.sh'

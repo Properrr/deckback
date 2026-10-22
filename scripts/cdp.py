@@ -1,22 +1,10 @@
 #!/usr/bin/env python3
-"""Minimal, dependency-free Chrome DevTools Protocol client.
+"""Minimal, stdlib-only Chrome DevTools Protocol client: a library (`CDP`, `key_spec`, `MediaState`)
+and the smoke-gate CLI (`scripts/smoke.sh`).
 
-Two lives:
-  * a **library** (`from cdp import CDP, key_spec, MediaState`) for the on-Deck pytest harness
-    (TEST-PLAN §3) and the conformance driver (§6);
-  * a **CLI** for the smoke gate (`scripts/smoke.sh`), unchanged.
-
-Stdlib only — no `websocket-client`, no Selenium, no Playwright. They violate the minimal-deps rule
-and cannot run inside the build image (TEST-PLAN §8).
-
-Two protocol details that are load-bearing, both learned the hard way:
-  * Chrome >= 111 requires `Host: localhost` on the `/json` endpoints, so we always talk to
-    127.0.0.1 and you must TUNNEL (`ssh -L 9222:localhost:9222`) rather than hit the Deck's LAN IP.
-  * Leanback tears the page target down on navigation. `CDP.call` transparently re-attaches and
-    re-arms the enabled domains + the sticky UA override; without that the client dies mid-suite.
-
-Exception vocabulary matches the retry policy in TEST-PLAN §0: `ConnectionError`/`TimeoutError` are
-transport and may be retried; `RuntimeError` is a CDP-level error and must NOT be.
+Chrome >= 111 requires `Host: localhost` on `/json`, so always talk to 127.0.0.1 through a tunnel
+(`ssh -L 9222:localhost:9222`). `CDP.call` re-attaches when Leanback tears the target down.
+`ConnectionError`/`TimeoutError` are transport (retryable); `RuntimeError` is a CDP error (not).
 """
 import argparse
 import base64
@@ -34,14 +22,12 @@ RETRYABLE = (ConnectionError, TimeoutError)
 # CDP Input.dispatchKeyEvent `modifiers` bitfield. Protocol-defined; not ours to choose.
 MOD_ALT, MOD_CTRL, MOD_META, MOD_SHIFT = 1, 2, 4, 8
 
-# The codec strings YouTube TV actually probes. `av01.0.05M.08` is Main profile, level 5.0, 8-bit —
-# the format Leanback requests for 1080p. `OK_MIMES` is the negative control for the AV1 steering:
-# a script that reported everything unsupported would pass an AV1-only check and serve nothing.
+# Codec strings YouTube TV probes. `OK_MIMES` is the negative control for the AV1 steering.
 AV1_MIME = 'video/mp4; codecs="av01.0.05M.08"'
 OK_MIMES = ('video/webm; codecs="vp9"', 'video/mp4; codecs="avc1.640028"')
 
 # Named (non-printable) keys -> windowsVirtualKeyCode. Mirrors launcher/src/devtools.cpp:kNamedKeys;
-# the media VKs are tree-verified in cobalt/src/starboard/key.h (kSbKeyMediaRewind = 0xE3 = 227).
+# media VKs match cobalt/src/starboard/key.h.
 NAMED_KEYS = {
     "ArrowUp": 38, "ArrowDown": 40, "ArrowLeft": 37, "ArrowRight": 39,
     "Enter": 13, "Escape": 27, "Backspace": 8, "Delete": 46, "Tab": 9,
@@ -50,8 +36,8 @@ NAMED_KEYS = {
 }
 KEY_ALIAS = {"Up": "ArrowUp", "Down": "ArrowDown", "Left": "ArrowLeft", "Right": "ArrowRight",
              "Return": "Enter", "Esc": "Escape", "Back": "Backspace"}
-# US-layout DOM `code` + VK for printable non-alphanumerics. A shifted char carries the code/VK of the
-# physical key that produces it ('!' lives on Digit1) — the DOM contract; the caller adds MOD_SHIFT.
+# US-layout DOM `code` + VK for printable non-alphanumerics. A shifted char carries its physical key's
+# code/VK ('!' -> Digit1); the caller adds MOD_SHIFT.
 _PUNCT = {
     " ": ("Space", 32), "-": ("Minus", 189), "_": ("Minus", 189), "=": ("Equal", 187),
     "+": ("Equal", 187), "[": ("BracketLeft", 219), "{": ("BracketLeft", 219),
@@ -64,11 +50,10 @@ _PUNCT = {
     "&": ("Digit7", 55), "*": ("Digit8", 56), "(": ("Digit9", 57), ")": ("Digit0", 48),
 }
 
-# Back-compat for callers that imported the old table.
+# name -> (key, code, vk)
 KEYMAP = {name: (name, name, vk) for name, vk in NAMED_KEYS.items()}
 
 # Compact description of the focused element — the observable signal that navigation moved.
-# TEST-PLAN §0: assert that *this* changed, never that we dispatched the key we chose to dispatch.
 FOCUS_EXPR = (
     "(function(){var e=document.activeElement;if(!e)return 'none';"
     "var t=e.tagName.toLowerCase();var c=(e.className||'').toString().trim().split(/\\s+/)[0]||'';"
@@ -78,12 +63,9 @@ FOCUS_EXPR = (
 
 
 def key_spec(name):
-    """Resolve a key name to (key, code, vk, text) or None if we cannot synthesize it.
+    """Resolve a named key ("ArrowUp") or one printable ASCII char to (key, code, vk, text), or None.
 
-    `name` is a named key ("ArrowUp", "MediaRewind") or a single printable ASCII character.
-    `text` is non-empty only for printable keys: Blink needs it on a `keyDown` (not `rawKeyDown`) to
-    produce a char event, which is what makes beforeinput/textInput fire and a character land in a
-    focused <input>. Returning None rather than guessing is the point — see the no-guessing policy.
+    `text` is non-empty only for printable keys: Blink needs it on a `keyDown` to produce a char event.
     """
     name = KEY_ALIAS.get(name, name)
     if name in NAMED_KEYS:
@@ -104,16 +86,9 @@ def key_spec(name):
 
 
 class MediaState:
-    """Accumulates CDP `Media` domain events into per-player property maps.
+    """Accumulates CDP `Media` domain events (fed as decoded messages) into per-player property maps.
 
-    Pure: `feed()` takes decoded CDP messages, so it is unit-testable with no socket. This is the
-    supported way to learn the decoder identity (TEST-PLAN §5) — do NOT scrape chrome://media-internals,
-    which is an unstable WebUI over the same MediaLog stream.
-
-    This class ACCUMULATES and does not ADJUDICATE. The P4 hardware-decode verdict lives in exactly
-    one place, `tests/deck/lib/probes.py:hardware_decode_verdict`; a second copy here drifted from it
-    within a week (it read a missing `kIsPlatformVideoDecoder` as "not a platform decoder", turning a
-    broken probe into a product failure).
+    Accumulates only; the hardware-decode verdict lives in `tests/deck/lib/probes.py`.
     """
 
     def __init__(self):
@@ -129,8 +104,7 @@ class MediaState:
         props = self.players.setdefault(pid, {})
         for prop in p.get("properties", []):
             name, value = prop.get("name"), prop.get("value")
-            # Cache the latest NON-null value: the engine re-emits properties with null while
-            # tearing a player down, and a null would erase a decoder name we already observed.
+            # The engine re-emits properties as null while tearing a player down; keep the last value.
             if name is not None and value is not None:
                 props[name] = value
 
@@ -178,19 +152,12 @@ def pick_page_target(port, tries=30):
 
 
 def _ws_url(port, target_id):
-    """Build the page ws URL ourselves.
-
-    `/json/new` echoes the `Host:` header back in `webSocketDebuggerUrl`, so it can come back as
-    `ws://localhost/devtools/page/<id>` with no port at all, which WS() would dial on :80.
-    """
+    """Page ws URL. Not taken from `/json/new`, whose `webSocketDebuggerUrl` can lack the port."""
     return f"ws://127.0.0.1:{port}/devtools/page/{target_id}"
 
 
 def new_page_target(port, url="about:blank"):
-    """Create a page target of our own and return (target_id, ws_url).
-
-    Chrome >= 111 requires PUT here, and requires a Host header of localhost or a literal IP.
-    """
+    """Create a page target of our own and return (target_id, ws_url). Chrome >= 111 requires PUT."""
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/json/new?{url}", method="PUT")
     with urllib.request.urlopen(req, timeout=10) as r:
@@ -200,7 +167,7 @@ def new_page_target(port, url="about:blank"):
 
 
 def close_target(port, target_id):
-    """Best-effort: a leaked about:blank window outlives the run and confuses the next one."""
+    """Best-effort close of a page target."""
     try:
         with urllib.request.urlopen(
                 f"http://127.0.0.1:{port}/json/close/{target_id}", timeout=5):
@@ -293,11 +260,8 @@ class WS:
 class CDP:
     """A CDP client bound to one page target.
 
-    `own_target=True` creates a dedicated page instead of attaching to whatever is already open.
-    That is not a tidiness preference: `deckback-launcher` runs a Navigator that watches its own page
-    and re-navigates it back to youtube.com/tv whenever it leaves. Anything that drives the shared
-    target -- `cert.py --deck` above all -- is dragged home mid-run and reports that its page "failed
-    to load". The launcher's navigation policy is not what the conformance suite is testing.
+    `own_target=True` creates a dedicated page; use it when navigating away from youtube.com/tv,
+    since the launcher's Navigator drags its own page back home.
     """
 
     def __init__(self, port, own_target=False):
@@ -309,7 +273,6 @@ class CDP:
         self.media = MediaState()
         self.connect()
 
-    # Usable as `with CDP(9222) as cdp:` — pytest fixtures need a close(), the old client had none.
     def __enter__(self):
         return self
 
@@ -326,8 +289,7 @@ class CDP:
 
     def connect(self):
         if self._own_target:
-            # Re-attach after a target teardown must land on a page the launcher still does not own,
-            # so mint a fresh one rather than falling back to pick_page_target().
+            # Never fall back to pick_page_target(): that is the launcher's page.
             if not self._target_id or not target_exists(self.port, self._target_id):
                 self._target_id, url = new_page_target(self.port)
             else:
@@ -362,10 +324,7 @@ class CDP:
                     if "error" in msg:
                         raise RuntimeError(f"{method}: {msg['error']}")
                     return msg.get("result", {})
-                # Not our reply: it is an event. Feed it to the Media accumulator instead of
-                # discarding it — Media.playerPropertiesChanged arrives unsolicited between calls,
-                # and dropping it is why the decoder identity was previously unobtainable.
-                self.media.feed(msg)
+                self.media.feed(msg)  # an unsolicited event, e.g. Media.playerPropertiesChanged
             raise TimeoutError(f"{method} timed out")
         except (ConnectionError, BrokenPipeError, OSError):
             if _no_reconnect:
@@ -411,12 +370,7 @@ class CDP:
         self.dispatch_raw(key, code, vk, text=text, modifiers=modifiers)
 
     def dispatch_raw(self, key, code, vk, text="", modifiers=0):
-        """Dispatch an arbitrary key by explicit VK.
-
-        Needed for the §4 spikes' NEGATIVE CONTROLS: inject codes we believe inert (CEA 461/415,
-        which belong to Tizen/webOS, not Chromium) and require they do nothing. Without a negative
-        control, "the key worked" is unfalsifiable.
-        """
+        """Dispatch an arbitrary key by explicit VK (e.g. negative controls with codes believed inert)."""
         common = {"key": key, "code": code, "windowsVirtualKeyCode": vk, "nativeVirtualKeyCode": vk}
         if modifiers:
             common["modifiers"] = modifiers
@@ -427,11 +381,7 @@ class CDP:
         self.call("Input.dispatchKeyEvent", {"type": "keyUp", **common})
 
     def type_text(self, s, settle_ms=0):
-        """Type a string one trusted keystroke at a time (not Input.insertText).
-
-        The question text entry actually asks is whether Leanback's field responds to real key events;
-        insertText would bypass exactly the code path under test.
-        """
+        """Type a string one trusted keystroke at a time (not Input.insertText, which bypasses key events)."""
         for ch in s:
             mods = MOD_SHIFT if (ch.isupper() or ch in '~!@#$%^&*()_+{}|:"<>?') else 0
             self.dispatch_key(ch, modifiers=mods)
@@ -445,21 +395,18 @@ class CDP:
         })
 
     def click(self, x, y):
-        """Trusted synthetic click. Coordinates are CSS pixels, so getBoundingClientRect() feeds
-        straight in — no letterbox transform (unlike raw touch evdev coords). This is how voice
-        search must be activated: kSbKeyMicrophone does nothing on this build (findings §13.2)."""
+        """Trusted synthetic click at CSS-pixel coordinates (getBoundingClientRect() feeds straight in)."""
         self.mouse("mousePressed", x, y, buttons=1)
         self.mouse("mouseReleased", x, y, buttons=0)
 
     # ---- probes ---------------------------------------------------------------------------------
 
     def enable_media(self):
-        """Subscribe to the CDP Media domain — the supported source of decoder identity (§5)."""
+        """Subscribe to the CDP Media domain — the supported source of decoder identity."""
         self.call("Media.enable")
 
     def screenshot(self, path, timeout=30):
-        """Best-effort: headless SwiftShader can stall Page.captureScreenshot. A paint failure must
-        not fail a run whose gate is a DOM assertion. Returns True when a file was written."""
+        """Best-effort PNG capture to `path` (headless SwiftShader can stall). True when written."""
         try:
             shot = self.call("Page.captureScreenshot", {"format": "png"}, timeout=timeout)
             with open(path, "wb") as f:
@@ -469,8 +416,7 @@ class CDP:
             return False
 
     def screenshot_png(self, timeout=30):
-        """Return the current page as raw PNG bytes, or None on a paint failure. Same best-effort
-        contract as screenshot(): a stalled capture must not raise into a test's gate."""
+        """Return the current page as raw PNG bytes, or None on a paint failure. Never raises."""
         try:
             shot = self.call("Page.captureScreenshot", {"format": "png"}, timeout=timeout)
             return base64.b64decode(shot["data"])
@@ -495,14 +441,9 @@ class AssertionFailure(Exception):
 
 
 def run_assertions(evaluate, exprs, label="assert"):
-    """Evaluate each expression and require it to be exactly `True`.
+    """Evaluate each expression and require it to be exactly `True` (truthiness is not enough).
 
-    Truthiness is deliberately NOT enough. A JS expression that returns the string "false", or the
-    number 0, or `undefined` because we typo'd a property name, is a broken check — and a broken
-    check that passes is worse than no check (finding F1). Every predicate must say `=== true`.
-
-    `evaluate` is injected so this is unit-testable with no browser. Returns the list of
-    `(expr, value)` pairs that failed, empty on success.
+    Returns the list of `(expr, value)` pairs that failed, empty on success.
     """
     failures = []
     for expr in exprs:
@@ -515,14 +456,9 @@ def run_assertions(evaluate, exprs, label="assert"):
     return failures
 
 
-# The T6 capability probes, as they are actually spelled on the wire. Kept here rather than in
-# smoke.sh because bash quoting of nested JS strings is where these go to die.
 def codec_assertions(av1_mime, ok_mimes):
-    """AV1 must look unsupported through all three APIs YouTube probes; the others must not.
-
-    The `ok_mimes` half is a mandatory negative control. Steering that reported *everything*
-    unsupported would satisfy an AV1-only assertion perfectly, while YouTube served nothing at all.
-    """
+    """AV1 must look unsupported through all three APIs YouTube probes; `ok_mimes` (the negative
+    control) must look supported."""
     def q(m):
         return m.replace("\\", "\\\\").replace("'", "\\'")
 
@@ -540,13 +476,7 @@ def codec_assertions(av1_mime, ok_mimes):
 
 
 def av1_baseline_assertion(av1_mime):
-    """The control for the control: BEFORE the steering script is injected, the engine must say AV1
-    *is* supported.
-
-    Without this, a Cobalt build compiled with no AV1 decoder at all would make every steering
-    assertion pass while proving precisely nothing — the same shape as `just power` scoring a perfect
-    0.00 W from a battery that reports no telemetry.
-    """
+    """Before the steering script is injected, the engine must say AV1 *is* supported."""
     q = av1_mime.replace("\\", "\\\\").replace("'", "\\'")
     return f"MediaSource.isTypeSupported('{q}') === true"
 
@@ -563,8 +493,7 @@ def _run(args):
         cdp.set_user_agent(args.ua)
         print(f"UA override applied: {args.ua}")
 
-    # Baselines run on the current (about:blank) document, BEFORE any script is injected. They
-    # establish that the thing we are about to suppress was there to suppress.
+    # Baselines run on the current (about:blank) document, BEFORE any script is injected.
     baselines = list(args.baseline or [])
     if args.assert_av1_steering:
         baselines.append(av1_baseline_assertion(AV1_MIME))
@@ -574,7 +503,7 @@ def _run(args):
             "the assertions that follow would pass vacuously."
         )
 
-    # Same mechanism the launcher uses (navigator.cpp), so smoke exercises the shipped script.
+    # Same mechanism the launcher uses (navigator.cpp).
     for path in args.add_script or []:
         with open(path) as f:
             cdp.call("Page.addScriptToEvaluateOnNewDocument", {"source": f.read()})
@@ -604,16 +533,12 @@ def _run(args):
         screenshot(args.out)
 
     if not ready:
-        # Run no capability probes against a page that never loaded: every one of them would fail,
-        # and the pile of red would bury the single real cause.
         return 2
 
     checks = list(args.assert_expr or [])
     if args.assert_ua:
         if not args.ua:
             raise ValueError("--assert-ua requires --ua")
-        # The page's view of the UA, compared against what we handed to Network.setUserAgentOverride.
-        # They differ exactly when the sticky override was lost across a navigation — the R1 failure.
         checks.append(f"navigator.userAgent === {json.dumps(args.ua)}")
     if args.assert_av1_steering:
         checks += codec_assertions(AV1_MIME, OK_MIMES)
@@ -636,16 +561,13 @@ def _run(args):
 
 
 def main():
-    """EXIT CODES (the taxonomy in .internal/HARNESS.md §1 — an unattended runner depends on them):
+    """EXIT CODES (.internal/HARNESS.md §1):
 
       0  the readiness assertion held
-      2  ASSERTION failed: the engine is up but the page never satisfied --expect. A regression.
+      2  ASSERTION failed: the engine is up but the page never satisfied --expect / an --assert
       4  TRANSPORT: no DevTools endpoint, socket died, target never appeared. Retryable.
-      1  anything else (a CDP-level error, a bad expression) — investigate, do not retry blindly.
-
-    Previously any transport failure escaped as an uncaught traceback and exit 1, indistinguishable
-    from a real assertion failure. `just smoke` is a CI gate; conflating "the Deck was asleep" with
-    "Leanback broke" is how a gate gets ignored.
+      5  USAGE: e.g. an unknown key name
+      1  anything else (a CDP-level error, a bad expression)
     """
     ap = argparse.ArgumentParser()
     ap.add_argument("--port", type=int, default=9222)
@@ -665,9 +587,8 @@ def main():
                     help="assert navigator.userAgent still equals --ua (the R1 canary)")
     ap.add_argument("--assert-av1-steering", action="store_true",
                     help="T6 capability probes: AV1 unsupported via all three APIs, VP9/H.264 not")
-    # S0.6 input spike: dispatch a comma-separated key sequence (e.g. "Down,Down,Right,Enter") after
-    # the page is ready, logging the focused element after each so we can see navigation move. With
-    # --out, writes a numbered screenshot per key (<out>.NN.png).
+    # Comma-separated keys (e.g. "Down,Down,Right,Enter") dispatched once ready, logging focus after
+    # each; with --out, also a numbered screenshot per key (<out>.NN.png).
     ap.add_argument("--keys")
     ap.add_argument("--key-settle", type=int, default=700, help="ms to wait after each key")
     args = ap.parse_args()
