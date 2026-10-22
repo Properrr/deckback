@@ -64,6 +64,13 @@ just release v0.0.2           # gold+ThinLTO engine build → .flatpak bundle + 
                               #   SHA256SUMS, then drafts the GitHub Release with changelog notes
 ```
 
+**Launcher/config-only release?** If `DEPS.pin`, `patches/` and `args/` are unchanged since the last
+tag (`git diff --quiet vPREV..vX.Y.Z -- DEPS.pin patches/ args/`), reuse that release's engine
+instead of rebuilding it: stage its files flat into `cobalt/src/out/<name>/` (the `cobalt-prebuilt-*.tar.gz`
+asset of the previous release, checked against its `SHA256SUMS`) and run
+`RELEASE_ENGINE_PRESET=<name> just release vX.Y.Z`. It ships the engine bytes already verified on
+hardware, skips hours of gold+ThinLTO build, and the users' update delta carries only what changed.
+
 `just release` refuses if the tag doesn't match `VERSION`, **and refuses to build unless every CI
 check-run on the tagged commit is `completed/success`** — a Chromium-scale build is the wrong place
 to discover a red tag. Override for an offline/emergency build with `FORCE=1 just release <tag>`. It

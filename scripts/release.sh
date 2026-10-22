@@ -39,21 +39,28 @@ else
   info "CI green on $tag ✓ — building."
 fi
 
-info "Release build (gold + ThinLTO) ..."
-in_container bash -c "cd $CTR_TREE && python3 cobalt/build/gn.py --no-rbe -p $COBALT_PLATFORM -c gold out/release"
-# Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO for the tagged build. Strip
-# concurrent_links (ThinLTO manages its own link concurrency and GN asserts against an explicit
-# value: "can't explicitly set concurrent_links with thinlto") and deck.gn's use_thin_lto=false,
-# which the appended `use_thin_lto = true` below replaces.
-{ cat args/common.gn args/deck.gn 2>/dev/null \
-    | grep -vE '^\s*#|^\s*$|^\s*concurrent_links\b|^\s*use_thin_lto\b'; echo 'use_thin_lto = true'; } \
-  >> "$COBALT_TREE/out/release/args.gn"
-in_container bash -c "cd $CTR_TREE && gn gen out/release && autoninja -C out/release $COBALT_TARGET"
+# RELEASE_ENGINE_PRESET=<preset>: package the prebuilt engine in out/<preset> instead of building
+# one (a release whose DEPS.pin, patches/ and args/ match a previous tag; RELEASING.md §3).
+preset="${RELEASE_ENGINE_PRESET:-release}"
+if [ "$preset" = release ]; then
+  info "Release build (gold + ThinLTO) ..."
+  in_container bash -c "cd $CTR_TREE && python3 cobalt/build/gn.py --no-rbe -p $COBALT_PLATFORM -c gold out/release"
+  # Same layering as gen.sh (common.gn + deck.gn) plus ThinLTO for the tagged build. Strip
+  # concurrent_links (ThinLTO manages its own link concurrency and GN asserts against an explicit
+  # value: "can't explicitly set concurrent_links with thinlto") and deck.gn's use_thin_lto=false,
+  # which the appended `use_thin_lto = true` below replaces.
+  { cat args/common.gn args/deck.gn 2>/dev/null \
+      | grep -vE '^\s*#|^\s*$|^\s*concurrent_links\b|^\s*use_thin_lto\b'; echo 'use_thin_lto = true'; } \
+    >> "$COBALT_TREE/out/release/args.gn"
+  in_container bash -c "cd $CTR_TREE && gn gen out/release && autoninja -C out/release $COBALT_TARGET"
+else
+  [ -x "$COBALT_TREE/out/$preset/$COBALT_TARGET" ] ||
+    die_env "RELEASE_ENGINE_PRESET=$preset but there is no $COBALT_TARGET in out/$preset"
+  info "NOT building the engine: packaging the prebuilt one in out/$preset (RELEASE_ENGINE_PRESET)."
+fi
 
-# Package the tree we just built, NOT out/deck. Passing the preset is load-bearing: without it
-# flatpak.sh defaults to `deck` and bundles a stale binary while reporting success.
-info "Flatpak bundle (preset=release) ..."
-./scripts/flatpak.sh release
+info "Flatpak bundle (preset=$preset) ..."
+./scripts/flatpak.sh "$preset"
 
 # Engine tarball: the extra-data payload the Flathub manifest references (and a convenient standalone
 # artifact). Same flat layout apply_extra expects. Staged by flatpak.sh at flatpak/cobalt-prebuilt/.
