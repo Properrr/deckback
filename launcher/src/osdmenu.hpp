@@ -41,7 +41,7 @@ inline constexpr std::string_view kOsdUnreachable = "unreachable";
 
 struct OsdVerdict {
   // Apply = a settings change to persist WITHOUT closing the menu (Captions); Action = a one-shot
-  // that closes (Updates buttons); Hold = A landed on a hold-to-confirm control (Exit), which acts
+  // that closes (Updates buttons); Hold = Y started the hold-to-exit, which acts
   // once the caller's hold deadline elapses. Unreachable = no answer: capture is kept and the
   // reconcile tick decides.
   enum class Kind { Consumed, Close, Action, Apply, Hold, Gone, Unreachable } kind = Kind::Consumed;
@@ -65,9 +65,9 @@ struct OsdMenuConfig {
   std::function<void()> on_update_check;
   // Close now (a staged update). Null leaves the button inert; wire it like on_exit.
   std::function<void()> on_update_quit;
-  // Fired when the Exit row's hold completes. Null leaves the row inert.
+  // Fired when the Y hold-to-exit completes. Null leaves it inert.
   std::function<void()> on_exit;
-  // How long A must be held on the Exit row; also drives the fill animation.
+  // How long Y must be held to exit; also drives the fill animation.
   int exit_hold_ms = 600;
   bool exit_enabled = true;
 };
@@ -89,7 +89,7 @@ class OsdMenuController {
   // Forward one command; act on the verdict; return the raw verdict.
   std::string exec(std::string_view cmd);
 
-  // How long A must be held on the Exit row, for the caller that owns the deadline.
+  // How long Y must be held to exit, for the caller that owns the deadline.
   int exit_hold_ms() const { return cfg_.exit_hold_ms; }
 
   // The hold completed: run the exit. Safe to call with no handler configured.

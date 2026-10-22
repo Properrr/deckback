@@ -22,9 +22,8 @@ concurrent_links = 1
 # gated off by `enable_widevine` (default false). Turning it on compiles the support in but is NOT
 # sufficient to load a CDM: registration happens via ContentClient::AddContentDecryptionModules,
 # which neither content/shell nor cobalt/shell overrides — the CdmRegistry stays empty and Widevine
-# key-system requests are rejected regardless of what the launcher installs (m114.md "Widevine
-# registration gap"). P7 therefore needs a small patches/ entry registering the CDM from the profile
-# dir. The CDM binary itself is NEVER shipped by us — user-fetched (launcher CdmFetcher,
+# key-system requests are rejected regardless of what the launcher installs. patches/0001 registers
+# a user-installed CDM from the profile dir. The CDM binary itself is NEVER shipped by us — user-fetched (launcher CdmFetcher,
 # docs/legal.md); free YouTube is unaffected either way.
 #
 # `enable_library_cdms` is NOT needed here: it defaults to `toolkit_views && !is_castos`, which is
