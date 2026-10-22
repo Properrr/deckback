@@ -77,13 +77,15 @@ def _open(cdp, *, tab="settings", has_update=False, about=False, about_features=
 
 @pytest.fixture(autouse=True)
 def _cleanup(cdp):
-    """Remove any OSD node a prior (possibly failed) test left, before and after."""
+    """Close any OSD a prior (possibly failed) test left, before and after.
+
+    Through osd.js's own `close`, never a bare `node.remove()`: the root is keep-alive'd, so the
+    observer re-attached a removed node within a frame and every run left a dead menu painted over
+    Leanback with nothing capturing input for it.
+    """
     yield
     try:
-        cdp.evaluate(
-            "(function(){var n=document.getElementById('__deckback_osd');if(n)n.remove();"
-            "return true;})()"
-        )
+        _osd(cdp, op="close")
     except Exception:  # noqa: BLE001 - cleanup must never mask the real failure
         pass
 
@@ -121,8 +123,11 @@ def test_osd_focus_and_verdicts(leanback):
     )
     assert _cmd(leanback, "select") == "action:update.confirm"
 
-    # Down moves focus; a second select fires the other action.
+    # The two actions are one horizontal row: Right moves focus and a second select fires the other
+    # action. Up/Down belong to the release notes here (osd.js moveOrScroll), so they must not.
     assert _cmd(leanback, "down") == "consumed"
+    assert _cmd(leanback, "select") == "action:update.confirm", "Down left the notes and moved focus"
+    assert _cmd(leanback, "right") == "consumed"
     assert _cmd(leanback, "select") == "action:update.ignore"
 
     # Contextual Y ignores only on the Updates tab.

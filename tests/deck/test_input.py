@@ -91,6 +91,8 @@ def test_uinput_dpad_moves_focus(deck, leanback):
 @pytest.mark.uinput
 def test_uinput_button_a_activates(deck, leanback):
     """A -> Enter -> Leanback activates the focused tile. Asserts the route changed, not that we sent."""
+    if leanback.evaluate(probes.ACCOUNT_PICKER_EXPR):
+        pytest.skip("Leanback is on the account picker (environment): pick a profile on the Deck first")
     before = leanback.evaluate("location.href")
     pad = u.gamepad_spec()
     rc, _, err = deck.python(u.remote_program(pad, u.press(u.BTN_SOUTH), settle=2.5), check=False)

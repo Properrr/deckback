@@ -26,6 +26,12 @@ UA_EXPR = "navigator.userAgent"
 
 ON_LEANBACK_EXPR = "location.href.indexOf('youtube.com/tv') >= 0"
 
+# Leanback's "Who's watching" picker (an account with several profiles boots into it). Activation
+# there opens a profile's panel — Account lock / Remove account — and never changes the route, so a
+# test that presses A on it proves nothing and walks the user's account settings. Page-type class
+# observed on-Deck 2026-10-21.
+ACCOUNT_PICKER_EXPR = "!!document.querySelector('.WEB_PAGE_TYPE_ACCOUNT_SELECTOR')"
+
 # `player_open` keys off the #/watch hash route, whose shape is verified (deep-link test 2026-07-08).
 PLAYER_OPEN_EXPR = "!!document.querySelector('video') && location.hash.indexOf('/watch') >= 0"
 
