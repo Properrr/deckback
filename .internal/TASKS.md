@@ -1018,6 +1018,21 @@ changed, because each touches an on-Deck-verified path or needs a seam first:
       `BTN_DPAD_*` buttons, which the launcher does not read at all. Game Mode (Steam Input's
       virtual Xbox pad) is unaffected. Low priority: Desktop Mode is a dev path, and Steam normally
       runs there too.
+- [ ] **The pre-sleep checkpoint fails on every real sleep** (pre-existing: v0.0.9 on 2026-10-10 and
+      -17, this launcher on 2026-10-21). With a video playing, a power-button sleep logs
+      `player: suspend — no active video to checkpoint` and then, in the same second,
+      `devtools: WebSocket session established`: the `player_pause` evaluate fails within ~100 ms of
+      `PrepareForSleep(true)`, about 2 s after Steam starts its own suspend work, so the CDP socket
+      was already unusable. The same script works from the Exit path (`paused + checkpointed at
+      207.4s`). Impact is small — the resume nudge restarts playback either way — but the video is
+      never paused before sleep. Needs a debug log of why the socket dropped.
+- [ ] **`just soak` cannot exercise the launcher's sleep hooks.** `rtcwake -m mem` bypasses logind,
+      so no `PrepareForSleep` reaches the launcher (TEST-PLAN §1). Automating a logind suspend from
+      SSH needs polkit auth; until then the hooks are checked with power-button sleeps by hand.
+- [ ] **`test_uinput_button_a_activates` depends on what Leanback shows.** It asserts the route
+      changes, so it fails when focus is not on a tile: on the watch page Enter toggles play/pause
+      (2026-10-21, launcher logged `btn 304 -> Enter`). It now skips on the account picker; a
+      known-state fixture (TEST-PLAN §3) is what is missing.
 
 ## Phase 10 — Flathub submission & maintenance  (3–4 ED + ongoing)
 

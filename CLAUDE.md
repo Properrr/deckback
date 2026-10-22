@@ -51,7 +51,9 @@ auto-repeat acceleration, mic capture, and voice search. **P4 power: PASSED 2026
 power` averaged **5.6 W** under HW-decode VP9 playback (OLED), under the ≤~9 W gate. **P6
 suspend/resume: PASSED 2026-07-10** — `just soak` ran `rtcwake` cycles with the app alive and the
 video advancing across every resume, and its audio-restored and no-screen-dim clauses are now
-verified too. `just soak` needs passwordless `sudo rtcwake` (a `zz-`-prefixed sudoers drop-in;
+verified too. But `rtcwake` **bypasses logind**, so soak never sends `PrepareForSleep` and has never
+run the launcher's own sleep/resume hooks; those were driven by power-button sleeps on 2026-10-21
+(TEST-PLAN §1). `just soak` needs passwordless `sudo rtcwake` (a `zz-`-prefixed sudoers drop-in;
 see the script's own error text). All OLED-only; the LCD unit has run nothing. See
 `.internal/TEST-PLAN.md` §2 before repeating any status claim.
 
