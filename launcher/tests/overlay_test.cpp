@@ -1,13 +1,6 @@
-// On-screen + in-hand feedback: the CDP-injected toast and the force-feedback effect.
-//
-// The toast exists because the player is otherwise unobservable — a caption toggle that did
-// nothing and one that worked look identical. So the failure this file guards against is a toast
-// that *silently does not appear*: `Runtime.evaluate` on malformed JS raises a JS exception the
-// launcher deliberately ignores (a failed toast must not break the action it reports), which means
-// an escaping bug produces no error anywhere. Only a test can catch it.
-//
-// What is NOT covered here, and cannot be: whether the pad accepts our FF upload. That needs the
-// Deck (.internal/TEST-PLAN.md §2).
+// The CDP-injected toast and the force-feedback effect. A JS error in the toast is ignored at
+// runtime, so escaping bugs are only visible here. Whether the pad accepts the FF upload needs a
+// Deck.
 #include "overlay.hpp"
 
 #include <cassert>
@@ -27,53 +20,44 @@ bool has(const std::string& s, const std::string& needle) {
   return s.find(needle) != std::string::npos;
 }
 
-// ---- toast_js (now config/scripts/toast.js rendered with text/ms params) ------------------------
+// ---- toast_js (config/scripts/toast.js rendered with text/ms params) ----------------------------
 
 void test_toast_js_shape() {
   const std::string js = toast_js("Touchscreen locked", 2000);
   assert(has(js, "__deckback_toast"));
   // Appended to documentElement, not body: Leanback replaces body content on navigation.
   assert(has(js, "document.documentElement.appendChild"));
-  // Reused by id, so a second toast replaces the first instead of stacking a second <div> forever.
+  // Reused by id, so a second toast replaces the first.
   assert(has(js, "getElementById"));
-  // Styling via CSSOM, NOT setAttribute('style',…): youtube.com/tv's CSP style-src has no
-  // 'unsafe-inline', so the attribute path is dropped and the toast renders unstyled
-  // (self-update.md).
+  // Styled via CSSOM: the page's CSP drops inline style attributes.
   assert(!has(js, "setAttribute('style'"));
   assert(!has(js, "setAttribute(\"style\""));
-  // It must never eat a tap meant for the page underneath.
   assert(has(js, "setProperty('pointer-events', 'none')"));
-  // The timeout handle is cleared before being re-armed, or a rapid lock/unlock leaves the older
-  // timer to hide the newer toast.
+  // The previous timer is cleared, so it cannot hide a newer toast.
   assert(has(js, "clearTimeout(window.__deckbackToastT)"));
-  // text/ms now arrive as JSON params on the invocation, not interpolated into the body.
+  // text/ms arrive as JSON params on the invocation.
   assert(has(js, "\"ms\":2000"));
   assert(has(js, "\"text\":\"Touchscreen locked\""));
 }
 
 void test_toast_js_escapes_quotes_and_backslashes() {
-  // The text is now a JSON string param, escaped once by ScriptParams. An unescaped quote would
-  // close the object literal early — the same syntax-error risk, centralised.
+  // The text is a JSON string param, escaped once by ScriptParams.
   assert(has(toast_js("say \"hi\"", 100), R"("text":"say \"hi\"")"));
   assert(has(toast_js("a\\b", 100), R"("text":"a\\b")"));
-  // A lone trailing backslash would otherwise escape the string's closing quote.
+  // A trailing backslash must not escape the closing quote.
   assert(has(toast_js("dir\\", 100), R"("text":"dir\\")"));
 }
 
 void test_toast_js_escapes_newlines() {
-  // The lock toast is two lines ("Touchscreen locked\nHold l3+r3 to unlock"). A raw newline inside
-  // the JSON string is a syntax error, so this is the shipped path, not a hypothetical one.
   const std::string js = toast_js("one\ntwo", 100);
   assert(has(js, R"("text":"one\ntwo")"));
   assert(!has(js, "one\ntwo"));  // no raw newline survived into the param
-  // pre-wrap (via CSSOM) keeps the escaped \n a line break like `pre` did, and additionally wraps a
-  // long single line instead of clipping it off both edges.
+  // pre-wrap keeps \n as a line break and wraps long lines.
   assert(has(js, "setProperty('white-space', 'pre-wrap')"));
 }
 
 void test_toast_js_clamps_negative_duration() {
-  // setTimeout(fn, -1) fires immediately: the toast would flash and vanish. The clamp now lives in
-  // the script (p.ms < 0 ? 0 : p.ms), so the param carries -1 and the body defends against it.
+  // The param carries -1 and the script clamps it.
   const std::string js = toast_js("x", -1);
   assert(has(js, "\"ms\":-1"));
   assert(has(js, "p.ms < 0 ? 0 : p.ms"));
@@ -82,24 +66,22 @@ void test_toast_js_clamps_negative_duration() {
 void test_toast_hide_js() {
   const std::string js = toast_hide_js();
   assert(has(js, "__deckback_toast"));
-  assert(has(js, "clearTimeout"));  // else the pending fade-out fires over the next toast
+  assert(has(js, "clearTimeout"));
   assert(has(js, "opacity"));
 }
 
-// ---- Trusted Types (folded into the HTML-injecting scripts) -------------------------------------
+// ---- Trusted Types ------------------------------------------------------------------------------
 
 void test_trusted_types_folded_into_html_scripts() {
-  // js_trusted_html is gone; the policy youtube.com/tv's CSP requires now lives INSIDE the two
-  // scripts that assign innerHTML. Without it, the assignment silently throws on the real page (the
-  // card rendered in tests but nothing on the Deck until this was added — input-ux §17).
+  // The scripts that assign innerHTML create the Trusted Types policy the page's CSP requires.
   for (const char* name : {"overlay", "error_page"}) {
     const std::string b(ScriptLibrary::instance().body(name));
     assert(has(b, "trustedTypes"));
     assert(has(b, "createPolicy"));
     assert(has(b, "createHTML"));
-    // Memoised on window, or every re-inject after a navigation throws "policy already exists".
+    // Memoised on window, so a re-inject does not recreate it.
     assert(has(b, "__dbTTP"));
-    // ...and it degrades to the raw string in a try/catch (about:blank has no Trusted Types).
+    // Falls back to the raw string where Trusted Types is absent (about:blank).
     assert(has(b, "catch"));
   }
 }
@@ -120,8 +102,7 @@ void test_show_toast_evaluates_on_the_page() {
 }
 
 void test_show_toast_survives_a_dead_engine() {
-  // The contract: feedback is secondary to the action it reports. If CDP is down, the caption
-  // toggle must still fire — so show_toast must return, not throw, not block.
+  // With CDP down, show_toast and hide_toast return without throwing or blocking.
   DevToolsClient c("127.0.0.1", 8);  // nothing listening
   show_toast(c, "Captions on", 2000);
   hide_toast(c);
@@ -137,12 +118,11 @@ void test_make_rumble_effect() {
   assert(e.replay.delay == 0);
   assert(e.u.rumble.strong_magnitude == 0xC000);
   assert(e.u.rumble.weak_magnitude == 0x4000);
-  // A non-zero trigger would make the kernel replay the effect on a button press of its own.
+  // No trigger button, so the kernel never replays it on its own.
   assert(e.trigger.button == 0);
   assert(e.trigger.interval == 0);
 
-  // An existing id is preserved, so repeated pulses reuse one slot rather than exhausting the
-  // device's finite effect table over a long session.
+  // An existing id is preserved, so repeated pulses reuse one effect slot.
   const ff_effect reused = make_rumble_effect(7, 0x1000, 0x2000, 90);
   assert(reused.id == 7);
   assert(reused.u.rumble.strong_magnitude == 0x1000);
@@ -151,7 +131,7 @@ void test_make_rumble_effect() {
 }
 
 void test_haptic_attach_fails_cleanly_on_a_non_device() {
-  // A pad with no FF, or a node we cannot open O_RDWR, is ordinary — not an error, just no rumble.
+  // A node with no FF, or one that cannot be opened, just leaves rumble off.
   Haptic h;
   assert(!h.attach("/dev/null"));  // opens, but advertises no EV_FF
   assert(!h.attached());

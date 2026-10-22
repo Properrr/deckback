@@ -1,9 +1,5 @@
-// L0 for the self-update NOTIFY UI's pure logic (findings durable/self-update.md). The portal
-// deploy and the on-page card/dot rendering are verified on a Deck; here we pin the parts that must
-// be correct off-Deck: semantic version comparison (a wrong answer offers a downgrade or hides a
-// real update), GitHub-releases parsing + changelog summary (what the card shows), the
-// show-card/show-dot decision (the "painless, ignorable, reachable" contract), and the dismissal
-// state files (round-trip + read-only tolerance).
+// Self-update notify UI: version comparison, release parsing and changelog summary, the card/dot
+// decision, dismissal markers, the Updates tab view, and the published-ref probe.
 #include "updateprompt.hpp"
 
 #include <atomic>
@@ -42,8 +38,7 @@ static void test_version_compare() {
 }
 
 static void test_parse_and_summarize() {
-  // A minimal GitHub /releases payload: fields in mixed order, nested objects (author/assets), and
-  // escapes in the body. Newest first, but summarize must not rely on input order.
+  // A minimal GitHub /releases payload: mixed field order, nested objects, and escapes.
   const std::string json =
       "[{\"tag_name\":\"v0.0.5\",\"name\":\"0.0.5 \xE2\x80\x94 the notify release\","
       "\"author\":{\"login\":\"properrr\"},\"assets\":[],"
@@ -65,10 +60,9 @@ static void test_parse_and_summarize() {
   assert(v.notes.find("0.0.5") != std::string::npos);
   assert(v.notes.find("older notes") != std::string::npos);  // 0.0.4 included (newer than 0.0.3)
   assert(v.notes.find("ancient") == std::string::npos);      // 0.0.3 == local, excluded
-  // 0.0.5's notes come before 0.0.4's.
   assert(v.notes.find("line one") < v.notes.find("older notes"));
 
-  // Up to date: nothing newer -> empty view (the card then shows the fallback link).
+  // Up to date: nothing newer -> empty view.
   const ChangelogView none = summarize_releases(notes, "0.0.5", 4000);
   assert(none.available_version.empty());
   assert(none.notes.empty());
@@ -82,10 +76,8 @@ static void test_parse_and_summarize() {
   assert(parse_github_releases("").empty());
 }
 
-// These are the cases the hand-rolled byte-scanner this parser replaced got wrong. It found a key
-// with an unanchored find() over the raw text and read whatever followed the next colon, so a value
-// that merely *contained* the key name won; and it decoded escapes itself. Release notes are
-// attacker-adjacent input we render into an overlay, so the escaping has to be the real thing.
+// Release notes are untrusted input: key names inside values, quoted braces, escapes, and nested
+// objects must not confuse the parser.
 static void test_release_parsing_handles_hostile_strings() {
   const std::string json = R"([
     {
@@ -101,7 +93,7 @@ static void test_release_parsing_handles_hostile_strings() {
   // A quoted brace inside a string must not end the object early, and escapes decode once.
   assert(notes[0].version == "1.2.3");
   assert(notes[0].title == "quote \" backslash \\ and a brace }");
-  // The embedded `"tag_name": "v9.9.9"` is text, not a field: the version above must be 1.2.3.
+  // The embedded `"tag_name": "v9.9.9"` is body text, not a field.
   assert(notes[0].body.find("v9.9.9") != std::string::npos);
   assert(notes[0].body.find("\xE2\x80\xA2") != std::string::npos);  // • -> UTF-8 bullet
 
@@ -114,8 +106,7 @@ static void test_release_parsing_handles_hostile_strings() {
 }
 
 static void test_notes_to_plain() {
-  // A CHANGELOG "## [x]" section as GitHub delivers it: ATX subsection headings, "-" bullets,
-  // **bold**, `code`, and blank-line runs. The card must show clean 10-foot text.
+  // A CHANGELOG section: ATX headings, "-" bullets, **bold**, `code`, and blank-line runs.
   const std::string md =
       "### Added\r\n"
       "- **Self-update** notify mode: see `self_update_mode`.\r\n"
@@ -139,21 +130,19 @@ static void test_notes_to_plain() {
 }
 
 static void test_decision() {
-  // A brand-new commit: show both. (The painless first-notification case.)
+  // A brand-new commit: show both.
   NotifyDecision d = decide_notification("cccc", "", "");
   assert(d.show_card && d.show_dot);
 
-  // Card already auto-shown for this commit, dot not dismissed: no re-nag, dot persists.
+  // Card already shown for this commit, dot not dismissed: dot only.
   d = decide_notification("cccc", "cccc", "");
   assert(!d.show_card && d.show_dot);
 
-  // Dot dismissed ("ignore this version") but card unseen: dot hidden — MUST return a suppress, or
-  // "ignore forever" would be a check that cannot fail (HARNESS.md).
+  // Dot dismissed but card unseen: card only.
   d = decide_notification("cccc", "", "cccc");
   assert(d.show_card && !d.show_dot);
 
-  // Both recorded for this commit: nothing auto-surfaces (the Menu route stays reachable
-  // elsewhere).
+  // Both recorded for this commit: nothing auto-surfaces.
   d = decide_notification("cccc", "cccc", "cccc");
   assert(!d.show_card && !d.show_dot);
 
@@ -185,8 +174,7 @@ static void test_markers() {
   assert(write_update_marker(dot_path, "commitEFGH"));
   assert(read_update_marker(dot_path) == "commitEFGH");
 
-  // A path that can't be created (its "parent" is a regular file) warns and returns false — never
-  // throws. Deterministic and root-safe: even root cannot mkdir under a regular file.
+  // A path under a regular file cannot be created (even by root): returns false, never throws.
   const std::string blocker = sdir + "/blocker";
   assert(write_update_marker(blocker, "x"));   // a normal file
   const std::string bad = blocker + "/child";  // "blocker" is a file, so this parent is invalid
@@ -196,9 +184,7 @@ static void test_markers() {
   fs::remove_all(dir);
 }
 
-// "What's new in the version you are running". summarize_releases only keeps releases NEWER than
-// local, so before this the Updates tab was blank whenever nothing was pending — which is nearly
-// always, and is what a user meant by "I didn't see a changelog" after restarting.
+// The notes for one specific version (the one running), for the Updates tab.
 void test_release_notes_for() {
   const std::vector<ReleaseNote> notes = {
       {"0.0.8", "Deckback v0.0.8", "### Fixed\n- Self-update works again"},
@@ -216,18 +202,15 @@ void test_release_notes_for() {
   assert(release_notes_for(notes, "0.9.9", 4000).empty());
   // Equivalent-but-differently-written versions still match ("0.0.7" == "0.0.7.0").
   assert(!release_notes_for(notes, "0.0.7.0", 4000).empty());
-  // The clamp applies, so a huge body cannot blow up the OSD payload.
+  // The clamp applies.
   assert(release_notes_for(notes, "0.0.7", 8).size() <= 8 + 4);
 }
 
-// The status/buttons the Updates tab shows. This is the function the v0.0.7 report was really
-// about: the tab claimed the update would apply after a restart while the portal had already
-// refused it, because the claim was made at button-press time and nothing ever revised it.
+// The status text and buttons the Updates tab shows for each deploy phase.
 void test_updates_view() {
   const std::string_view idle = "No update announced yet.";
 
-  // Idle, updater live: only a manual check, and the idle text is passed through verbatim — the
-  // view must never invent a "you are up to date" the app has not earned.
+  // Idle, updater live: only a manual check, and the idle text is passed through verbatim.
   UpdatesView v = updates_view(DeployPhase::Idle, "", false, "", "0.0.6", idle, true);
   assert(v.status == idle && !v.has_update && v.can_check);
 
@@ -240,17 +223,17 @@ void test_updates_view() {
   assert(v.has_update && !v.can_check);
   assert(v.status.find("0.0.7") != std::string::npos);
 
-  // In flight: no buttons, and above all no claim of success.
+  // In flight: no buttons and no claim of success.
   v = updates_view(DeployPhase::Requested, "", true, "0.0.7", "0.0.6", idle, true);
   assert(!v.has_update && !v.can_check);
   assert(v.status.find("Updating") != std::string::npos);
 
-  // Done is the ONLY state that may promise a restart will apply it.
+  // Only Done promises a restart will apply it.
   v = updates_view(DeployPhase::Done, "", false, "", "0.0.6", idle, true);
   assert(v.status.find("Restart") != std::string::npos);
   assert(!v.has_update && !v.can_check);
 
-  // Empty means the portal really did compare against the remote, so "latest" is earned here.
+  // Empty means the portal compared against the remote, so it may say "latest".
   v = updates_view(DeployPhase::Empty, "", false, "", "0.0.6", idle, true);
   assert(v.status.find("latest") != std::string::npos && v.can_check);
 
@@ -259,37 +242,31 @@ void test_updates_view() {
   assert(v.status.find("network unreachable") != std::string::npos);
   assert(v.can_check);
 
-  // The permission refusal offers NOTHING: every button would fail identically. The text has to
-  // carry the only thing that works — updating from the host.
+  // A permission refusal offers no buttons; the text says how to update from the host.
   v = updates_view(DeployPhase::PermissionBlocked, "Self update not supported", true, "0.0.7",
                    "0.0.6", idle, true);
   assert(!v.has_update && !v.can_check);
   assert(v.status.find("Desktop") != std::string::npos);
   assert(v.status.find("install.sh") != std::string::npos);
 
-  // A deploy verdict outranks a still-set availability flag: it is the more recent truth.
+  // A deploy verdict outranks a still-set availability flag.
   v = updates_view(DeployPhase::Done, "", true, "0.0.7", "0.0.6", idle, true);
   assert(!v.has_update);
 }
 
-// Which verdicts interrupt the user. A toast is a modal-ish interruption over playback, so it is
-// reserved for outcomes that change what they should do.
+// Which deploy verdicts raise a toast: terminal ones only.
 void test_deploy_toast() {
   assert(deploy_toast(DeployPhase::Done).find("restart") != std::string::npos);
   assert(deploy_toast(DeployPhase::PermissionBlocked).find("Desktop Mode") != std::string::npos);
   assert(!deploy_toast(DeployPhase::Failed).empty());
-  // Empty MUST speak. The user pressed a button to ask; a silent answer is indistinguishable from a
-  // dead button, which is exactly how it was reported on-device. (The caller suppresses this while
-  // the Updates panel is open, since the panel says the same thing.)
+  // Empty answers a user's explicit check, so it speaks too.
   assert(deploy_toast(DeployPhase::Empty).find("latest") != std::string::npos);
   // Non-terminal states have no verdict to announce.
   assert(deploy_toast(DeployPhase::Requested).empty());
   assert(deploy_toast(DeployPhase::Idle).empty());
 }
 
-// "Check for updates" answered Empty, then the portal announces a commit published later in the
-// session: the badge and the Update button must come back. A verdict from an earlier deploy used to
-// pin the phase for the rest of the session, so the panel kept saying "latest" over a real update.
+// After a check answered Empty, a commit announced later in the session is offered again.
 void test_new_commit_after_an_empty_check_is_announced() {
   namespace fs = std::filesystem;
   const fs::path dir = deckback_test_tmpdir() / "deckback_updateprompt_recheck";
@@ -323,8 +300,7 @@ void test_new_commit_after_an_empty_check_is_announced() {
   fs::remove_all(dir);
 }
 
-// An Update() that never gets a verdict -- a hung portal transaction, or an updater that is not
-// running -- must not leave the tab on "Updating…" with no buttons until the next launch.
+// A deploy that never gets a verdict times out to Failed.
 void test_a_deploy_that_never_answers_times_out() {
   namespace fs = std::filesystem;
   const fs::path dir = deckback_test_tmpdir() / "deckback_updateprompt_timeout";
@@ -353,7 +329,7 @@ void test_a_deploy_that_never_answers_times_out() {
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     ctl.tick(false);
     assert(ctl.deploy_phase() == DeployPhase::Failed);
-    // ...and a verdict that does arrive still lands: the timeout is not a latch.
+    // A later verdict still lands.
     ctl.check_now();
     ctl.on_deploy_result(UpdateProgress::Done, "", "");
     ctl.tick(false);
@@ -362,8 +338,7 @@ void test_a_deploy_that_never_answers_times_out() {
   fs::remove_all(dir);
 }
 
-// ---- the published-ref probe (U4)
-// ----------------------------------------------------------------
+// ---- published-ref probe ------------------------------------------------------------------------
 
 const std::string kRunning(64, 'a');
 const std::string kNewer(64, 'b');
@@ -379,9 +354,9 @@ void test_ref_check() {
   assert(parse_ref_commit("").empty());
 
   assert(decide_ref_check(kRunning + "\n", kRunning) == RefCheck::UpToDate);
-  // "Differs" is the update: the ref is what flatpak would move to, and a recall is a new commit.
+  // Any different commit is an update (a recall is a new commit too).
   assert(decide_ref_check(kNewer + "\n", kRunning) == RefCheck::UpdateAvailable);
-  // An unreadable body must not read as "latest" — that is exactly the claim it cannot support.
+  // An unreadable body is Unknown, never "latest".
   assert(decide_ref_check("Not Found", kRunning) == RefCheck::Unknown);
   assert(decide_ref_check(kNewer, "") == RefCheck::Unknown);
   assert(decide_ref_check(kNewer, "not-a-commit") == RefCheck::Unknown);
@@ -392,13 +367,13 @@ void test_deploy_progress_status() {
   assert(deploy_progress_status(1, 3, 45) == "Updating\xE2\x80\xA6 step 2 of 3 (45%)");
   assert(deploy_progress_status(0, 1, 7) == "Updating\xE2\x80\xA6 7%");
   assert(deploy_progress_status(0, 0, 7) == "Updating\xE2\x80\xA6 7%");
-  // Out-of-range input is clamped, never "step 4 of 3" or "250%".
+  // Out-of-range input is clamped.
   assert(deploy_progress_status(5, 3, 250) == "Updating\xE2\x80\xA6 step 3 of 3 (100%)");
 }
 
 void test_updates_view_for_the_new_phases() {
   const std::string_view idle = "No update announced yet.";
-  // Checking: a read of the ref, nothing to press until it answers.
+  // Checking: nothing to press until it answers.
   UpdatesView v = updates_view(DeployPhase::Checking, "", false, "", "0.0.9", idle, true);
   assert(v.status.find("Checking") != std::string::npos);
   assert(!v.has_update && !v.can_check && !v.can_quit);
@@ -406,12 +381,12 @@ void test_updates_view_for_the_new_phases() {
   v = updates_view(DeployPhase::Requested, "", false, "", "0.0.9", idle, true,
                    deploy_progress_status(0, 2, 30));
   assert(v.status.find("step 1 of 2") != std::string::npos && !v.can_check);
-  // A staged update offers the one action that moves it forward.
+  // A staged update offers only Quit.
   v = updates_view(DeployPhase::Done, "", false, "", "0.0.9", idle, true);
   assert(v.can_quit && !v.can_check && !v.has_update);
 }
 
-// Records portal deploys instead of making them, so "a check installs nothing" is an assertion.
+// Counts portal deploy requests instead of making them.
 class FakeUpdater final : public Updater {
  public:
   void start() override {}
@@ -429,8 +404,8 @@ OsdMenuConfig closed_osd() {
   return c;
 }
 
-// One controller's world: a closed OSD, the shared state, a counting updater and a "repo" whose ref
-// body the test sets (nullopt = unreachable).
+// A closed OSD, shared state, a counting updater, and a repo ref body the test sets (nullopt =
+// unreachable).
 struct ProbeRig {
   explicit ProbeRig(const char* name) : dir(deckback_test_tmpdir() / name), osd(closed_osd()) {
     std::filesystem::remove_all(dir);
@@ -481,21 +456,19 @@ bool tick_until(UpdatePromptController& ctl, Done done) {
   return false;
 }
 
-// The launch probe announces a release published since the last session, without the portal and
-// without installing anything.
+// The launch probe announces a newer commit without the portal and without installing anything.
 void test_launch_probe_announces_a_newer_commit() {
   ProbeRig rig("deckback_probe_launch");
   rig.serve(kNewer + "\n");
   UpdatePromptController ctl(rig.config());
   assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
-  // Keyed exactly like the portal's announcement, or the ignore/card markers would treat the same
-  // release as two.
+  // Keyed like the portal's announcement, so the markers see one release.
   assert(rig.state.commit() == short_commit(kNewer));
   assert(rig.updater.deploys == 0);
   assert(rig.fetches == 1);
 }
 
-// Up to date at launch: the tab may say "latest", quietly, because the repo was really read.
+// Up to date at launch: the phase becomes Empty ("latest") without a deploy.
 void test_launch_probe_up_to_date_says_latest() {
   ProbeRig rig("deckback_probe_latest");
   rig.serve(kRunning + "\n");
@@ -504,8 +477,7 @@ void test_launch_probe_up_to_date_says_latest() {
   assert(!rig.osd.update_available() && rig.updater.deploys == 0);
 }
 
-// The CDN caches the ref for 10 min, so the portal can know about a release first. A probe that
-// still reads "up to date" must not hide it.
+// A probe reading "up to date" (the CDN caches the ref) never clears a portal announcement.
 void test_probe_never_clears_a_portal_announcement() {
   ProbeRig rig("deckback_probe_noclear");
   rig.serve(kRunning + "\n");
@@ -520,7 +492,7 @@ void test_probe_never_clears_a_portal_announcement() {
   assert(rig.osd.update_available());
 }
 
-// "Check for updates" asks and answers; it no longer installs behind notify mode's consent step.
+// "Check for updates" reads the ref and installs nothing; only confirm_update deploys.
 void test_check_reads_the_ref_and_installs_nothing() {
   ProbeRig rig("deckback_probe_check");
   rig.serve(kRunning + "\n");
@@ -538,7 +510,7 @@ void test_check_reads_the_ref_and_installs_nothing() {
   assert(rig.updater.deploys == 1);
 }
 
-// An unreadable repo falls back to the portal's check-by-deploying, the path verified on hardware.
+// An unreadable repo falls back to the portal's check-by-deploying.
 void test_check_with_an_unreachable_repo_falls_back_to_the_portal() {
   ProbeRig rig("deckback_probe_fallback");
   rig.serve(std::nullopt);
@@ -552,7 +524,7 @@ void test_check_with_an_unreachable_repo_falls_back_to_the_portal() {
   assert(rig.updater.deploys == 1);
 }
 
-// Without a running commit (outside the sandbox) there is nothing to compare: the old behaviour.
+// Without a running commit (outside the sandbox) the check goes straight to the portal.
 void test_no_running_commit_keeps_the_portal_check() {
   ProbeRig rig("deckback_probe_unsandboxed");
   rig.serve(kNewer + "\n");
@@ -581,8 +553,7 @@ void test_a_staged_update_is_not_re_announced() {
   assert(!rig.osd.update_available());
 }
 
-// The portal found nothing to install for the commit the probe announced (a ref ahead of the
-// portal's summary, or an install from another remote): later checks must not keep offering it.
+// A commit the portal found nothing to install for is not offered again by later checks.
 void test_a_commit_the_portal_refused_is_not_re_announced() {
   ProbeRig rig("deckback_probe_refused");
   rig.serve(kNewer + "\n");
@@ -598,9 +569,7 @@ void test_a_commit_the_portal_refused_is_not_re_announced() {
   assert(rig.updater.deploys == 1 && rig.fetches == 2);
 }
 
-// A deploy that failed (a network blip) is retried by "Check for updates", as the Failed text says.
-// The probe finds the same commit it announced before; it must be offered again, not read as "no
-// update announced" forever.
+// After a failed deploy, "Check for updates" offers the same commit again.
 void test_check_after_a_failed_deploy_offers_the_update_again() {
   ProbeRig rig("deckback_probe_retry");
   rig.serve(kNewer + "\n");
@@ -618,8 +587,7 @@ void test_check_after_a_failed_deploy_offers_the_update_again() {
   assert(rig.updater.deploys == 2);
 }
 
-// The refusal mark covers the CDN window only: past it the portal can install the commit, so a
-// check offers it again.
+// The refusal mark expires with the CDN window, after which a check offers the commit again.
 void test_a_refusal_expires_with_the_cdn_window() {
   ProbeRig rig("deckback_probe_refusal_window");
   rig.serve(kNewer + "\n");
@@ -635,8 +603,7 @@ void test_a_refusal_expires_with_the_cdn_window() {
   assert(tick_until(ctl, [&] { return rig.osd.update_available(); }));
 }
 
-// A slow deploy that keeps reporting progress is alive: the no-answer timeout restarts on each
-// report instead of calling it failed mid-download.
+// Each progress report restarts the no-answer timeout; silence still times out.
 void test_progress_keeps_a_slow_deploy_alive() {
   ProbeRig rig("deckback_probe_progress");
   rig.serve(kNewer + "\n");
@@ -651,7 +618,6 @@ void test_progress_keeps_a_slow_deploy_alive() {
     ctl.tick(false);
     assert(ctl.deploy_phase() == DeployPhase::Requested);
   }
-  // ...and silence still times out.
   assert(tick_until(ctl, [&] { return ctl.deploy_phase() == DeployPhase::Failed; }));
 }
 

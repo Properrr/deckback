@@ -1,6 +1,5 @@
-// util.hpp: the shared header-only helpers. split_whitespace feeds DECKBACK_EXTRA_ARGS straight
-// onto the engine command line, and js_string_escape guards every injected script — both fail as
-// silent misbehaviour, not as errors, so they get pinned here.
+// util.hpp helpers: split_whitespace (DECKBACK_EXTRA_ARGS onto the engine command line) and
+// js_string_escape (every injected script).
 
 #include "util.hpp"
 

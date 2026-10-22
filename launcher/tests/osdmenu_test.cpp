@@ -1,5 +1,5 @@
-// Pure helpers of the OSD controller (osdmenu.cpp): the Updates status line, the action-button set,
-// and the verdict parser. The CDP/injection surface is exercised on-Deck (tests/deck/test_osd.py).
+// The OSD controller: status line, update buttons, verdict parsing, and capture/paint reconciling
+// against a fake CDP server.
 
 #include "osdmenu.hpp"
 
@@ -15,14 +15,12 @@ using namespace deckback;
 void test_status_line() {
   assert(osd_status_line("0.0.4", "", false) == "Update status is not available.");
   assert(osd_status_line("0.0.4", "0.0.5", true) == "v0.0.5 is available. You have v0.0.4.");
-  // An update is known but its version hasn't arrived yet (changelog fetch pending/failed/no-curl):
-  // never claim "latest" while the Update-now buttons are showing.
+  // An update is known but its version is not.
   assert(osd_status_line("0.0.4", "", true) == "A newer version is available. You have v0.0.4.");
 }
 
 void test_button_is_redrawn_when_a_same_url_reload_wipes_it() {
-  // Navigator only announces a transition into the app URL. A location.reload() keeps that state,
-  // so the OSD has to notice the missing button itself instead of trusting button_shown_.
+  // A same-URL reload is not announced by the navigator, so tick() probes for the button.
   testing::FakeServer srv;
   OsdMenuConfig cfg;
   cfg.cdp_port = srv.port();
@@ -42,7 +40,7 @@ void test_button_is_redrawn_when_a_same_url_reload_wipes_it() {
 }
 
 void test_update_buttons() {
-  // Self-update off: nothing to offer, and an enabled control that cannot work is worse than none.
+  // Self-update off: no buttons.
   assert(osd_update_buttons(false, false, false).empty());
 
   const auto b = osd_update_buttons(true, false, false);
@@ -50,20 +48,17 @@ void test_update_buttons() {
   assert(b[0].first == "update.confirm");
   assert(b[1].first == "update.ignore");
 
-  // No announced update but a live updater: the manual check. Without it the tab is inert for the
-  // first ~30 min of every session, because UpdateMonitor only announces on its own poll — which is
-  // exactly what a user read as "it says there are no updates" right after restarting.
+  // No announced update but a live updater: the manual check.
   const auto c = osd_update_buttons(false, true, false);
   assert(c.size() == 1);
   assert(c[0].first == "update.check");
 
-  // An announced update wins: offering "check" alongside "update now" would be noise.
+  // An announced update replaces the check.
   const auto d = osd_update_buttons(true, true, false);
   assert(d.size() == 2);
   assert(d[0].first == "update.confirm");
 
-  // A staged update: leaving is the only thing that moves it forward, and it outranks the rest
-  // (the portal re-announces the staged commit until the restart, so has_update may still be set).
+  // A staged update offers only Quit, even if has_update is still set.
   const auto e = osd_update_buttons(true, true, true);
   assert(e.size() == 1);
   assert(e[0].first == "update.quit");
@@ -90,15 +85,11 @@ void test_parse_verdict() {
   assert(parse_verdict("action:").action.empty());
 }
 
-// capture <=> paint. A fresh controller's last_reconcile_ is the clock epoch, so the first tick()
-// always runs the reconcile (the 750 ms throttle only rate-limits *repeated* checks) — one tick per
-// controller is enough to assert one outcome. (OsdMenuController holds a mutex/atomic, so it can't
-// be returned by value; each test builds its own in place.)
+// Capture follows paint. A fresh controller's first tick() always reconciles (the 750 ms throttle
+// only limits repeats), so one tick per controller asserts one outcome.
 
 void test_reconcile_releases_capture_when_the_page_reloaded_the_menu_away() {
-  // The bug: press Menu, the page reloads (suspend/resume, or a same-URL reload the navigator's
-  // not-app->app transition never sees), the OSD paint is gone, but the launcher still captures
-  // input — so keys pass through to Leanback behind an invisible/absent menu.
+  // A reload wiped the menu: capture is released.
   testing::FakeServer srv;
   OsdMenuConfig cfg;
   cfg.cdp_port = srv.port();
@@ -108,7 +99,7 @@ void test_reconcile_releases_capture_when_the_page_reloaded_the_menu_away() {
   assert(osd.open());
   srv.set_osd_state("gone");  // JS context wiped by a full reload
   osd.tick(false);
-  assert(!osd.open());  // capture released: input can never be trapped behind an absent menu
+  assert(!osd.open());
 }
 
 void test_reconcile_keeps_capture_while_painted() {
@@ -124,8 +115,7 @@ void test_reconcile_keeps_capture_while_painted() {
 }
 
 void test_reconcile_ignores_a_detached_node() {
-  // A Leanback body swap detaches the node momentarily; the shared keep-alive observer re-appends
-  // it. The launcher must NOT tear the menu down for that, or every swap would drop the menu.
+  // A momentarily detached node (re-appended by the keep-alive observer) keeps the menu open.
   testing::FakeServer srv;
   OsdMenuConfig cfg;
   cfg.cdp_port = srv.port();
@@ -137,11 +127,7 @@ void test_reconcile_ignores_a_detached_node() {
   assert(osd.open());
 }
 
-// Mid-video is exactly when Exit and the settings are wanted, and Menu has nothing else to do on
-// the watch screen (`show_controls` is stripped from the keymap and resolves to no DOM key, so Menu
-// was simply dead there). So the menu must survive a video appearing underneath it. Capture is
-// modal, so that can only come from autoplay/up-next, never from the user driving Leanback behind
-// the menu.
+// The menu stays open when a video starts underneath it (autoplay/up-next).
 void test_menu_stays_open_over_playback() {
   testing::FakeServer srv;
   OsdMenuConfig cfg;
@@ -151,11 +137,10 @@ void test_menu_stays_open_over_playback() {
   assert(osd.open_menu());
   srv.set_osd_state("tab=settings;idx=-1");  // still painted
   osd.tick(true);                            // a video is up underneath
-  assert(osd.open());                        // NOT torn down
+  assert(osd.open());
 }
 
-// ...but the on-screen Settings button stays hidden on the watch screen, so it never sits over the
-// video. Only the physical Menu button reaches the menu there.
+// The on-screen Settings button is not drawn over playback.
 void test_settings_button_is_not_drawn_over_playback() {
   testing::FakeServer srv;
   OsdMenuConfig cfg;
@@ -168,8 +153,7 @@ void test_settings_button_is_not_drawn_over_playback() {
            request.find("osd-button-state") != std::string::npos);
 }
 
-// A on the Exit row must NOT act. It answers "hold" so the input layer can arm its deadline; only a
-// completed hold fires. Anything that made this an Action would exit on a single stray press.
+// A on the Exit row answers "hold" (arm the deadline), never an action.
 void test_hold_verdict_is_not_an_action() {
   const OsdVerdict h = parse_verdict("hold");
   assert(h.kind == OsdVerdict::Kind::Hold);
@@ -178,8 +162,7 @@ void test_hold_verdict_is_not_an_action() {
   assert(parse_verdict("hold").kind != OsdVerdict::Kind::Close);
 }
 
-// The row is inert unless someone can actually act on it, so a build with no exit handler cannot
-// paint an Exit control that does nothing when held.
+// Without an exit handler the Exit row is painted disabled.
 void test_exit_row_is_disabled_without_a_handler() {
   testing::FakeServer srv;
   OsdMenuConfig cfg;
@@ -195,8 +178,7 @@ void test_exit_row_is_disabled_without_a_handler() {
   assert(saw_disabled);
 }
 
-// The hold duration the launcher counts and the one the fill animates are the SAME number, or the
-// bar finishes at a different moment than the exit fires.
+// The launcher's hold duration is passed to the page's fill animation.
 void test_hold_ms_is_shared_with_the_page() {
   testing::FakeServer srv;
   OsdMenuConfig cfg;
@@ -226,9 +208,7 @@ void test_gone_command_releases_capture() {
   assert(!osd.open());
 }
 
-// ...but a command nobody answered proves nothing about the menu. Treating it as "gone" released
-// capture while the menu was still painted, so the next presses drove Leanback behind it. Capture
-// holds, and the reconcile tick asks the page instead.
+// An unanswered command keeps capture; the reconcile tick asks the page instead.
 void test_unanswered_command_keeps_capture() {
   testing::FakeServer srv;
   OsdMenuConfig cfg;

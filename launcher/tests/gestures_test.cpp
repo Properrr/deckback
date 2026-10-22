@@ -1,13 +1,6 @@
-// L0 coverage of the touch gesture router's pure half: the gesture -> action mapping, and the
-// decode of what the page hands back.
-//
-// The page script's recognition is covered by tests/js/touch_gestures.test.js. What is covered HERE
-// is everything between that queue and a keypress -- the part that turns "the user flicked" into an
-// actual trusted key, and the part that must not turn a transport failure into one.
-//
-// The decode's own trap: an empty queue and an unreadable answer are both "no gestures to act on",
-// and only one of them means the page is fine. `ok` separates them, because a router that treats a
-// dead engine as a quiet user retries nothing and reports nothing.
+// Touch gesture router: the gesture -> action mapping and the decode of the page's queue. Page-side
+// recognition is covered by tests/js/touch_gestures.test.js. `ok` separates an empty queue from an
+// unreadable answer.
 #include "gestures.hpp"
 
 #include <atomic>
@@ -31,7 +24,7 @@ void test_arrow_gestures_map_to_arrow_keys() {
 }
 
 void test_back_and_tap_have_no_other_source() {
-  // The left-edge swipe is the ONLY touch Back path (input-ux §7), and a tap is the A button.
+  // The left-edge swipe is the only touch Back path, and a tap is the A button.
   assert(gesture_key("back", "") == "Escape");
   assert(gesture_key("tap", "center") == "Enter");
   assert(gesture_key("tap", "left") == "Enter");
@@ -57,20 +50,15 @@ void test_seek_sign() {
 }
 
 void test_hold_rate_comes_from_the_zone() {
-  // Left slows down, right and centre speed up. Both are RATES: making the left a rewind would have
-  // meant stepped seeks on a timer, because Chromium has no negative playbackRate.
+  // Left slows down, right and centre speed up (Chromium has no negative playbackRate).
   assert(hold_rate_for_zone("left", 2.0, 0.5) == 0.5);
   assert(hold_rate_for_zone("right", 2.0, 0.5) == 2.0);
   assert(hold_rate_for_zone("center", 2.0, 0.5) == 2.0);
-  // A script older than this binary sends no zone at all; it must speed up, not slow down.
+  // No zone speeds up.
   assert(hold_rate_for_zone("", 2.0, 0.5) == 2.0);
 }
 
-// The indicator shows the RUNNING TOTAL of a burst while each tap seeks a constant interval. An
-// earlier version capped the multiplier at 6 "so a long run cannot cross a whole video" -- but the
-// seek never used the multiplier at all, so the cap protected nothing and only made the indicator
-// understate the real position from the seventh tap onward. A comment describing behaviour the code
-// does not have is worse than no comment.
+// The indicator shows the uncapped running total of a burst of constant-interval seeks.
 void test_the_indicator_tracks_the_whole_burst() {
   const int skip = 10;
   for (int n = 1; n <= 9; ++n)
@@ -79,11 +67,10 @@ void test_the_indicator_tracks_the_whole_burst() {
 }
 
 void test_hud_text_reads_at_a_glance() {
-  // The ACCUMULATED total, so the user reads where they are going, not the increment.
   assert(seek_hud_text(30) == "+30 s");
   assert(seek_hud_text(-10) == "-10 s");
   assert(seek_hud_text(0).empty());
-  // No trailing zeros at 34px.
+  // No trailing zeros.
   assert(hold_hud_text(2.0) == "2x");
   assert(hold_hud_text(0.5) == "0.5x");
   assert(hold_hud_text(0.25) == "0.25x");
@@ -93,7 +80,7 @@ void test_seek_accumulation_is_decoded() {
   GestureBatch b = parse_drain(R"({"configured":true,"q":[{"g":"seek","dir":1,"n":3}]})");
   assert(b.ok && b.gestures.size() == 1);
   assert(b.gestures[0].n == 3);
-  // A script that sends no `n` predates accumulation: one step, never zero steps.
+  // A missing or zero `n` is one step.
   GestureBatch b2 = parse_drain(R"({"configured":true,"q":[{"g":"seek","dir":1}]})");
   assert(b2.gestures[0].n == 1);
   GestureBatch b3 = parse_drain(R"({"configured":true,"q":[{"g":"seek","dir":1,"n":0}]})");
@@ -123,7 +110,7 @@ void test_parse_drain_decodes_a_batch() {
   assert(b.gestures.size() == 4);
   assert(b.gestures[0].kind == "arrow" && b.gestures[0].dir == "up");
   assert(b.gestures[1].kind == "back");
-  // `dir` is a string for arrows and a number for seeks; both must survive the same field.
+  // `dir` is a string for arrows and a number for seeks.
   assert(b.gestures[2].kind == "seek" && b.gestures[2].seek_dir == -1);
   assert(b.gestures[3].kind == "hold" && b.gestures[3].on);
 }
@@ -136,9 +123,7 @@ void test_an_empty_queue_is_a_successful_read() {
 }
 
 void test_no_router_in_the_page_is_not_an_empty_queue() {
-  // The script returns "" when window.__deckbackGestures is absent -- i.e. between a reload and the
-  // document-start injection. Reporting ok would let the router conclude the page is healthy and
-  // skip reconfiguring it.
+  // The script returns "" when window.__deckbackGestures is absent (e.g. mid-reload): not ok.
   GestureBatch b = parse_drain("");
   assert(!b.ok);
   assert(b.gestures.empty());
@@ -148,8 +133,7 @@ void test_unusable_json_is_not_ok() {
   for (const char* bad : {"{ this is not json", "[]", "null", "\"a string\"", "{\"q\":5}"}) {
     GestureBatch b = parse_drain(bad);
     if (std::string(bad) == "{\"q\":5}") {
-      // A well-formed object with a junk queue IS a successful read of a page that had nothing to
-      // say -- the object parsed, so the router is alive.
+      // A well-formed object with a junk queue is a successful, empty read.
       assert(b.ok);
       assert(b.gestures.empty());
       continue;
@@ -159,8 +143,7 @@ void test_unusable_json_is_not_ok() {
 }
 
 void test_configured_defaults_false_so_a_reload_is_reconfigured() {
-  // A fresh document-start copy reports configured:false and gets the user's thresholds pushed. If
-  // a missing field defaulted to TRUE, every reload would silently run on built-in defaults.
+  // A missing `configured` reads false, so a fresh page copy gets the user's thresholds.
   GestureBatch b = parse_drain(R"({"v":1,"q":[]})");
   assert(b.ok);
   assert(!b.configured);
@@ -179,8 +162,7 @@ void test_malformed_entries_are_skipped_not_guessed() {
 }
 
 void test_every_emitted_gesture_kind_has_an_action() {
-  // The page script can emit exactly these. If one ever maps to nothing, a real finger movement
-  // would silently do nothing on the Deck -- the failure this file exists to prevent.
+  // Every gesture the page script can emit maps to a key, seek, or hold.
   struct Case {
     const char* kind;
     const char* dir;
@@ -221,8 +203,7 @@ int keys_sent_for(const char* batch, bool modal) {
   return keys;
 }
 
-// The OSD has no pointer path, so a tap while it is open used to reach Leanback as a trusted Enter
-// and start the video behind the menu. A modal surface owns input; touch must not get around it.
+// While a modal surface is up, gestures send no keys.
 void test_a_modal_surface_swallows_touch() {
   const char* tap = R"({"configured":true,"enabled":true,"q":[{"g":"tap"}]})";
   assert(keys_sent_for(tap, false) > 0);  // control: the same batch does press Enter

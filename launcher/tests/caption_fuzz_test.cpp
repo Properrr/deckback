@@ -1,10 +1,7 @@
-// Combinatorial / fuzz coverage of the caption settings state machine (caption_settings.cpp) and
-// its persistence (config_store.cpp), including simulated app RESTARTS — so every settings/state
-// scenario is exercised off-device before a hardware test.
-//
-// A "restart" = persist edits through the ConfigStore (user.json), then rebuild a fresh Config from
-// the SAME shipped defaults + the reloaded overlay, and construct a new CaptionSettings from it —
-// exactly what main() does on the next launch.
+// Combinatorial / fuzz coverage of the caption settings state machine and its persistence,
+// including simulated restarts. A "restart" persists edits through the ConfigStore (user.json),
+// rebuilds a Config from the same defaults plus the reloaded overlay, and constructs a new
+// CaptionSettings from it, as main() does on launch.
 #include <algorithm>
 #include <cassert>
 #include <cstdint>

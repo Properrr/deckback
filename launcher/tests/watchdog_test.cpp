@@ -62,9 +62,8 @@ void test_crash_loop_gives_up() {
   assert(wd.run() == 1);
 }
 
-// A launcher killed outright (OOM, kill -9) runs no shutdown path, so the engine must die with it
-// rather than linger holding the debugging port and the profile. This process becomes a subreaper,
-// so the orphaned engine is re-parented here and its exit is observable with waitpid().
+// The engine dies with a SIGKILLed launcher. This process becomes a subreaper, so the orphaned
+// engine is re-parented here and its exit is observable with waitpid().
 void test_engine_dies_with_a_killed_launcher() {
   const fs::path pid_file = g_dir / "engine.pid";
   std::string bin = make_script("engine.sh", "echo $$ > " + pid_file.string() + "; exec sleep 30");
@@ -94,9 +93,7 @@ void test_engine_dies_with_a_killed_launcher() {
   assert(reaped);
 }
 
-// The engine must inherit only stdio: a leaked log/socket/pipe fd pins rotated logs and hands our
-// connections to a process that will never close them. The probe fd is opened WITHOUT O_CLOEXEC,
-// like the std::ofstream log file.
+// The engine inherits only stdio, even an fd opened without O_CLOEXEC (like the log file).
 void test_engine_inherits_only_stdio() {
   const fs::path probe = g_dir / "probe.txt";
   std::ofstream(probe) << "x";

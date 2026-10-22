@@ -1,7 +1,4 @@
-// Unit tests for the JSON parser that replaced config.cpp's byte-scanning extractor.
-//
-// Every "regression" case below is a defect the extractor actually had, verified against the real
-// Config::load before this parser existed. They are not hypothetical.
+// The JSON parser used for app.json and CDP replies.
 #include "json.hpp"
 
 #include <cassert>
@@ -25,7 +22,7 @@ Value must_parse(std::string_view text) {
 void must_fail(std::string_view text) {
   ParseResult r = parse(text);
   assert(!r.ok());
-  assert(!r.error.message.empty());  // a failure that cannot say why is barely a failure
+  assert(!r.error.message.empty());
 }
 
 // ---- scalars ------------------------------------------------------------------------------------
@@ -40,25 +37,22 @@ void test_scalars() {
   assert(*must_parse("\"hi\"").as_string() == "hi");
 }
 
-// The extractor's read_bool did `s.compare(p, 4, "true")`, so any value STARTING with "true"
-// matched. `truthy` became true.
+// Literals are matched whole, not by prefix.
 void test_regression_bool_is_not_prefix_matched() {
   must_fail("truthy");
   must_fail("{\"a\": truthy}");
   must_fail("falsey");
-  // A quoted "true" is a string, not a bool -- and now the caller can tell.
+  // A quoted "true" is a string, not a bool.
   Value v = must_parse("{\"a\": \"true\"}");
   assert(v.find("a")->as_bool() == std::nullopt);
   assert(*v.find("a")->as_string() == "true");
 }
 
-// The extractor ran std::stol over the REST OF THE FILE, which parses a leading integer and ignores
-// the rest: 5e6 became 5 (log_max_bytes off by a factor of a million) and 1.5e3 became 1.
+// Exponents parse in full; malformed numbers are errors.
 void test_regression_exponent_numbers() {
   assert(must_parse("5e6").as_number() == 5000000.0);
   assert(must_parse("1.5e3").as_number() == 1500.0);
   assert(must_parse("-2E2").as_number() == -200.0);
-  // Malformed numbers are now errors rather than a silently truncated prefix.
   must_fail("5e");
   must_fail("01");  // JSON forbids leading zeros
   must_fail(".5");
@@ -66,9 +60,7 @@ void test_regression_exponent_numbers() {
   must_fail("+1");
 }
 
-// The extractor dropped the escape MARKER and kept the next raw byte: "a\nb" -> "anb",
-// "Can’t" -> "Cantu2019t". error_title/error_hint are the designated R1 config-push surface,
-// so this corrupted exactly the text meant to be hot-fixable.
+// Every JSON string escape decodes.
 void test_regression_string_escapes() {
   assert(*must_parse(R"("Line one.\nLine two.")").as_string() == "Line one.\nLine two.");
   assert(*must_parse(R"("a\tb")").as_string() == "a\tb");
@@ -92,9 +84,7 @@ void test_unicode_escapes() {
 
 // ---- arrays -------------------------------------------------------------------------------------
 
-// THE headline regression. read_string_array ended the array at the first `]` BYTE, which in the
-// shipped app.json fell INSIDE the first string ("[aria-label*='voice' i]"), yielding one truncated
-// selector instead of five.
+// A `]` or `[` inside a string does not end or open an array.
 void test_regression_bracket_inside_a_string_does_not_end_the_array() {
   Value v = must_parse(R"({"sel": ["[aria-label*='voice' i]", "[class*='mic'][role='button']",
                                    ".plain", "a]b", "c[d"]})");
@@ -119,17 +109,14 @@ void test_arrays() {
 
 // ---- objects and paths --------------------------------------------------------------------------
 
-// The extractor searched the whole file for "\"key\"", so a key nested anywhere shadowed a
-// top-level key of the same name. `{"keymap":{"url":"..."},"url":"..."}` resolved to the NESTED
-// url, and the launcher would navigate there.
+// A nested key does not shadow a top-level key of the same name.
 void test_regression_nested_key_does_not_shadow_top_level() {
   Value v = must_parse(R"({"keymap":{"url":"https://SHADOWED/"},"url":"https://real/"})");
   assert(*v.find("url")->as_string() == "https://real/");
   assert(*v.find("keymap.url")->as_string() == "https://SHADOWED/");
 }
 
-// The extractor's brace matcher ignored strings, so a `{` or `}` inside a value broke it: a `}`
-// truncated the object, a `{` made it return an EMPTY keymap -- every binding silently gone.
+// Braces inside strings do not affect object structure.
 void test_regression_braces_inside_strings() {
   Value v = must_parse(R"({"keymap":{"a":"}","b":"{"},"url":"https://real/"})");
   assert(*v.find("keymap.a")->as_string() == "}");
@@ -149,7 +136,7 @@ void test_paths() {
   assert(v.find("") == nullptr);
 }
 
-// keymap order drives the startup log and the first-run card, so it must survive parsing.
+// Object key order is preserved (keymap order drives the controls card).
 void test_object_order_is_preserved() {
   Value v = must_parse(R"({"z":1,"a":2,"m":3})");
   const auto* o = v.as_object();
@@ -157,7 +144,7 @@ void test_object_order_is_preserved() {
   assert((*o)[0].first == "z" && (*o)[1].first == "a" && (*o)[2].first == "m");
 }
 
-// The extractor kept the FIRST duplicate; every mainstream parser keeps the last.
+// Duplicate keys: the last one wins, as in mainstream parsers.
 void test_duplicate_keys_last_wins() {
   Value v = must_parse(R"({"url":"https://a","url":"https://b"})");
   assert(*v.find("url")->as_string() == "https://b");
@@ -176,10 +163,7 @@ void test_leaf_paths() {
 
 // ---- failure is representable -------------------------------------------------------------------
 
-// The whole point. Config::load's ONLY nullopt path used to be "cannot read the file", so a
-// truncated or corrupt app.json parsed "successfully" into all-defaults -- including
-// remote_debugging_port 0, i.e. no CDP, i.e. no input at all. app.json is hot-swappable, so a
-// half-written file is a normal event on that path.
+// Truncated, corrupt, or non-JSON input is a parse error.
 void test_malformed_input_is_an_error_not_silence() {
   must_fail("");
   must_fail("   ");
@@ -194,8 +178,7 @@ void test_malformed_input_is_an_error_not_silence() {
   must_fail(std::string("\x01\x02\x03", 3));
   // A truncated write: the first half of a real config.
   must_fail(R"({"url":"https://www.youtube.com/tv","remote_debugging_p)");
-  // Comments are not JSON. The old extractor would happily read a "commented-out" line as live
-  // config, because it never tokenized at all.
+  // Comments are not JSON.
   must_fail("{\"a\":1} // trailing comment");
   must_fail("{/* c */\"a\":1}");
 }
@@ -220,8 +203,7 @@ void test_control_characters_rejected_in_strings() {
 
 }  // namespace
 
-// dump() and the CDP client share one escaper (util.hpp js_string_escape). Every control byte has
-// to come back out of parse() unchanged, which parse() can only do if dump() escaped it.
+// dump() escapes every control byte, so parse() round-trips it.
 void test_dump_escapes_control_characters() {
   const std::string raw("q\"\\\b\f\n\r\t\x01\x1f\0end", 14);
   const std::string text = dump(Value(raw), -1);

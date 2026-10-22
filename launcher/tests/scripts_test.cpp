@@ -1,7 +1,5 @@
-// The page-script registry (scripts.cpp). Pure surface: ScriptParams JSON/escaping, render()'s
-// (body)(params) shape against the embedded defaults, and runtime override from a scripts dir. The
-// CDP dispatch (invoke/install_sticky) is one line over DevToolsClient and is exercised through the
-// feature tests (overlay_test, navigator_test); here we prove the string plumbing.
+// The page-script registry: ScriptParams JSON/escaping, render()'s (body)(params) shape, the
+// embedded scripts' contents, and runtime overrides from a scripts dir.
 
 #include "scripts.hpp"
 
@@ -31,8 +29,7 @@ void test_params_numbers_and_bools() {
 }
 
 void test_params_strings_are_escaped_once() {
-  // Quotes and backslashes must survive into a valid JS/JSON string — the escaping bug this
-  // centralises used to be re-derived at every call site.
+  // Quotes and backslashes are escaped into a valid JS/JSON string.
   assert(ScriptParams().set("text", std::string_view("say \"hi\"")).json() ==
          R"({"text":"say \"hi\""})");
   assert(ScriptParams().set("p", std::string_view("a\\b")).json() == R"({"p":"a\\b"})");
@@ -66,8 +63,7 @@ void test_render_unknown_is_empty() {
 }
 
 void test_embedded_defaults_present() {
-  // The whole config/scripts/ dir is embedded; a couple of known members must be there, with their
-  // real content (sticky scripts are self-invoking, not the (function(p) shape).
+  // config/scripts/ is embedded with its real content.
   assert(has(std::string(ScriptLibrary::instance().body("av1_steering")), "MediaSource"));
   assert(
       has(std::string(ScriptLibrary::instance().body("no_pointer")), "stopImmediatePropagation"));
@@ -87,17 +83,15 @@ void test_embedded_defaults_present() {
 }
 
 void test_overlays_use_a_csp_safe_style_path() {
-  // youtube.com/tv's CSP style-src has no 'unsafe-inline', so setAttribute('style',…) and <style>
-  // tags are dropped and the overlay renders unstyled (why dot/card/toast failed on-Deck,
-  // self-update.md). Only CSSOM and adoptedStyleSheets are exempt; guard against a regression.
+  // The page's CSP drops inline style attributes and <style> tags; only CSSOM and
+  // adoptedStyleSheets work.
   for (const char* name : {"toast", "osd_button"}) {
     const std::string b(ScriptLibrary::instance().body(name));
     assert(!has(b, "setAttribute('style'"));
     assert(!has(b, "setAttribute(\"style\""));
     assert(has(b, ".setProperty("));
   }
-  // A modal overlay's descendant rules need a stylesheet, so the blocked <style> tag becomes an
-  // adoptedStyleSheets sheet; the container keeps a CSSOM fallback so it always paints.
+  // The OSD's descendant rules use adoptedStyleSheets, with a CSSOM fallback on the container.
   {
     const std::string b(ScriptLibrary::instance().body("osd"));
     assert(!has(b, "<style>"));
@@ -107,36 +101,29 @@ void test_overlays_use_a_csp_safe_style_path() {
 }
 
 void test_osd_exit_is_a_global_hold_not_a_focusable_control() {
-  // Exit must NOT be focusable. In the Keys sub-tab moveOrScroll routes ↑/↓ to the key list while
-  // `subsel` is focused, so focus can never leave it — a focusable Exit chip is simply unreachable
-  // there (found on-Deck). It is a global hold instead: works from any tab at any focus.
+  // Exit is a global hold from any tab and focus, not a focusable control (the Keys sub-tab never
+  // lets focus leave its list).
   const std::string b(ScriptLibrary::instance().body("osd"));
   assert(has(b, "'exit'"));
   assert(has(b, "hold_start"));
   assert(has(b, "hold_cancel"));
   assert(has(b, "return 'hold'"));
-  // The regression guard: putting the chip back into the focus ring reintroduces the Keys trap.
   assert(!has(b, "focusables.push(S.exitBar)"));
 }
 
 void test_osd_updates_tab_scrolls_the_release_notes() {
-  // The notes box is taller than its 44vh cap for every real release, and its two action buttons
-  // sit in one horizontal row. Before this, ↑/↓ hopped between those buttons and NOTHING moved the
-  // notes: the box drew a scroll thumb the user had no way to drag, so a full changelog looked like
-  // a truncated one. ↑/↓ scroll there and ←/→ move between the buttons instead.
+  // On the Updates tab ↑/↓ scroll the release notes and ←/→ move between the buttons.
   const std::string b(ScriptLibrary::instance().body("osd"));
   assert(has(b, "S.notesBox()"));
   assert(has(b, "if (S.notesBox()) return S.scroll(dir);"));
   assert(has(b, "if (S.tab === 'updates') return S.move(dir);"));
-  // ...and the hint bar has to say so, or a rebound key is just a different kind of invisible.
+  // The hint bar says so.
   assert(has(b, "NAV_HINT_NOTES"));
   assert(has(b, "Scroll notes"));
 }
 
 void test_toast_wraps_instead_of_clipping() {
-  // `white-space: pre` never wraps, so a toast wider than the panel was clipped at BOTH edges (it
-  // is centred with translateX(-50%)) — silently, with no ellipsis. Observed on-Deck with the
-  // keep-awake warning. pre-wrap + a max-width is what keeps a long or hot-swapped string readable.
+  // pre-wrap plus a max-width keeps a long, centred toast on screen.
   const std::string b(ScriptLibrary::instance().body("toast"));
   assert(has(b, "'pre-wrap'"));
   assert(!has(b, "'white-space', 'pre'"));
@@ -144,10 +131,8 @@ void test_toast_wraps_instead_of_clipping() {
 }
 
 void test_overlays_self_heal_across_body_swaps() {
-  // A Leanback in-page body swap can detach a documentElement child without firing on_app_loaded,
-  // so the keep-alive observer re-appends the dot/card; the *_hide scripts must drop from the
-  // registry first, or a deliberate hide is fought. A vanished-but-still-modal card was the input
-  // trap.
+  // A keep-alive observer re-appends overlays a body swap detaches; the *_hide scripts drop out of
+  // its registry first so a deliberate hide sticks.
   for (const char* name : {"osd", "osd_button"}) {
     const std::string b(ScriptLibrary::instance().body(name));
     assert(has(b, "__dbKeepAlive"));
@@ -167,7 +152,7 @@ void test_runtime_override_shadows_the_default() {
     std::ofstream f(dir / "skip.js");
     f << "(function(p){return 'OVERRIDDEN:'+p.delta;})";
   }
-  // A blank file must be IGNORED (a truncation must not silently disable the behaviour).
+  // A blank override file is ignored.
   {
     std::ofstream f(dir / "toast.js");
     f << "   \n\t ";
@@ -198,8 +183,7 @@ DECKBACK_TEST_MAIN(scripts) {
   test_osd_exit_is_a_global_hold_not_a_focusable_control();
   test_osd_updates_tab_scrolls_the_release_notes();
   test_overlays_self_heal_across_body_swaps();
-  // Keep this LAST: it mutates the process-wide singleton (a fresh process per test binary, so this
-  // is safe, but ordering it last keeps the earlier assertions against pristine embedded defaults).
+  // Last: it mutates the process-wide singleton.
   test_runtime_override_shadows_the_default();
   std::puts("scripts_test: all passed");
   return 0;

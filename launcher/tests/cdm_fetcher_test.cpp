@@ -1,14 +1,5 @@
-// L0: CdmFetcher without the network. The path rule is pure; the install/verify half writes
-// stand-in bytes under the test's private temp dir. No CDM is ever involved.
-//
-// `usable_cdm_path` mirrors the rule enforced by the engine patch
-// (patches/0001-...-widevine-cdm-registration.patch): `--widevine-cdm-path` must be absolute and
-// free of parent references. The engine is authoritative; this check exists so a bad path is
-// refused where the profile dir that produced it is still in scope.
-//
-// The interesting cases are the near-misses. ".." is only traversal when it is a whole path
-// component: `/a/..b` and `/a/b..` are ordinary directory names, and rejecting them would refuse a
-// perfectly good CDM for no reason.
+// CdmFetcher without the network: install/verify with stand-in bytes, and `usable_cdm_path`, which
+// mirrors the engine patch's rule (absolute, no ".." path component).
 #include "cdm_fetcher.hpp"
 
 #include <cassert>
@@ -26,8 +17,7 @@ namespace {
 
 constexpr const char* kAbcSha = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
-// A truncated CDM used to read as installed forever: ensure_installed only asked whether the file
-// existed. Now a pinned CDM is hashed on every launch, and an install never leaves a partial file.
+// A pinned CDM is hashed on every check, and an install never leaves a partial file.
 void test_install_and_reverify() {
   const std::string profile = (deckback_test_tmpdir() / "cdm-profile").string();
   const std::string dest = CdmFetcher::installed_path(profile);
@@ -46,11 +36,10 @@ void test_install_and_reverify() {
   assert(!CdmFetcher::install(dest, "zzz", kAbcSha));
   assert(deckback::read_file(dest) == "abc");
 
-  // Truncated, as an interrupted pre-atomic write left it: detected, not trusted.
+  // A truncated file is a mismatch.
   assert(deckback::write_file(dest, "ab"));
   assert(CdmFetcher::check_installed(dest, kAbcSha) == Installed::Mismatch);
-  // With nowhere to fetch the pinned one from, the installed file is still used (a pin that moved
-  // must not strand a CDM that worked); with no file at all, there is no CDM.
+  // With no fetch URL, a mismatched file is still used; with no file, there is no CDM.
   assert(CdmFetcher::ensure_installed(profile, {"", kAbcSha}));
   std::filesystem::remove(dest);
   assert(!CdmFetcher::ensure_installed(profile, {"", kAbcSha}));
@@ -72,8 +61,7 @@ DECKBACK_TEST_MAIN(cdm_fetcher) {
   assert(CdmFetcher::usable_cdm_path("/a/libwidevinecdm.so"));
   assert(CdmFetcher::usable_cdm_path("/"));
 
-  // Relative: the engine refuses these, so we must notice first. A relative DECKBACK_PROFILE is the
-  // way a user gets here.
+  // Relative (e.g. from a relative DECKBACK_PROFILE).
   assert(!CdmFetcher::usable_cdm_path(""));
   assert(!CdmFetcher::usable_cdm_path("relative/libwidevinecdm.so"));
   assert(!CdmFetcher::usable_cdm_path("./libwidevinecdm.so"));
@@ -85,7 +73,7 @@ DECKBACK_TEST_MAIN(cdm_fetcher) {
   assert(!CdmFetcher::usable_cdm_path("/a/.."));
   assert(!CdmFetcher::usable_cdm_path("/../a"));
 
-  // ...but NOT as a substring. These are legal directory names and must be accepted.
+  // A ".." substring inside a name is fine.
   assert(CdmFetcher::usable_cdm_path("/a/..b/c"));
   assert(CdmFetcher::usable_cdm_path("/a/b../c"));
   assert(CdmFetcher::usable_cdm_path("/a/x..y/c"));

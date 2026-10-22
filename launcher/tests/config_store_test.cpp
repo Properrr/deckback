@@ -116,10 +116,8 @@ void test_remove_resets_to_default() {
   fs::remove(path);
 }
 
-// `disable_touch` is overlayable so `just touch-probe` can be run against an INSTALLED build: the
-// flag lives in the read-only /app/share/deckback/app.json, and the probe refuses to run with it
-// on.
-// Without this key, re-asking the P12.4 question costs a full bundle build every time.
+// The touch keys (disable_touch, touch_gestures, touch_hide_cursor) are overlayable, so an
+// installed build can be reconfigured without rebuilding.
 void test_disable_touch_is_overlayable_for_the_touch_probe() {
   const std::string path = tmp_path("deckback_user_test_5.json");
   fs::remove(path);
@@ -131,11 +129,11 @@ void test_disable_touch_is_overlayable_for_the_touch_probe() {
   ConfigStore s2(path);
   s2.load();
   Config c;
-  assert(c.disable_touch == true);  // the shipped default: touch inert
+  assert(c.disable_touch == true);  // the shipped default
   s2.apply(c);
   assert(c.disable_touch == false);
 
-  // And it must survive the trip through a hand-written file, which is how the probe sets it.
+  // A hand-written file works too.
   write_file(path, R"({"disable_touch": false})");
   ConfigStore s3(path);
   s3.load();
@@ -143,9 +141,7 @@ void test_disable_touch_is_overlayable_for_the_touch_probe() {
   s3.apply(c3);
   assert(c3.disable_touch == false);
 
-  // The gesture router rides the same overlay, and for the same reason: turning it on to test it
-  // must not require building and side-loading a bundle. The two are mutually exclusive, which
-  // main() resolves -- the store's job is only to carry what the user asked for.
+  // The store carries both touch flags as given; main() resolves their mutual exclusion.
   write_file(path, R"({"disable_touch": false, "touch_gestures": true})");
   ConfigStore s5(path);
   s5.load();
@@ -154,8 +150,6 @@ void test_disable_touch_is_overlayable_for_the_touch_probe() {
   s5.apply(c5);
   assert(c5.touch_gestures == true && c5.disable_touch == false);
 
-  // ...and so does the cursor half of the touch bisect (touch-gestures.md §7.0). apply() always
-  // read it, but load() dropped it first, so the documented no-rebuild knob did nothing.
   write_file(path, R"({"touch_hide_cursor": false})");
   ConfigStore s6(path);
   s6.load();
@@ -165,7 +159,7 @@ void test_disable_touch_is_overlayable_for_the_touch_probe() {
   s6.apply(c6);
   assert(c6.touch_hide_cursor == false);
 
-  // A non-bool must not silently read as false and leave touch live: the default stands.
+  // A non-bool is ignored and the default stands.
   write_file(path, R"({"disable_touch": "false"})");
   ConfigStore s4(path);
   s4.load();

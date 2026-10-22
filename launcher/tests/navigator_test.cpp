@@ -1,6 +1,5 @@
-// app_needle() is the predicate the Navigator uses to decide "are we already on the TV app?" —
-// a needle that matched about:blank would stop the initial navigation from ever firing, and one
-// that failed to match the loaded ".../tv#/" would re-navigate in a loop. Pin it.
+// app_needle(): the substring the Navigator looks for in the current URL to decide whether the TV
+// app is loaded.
 
 #include "navigator.hpp"
 

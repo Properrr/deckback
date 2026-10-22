@@ -57,8 +57,7 @@ void test_poll_tracks_playstate() {
   assert(plat.inhibited() == false);
 }
 
-// ---- play-state bitmask + input-layer publication
-// ------------------------------------------------
+// ---- play-state bitmask and input layer ---------------------------------------------------------
 
 void test_decode_play_state() {
   PlayState s = decode_play_state(0);
@@ -73,8 +72,7 @@ void test_decode_play_state() {
   s = decode_play_state(7);
   assert(s.playing && s.player_open && s.text_input_focused);
 
-  // An unreachable engine (eval_number -> nullopt -> -1) and a NaN must both decode to all-false,
-  // which is the Browse layer and no idle inhibitor. Never guess a state we could not observe.
+  // An unreachable engine (-1) and NaN decode to all-false: Browse, no idle inhibitor.
   for (double bad : {-1.0, std::nan("")}) {
     s = decode_play_state(bad);
     assert(!s.playing && !s.player_open && !s.text_input_focused);
@@ -114,8 +112,7 @@ void test_poll_publishes_input_layer() {
   assert(layers.get() == Layer::Browse);
 }
 
-// An unreachable engine must fall back to Browse, not strand the input in the last-seen layer:
-// otherwise a crash during playback would leave every button on the player bindings forever.
+// An unreachable engine falls back to Browse rather than keeping the last-seen layer.
 void test_layer_falls_back_to_browse_when_engine_dies() {
   LayerState layers;
   FakePlatform plat;
@@ -145,7 +142,7 @@ void test_suspend_resume_hooks() {
   assert(pc.on_resume() == true);
 }
 
-// With no engine reachable we must never claim playing / hold an inhibitor, and hooks fail cleanly.
+// With no engine reachable: never playing, no inhibitor, and hooks fail cleanly.
 void test_engine_unreachable() {
   FakePlatform plat;
   PlayerController pc(plat, "127.0.0.1", 8, 1000, false);
@@ -163,7 +160,7 @@ void test_thread_lifecycle() {
   PlayerController pc(plat, "127.0.0.1", server.port(), 100, false);
 
   pc.start();
-  // Wait until at least one tick has held the inhibitor (bounded, no fixed sleep race).
+  // Wait (bounded) until a tick has held the inhibitor.
   for (int i = 0; i < 100 && !plat.inhibited(); ++i)
     std::this_thread::sleep_for(std::chrono::milliseconds(10));
   assert(plat.inhibited() == true);
@@ -179,13 +176,13 @@ void test_netprobe() {
   assert(tcp_reachable("127.0.0.1", server.port(), 500));
   assert(wait_online("127.0.0.1", server.port(), 2000));
 
-  // Dead port: wait_online must return false and respect its budget (not hang).
+  // Dead port: wait_online returns false within its budget.
   auto t0 = std::chrono::steady_clock::now();
   assert(!wait_online("127.0.0.1", 8, 600));
   auto elapsed =
       std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0)
           .count();
-  assert(elapsed < 3000);  // bounded by the 600ms budget (+ backoff slack), nowhere near hanging
+  assert(elapsed < 3000);  // 600 ms budget plus backoff slack
 
   assert(wait_online("127.0.0.1", 8, 0));  // timeout 0 disables the wait -> immediate true
 }
@@ -208,9 +205,7 @@ bool wait_for(const std::function<bool()>& cond, long ms) {
   return cond();
 }
 
-// The logind thread hands the resume over and returns at once; the poll thread does the waiting.
-// It used to run the whole network probe (up to resume_online_timeout_ms, 8 s) inside the
-// PrepareForSleep(false) callback, blocking every other bus callback for as long.
+// request_resume returns at once; the poll thread does the network wait and the nudge.
 void test_resume_request_returns_at_once_and_nudges_on_the_poll_thread() {
   testing::FakeServer server;
   FakePlatform plat;
@@ -223,13 +218,12 @@ void test_resume_request_returns_at_once_and_nudges_on_the_poll_thread() {
   pc.request_resume();
   assert(mono_ms() - t0 < 50);
   int seen = 0;
-  // "Nudging anyway" once the budget is spent -- and not a 5 s poll interval later: request_resume
-  // wakes the poll thread.
+  // Nudges once the probe budget is spent, not a 5 s poll interval later.
   assert(wait_for([&] { return (seen += nudges(server)) > 0; }, 2000));
   pc.stop();
 }
 
-// Shutdown no longer waits out the probe: the waits between attempts end on stop().
+// stop() interrupts the resume probe's waits.
 void test_stop_does_not_wait_out_the_resume_probe() {
   testing::FakeServer server;
   FakePlatform plat;
@@ -244,8 +238,7 @@ void test_stop_does_not_wait_out_the_resume_probe() {
   assert(nudges(server) == 0);
 }
 
-// A suspend that lands while the resume is still waiting for the network cancels its nudge: playing
-// the video just paused for the new suspend would be exactly backwards.
+// A suspend during the resume's network wait cancels its nudge.
 void test_a_suspend_during_the_resume_wait_cancels_the_nudge() {
   testing::FakeServer server;
   FakePlatform plat;
@@ -270,9 +263,8 @@ void test_resume_with_probe() {
   assert(!server.saw_reload());  // default (reload_after=0) -> nudge, never reload
 }
 
-// After a suspend longer than the reload threshold, resume reloads (refresh stream/token) instead
-// of a bare play() nudge. A 1 ms threshold + a short sleep guarantees the boottime delta exceeds
-// it.
+// After a suspend longer than the reload threshold, resume reloads instead of nudging. A 1 ms
+// threshold plus a short sleep guarantees the boottime delta exceeds it.
 void test_resume_reloads_after_long_suspend() {
   testing::FakeServer server;
   FakePlatform plat;
@@ -340,8 +332,7 @@ void test_keep_awake_silent_when_helper_active() {
   assert(!any_request_contains(server.take_requests(), kKeepAwakeNeedle));
 }
 
-// Unknown means we could not ask (no permission to talk to systemd1) — say nothing. Warning about a
-// helper we cannot see would be unactionable noise on every launch.
+// Unknown (could not determine) stays silent.
 void test_keep_awake_silent_when_state_unknown() {
   testing::FakeServer server;
   FakePlatform plat;
@@ -370,26 +361,18 @@ void test_keep_awake_not_probed_while_idle() {
   assert(!any_request_contains(server.take_requests(), kKeepAwakeNeedle));
 }
 
-// The heartbeat verdict that replaced asking systemd over D-Bus. That question needed
-// --talk-name=org.freedesktop.systemd1, and adding it to the manifest is what broke self-update in
-// v0.0.7 (flatpak-portal refuses an update that widens the sandbox), so the helper now reports its
-// own liveness by touching a file. The absent case is the load-bearing one: a helper installed
-// before heartbeats existed writes nothing, and calling that "not running" would warn every
-// existing user that their perfectly good helper is dead.
+// The verdict from the helper's heartbeat file age. A missing file is Unknown, not Inactive.
 void test_decide_keep_awake() {
   assert(decide_keep_awake(std::nullopt) == UnitState::Unknown);
   assert(decide_keep_awake(0) == UnitState::Active);
   assert(decide_keep_awake(kKeepAwakeStaleMs - 1) == UnitState::Active);
   assert(decide_keep_awake(kKeepAwakeStaleMs) == UnitState::Active);  // boundary is inclusive
   assert(decide_keep_awake(kKeepAwakeStaleMs + 1) == UnitState::Inactive);
-  // The window must clear several poll intervals: after a resume the file is stale until the
-  // helper's next tick, and a false "helper not running" toast is worse than a late true one.
+  // The window spans several helper ticks, so a just-resumed helper is not reported dead.
   assert(kKeepAwakeStaleMs >= 5 * 25'000);
 }
 
-// Both sides must name the same file or the hand-off silently never happens: the helper writes
-// ~/.var/app/<id>/data/deckback/idle-nudge.alive, which is what $XDG_DATA_HOME/deckback resolves to
-// inside the sandbox. Pinned against scripts/idle-nudge.py::heartbeat_path.
+// The heartbeat path must match scripts/idle-nudge.py::heartbeat_path.
 void test_keep_awake_heartbeat_path() {
   const char* const prev = std::getenv("XDG_DATA_HOME");
   ::setenv("XDG_DATA_HOME", "/home/deck/.var/app/io.github.properrr.deckback/data", 1);

@@ -110,9 +110,7 @@ void test_integration() {
   auto href = client.eval_string("WANT_STR document.location.href");
   assert(href.has_value() && *href == "https://www.youtube.com/tv#/");
 
-  // ...and a page string that merely contains the failure markers is a VALUE, not a failure. The
-  // client reads `error`/`exceptionDetails` at their documented paths; the substring search this
-  // replaced would have thrown this reply away and logged a CDP error that never happened.
+  // A page string that merely contains the failure markers is a value, not a failure.
   auto trap = client.eval_string("WANT_TRAP document.title");
   assert(trap.has_value() && *trap == "{\"error\":1} exceptionDetails");
 
@@ -121,21 +119,19 @@ void test_integration() {
       "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/26.lts.0,gzip(gfe)"));
   assert(client.navigate("https://www.youtube.com/tv"));
 
-  // Phase 4/5 startup policy: the codec-steering script install and the mic grant are accepted, and
-  // an embedded quote in the JS is escaped rather than breaking the CDP frame.
+  // Script install (with an embedded quote) and permission grant are accepted.
   assert(client.add_script_on_new_document("var q = \"av01\"; void q;"));
   assert(client.grant_permissions("https://www.youtube.com", "audioCapture"));
 }
 
-// ---- key/mouse dispatch surface
-// ------------------------------------------------------------------
+// ---- key/mouse dispatch -------------------------------------------------------------------------
 
 void test_key_supported_set() {
   // Named navigation/media keys.
   assert(DevToolsClient::key_supported("ArrowUp"));
   assert(DevToolsClient::key_supported("Enter"));
   assert(DevToolsClient::key_supported("Backspace"));
-  assert(DevToolsClient::key_supported("Delete"));  // OSK erase candidate (input-ux §8.4)
+  assert(DevToolsClient::key_supported("Delete"));
   assert(DevToolsClient::key_supported("MediaRewind"));
   assert(DevToolsClient::key_supported("MediaFastForward"));
 
@@ -147,7 +143,7 @@ void test_key_supported_set() {
   assert(DevToolsClient::key_supported("/"));
   assert(DevToolsClient::key_supported("?"));
 
-  // And nothing else — a typo in app.json must warn at startup, not dispatch a plausible key.
+  // Nothing else.
   assert(!DevToolsClient::key_supported(""));
   assert(!DevToolsClient::key_supported("ab"));
   assert(!DevToolsClient::key_supported("NoSuchKey"));
@@ -188,8 +184,7 @@ void test_dispatch_key_wire_format() {
   assert(!sent(r, "Input.dispatchKeyEvent", R"("text")"));
   assert(!sent(r, "Input.dispatchKeyEvent", R"("modifiers")"));
 
-  // The scan keys the launcher could not dispatch before. VK codes are tree-verified in
-  // starboard/key.h (0xE3/0xE4) — asserting them here pins the value we send to the engine.
+  // Scan keys use the starboard/key.h VK codes (0xE3/0xE4).
   assert(client.dispatch_key("MediaRewind"));
   r = server.take_requests();
   assert(sent(r, "Input.dispatchKeyEvent", R"("key":"MediaRewind")"));
@@ -199,7 +194,6 @@ void test_dispatch_key_wire_format() {
   r = server.take_requests();
   assert(sent(r, "Input.dispatchKeyEvent", R"("windowsVirtualKeyCode":228)"));
 
-  // Delete, the candidate OSK erase key (Backspace is predicted to pop the view: kSbKeyBack == 8).
   assert(client.dispatch_key("Delete"));
   r = server.take_requests();
   assert(sent(r, "Input.dispatchKeyEvent", R"("windowsVirtualKeyCode":46)"));
@@ -211,8 +205,8 @@ void test_dispatch_printable_characters() {
   assert(client.eval_bool("true").has_value());
   server.take_requests();
 
-  // A lowercase letter: keyDown (not rawKeyDown) carrying `text`, so Blink fires beforeinput/
-  // textInput and the character actually lands in a focused <input>. `code` is the physical key.
+  // A printable key is keyDown (not rawKeyDown) carrying `text`, so it lands in a focused <input>.
+  // `code` is the physical key.
   assert(client.dispatch_key("a"));
   auto r = server.take_requests();
   assert(sent(r, "Input.dispatchKeyEvent", R"("type":"keyDown")"));
@@ -247,8 +241,7 @@ void test_dispatch_printable_characters() {
   assert(sent(r, "Input.dispatchKeyEvent", R"("code":"Slash")"));
   assert(sent(r, "Input.dispatchKeyEvent", R"("windowsVirtualKeyCode":191)"));
 
-  // A quote must be JSON-escaped, not break the CDP frame. If escaping were wrong the request would
-  // be malformed and the reply would never match our id, so dispatch would return false.
+  // A quote is JSON-escaped.
   assert(client.dispatch_key("\""));
   r = server.take_requests();
   assert(sent(r, "Input.dispatchKeyEvent", R"("key":"\"")"));
@@ -266,7 +259,7 @@ void test_dispatch_key_refuses_unknown() {
   assert(client.eval_bool("true").has_value());
   server.take_requests();
 
-  // No guessing: an unknown name dispatches *nothing* rather than a plausible-looking key.
+  // An unknown name dispatches nothing.
   assert(!client.dispatch_key("VolumeUp"));
   assert(!client.dispatch_key("ab"));
   assert(count_method(server.take_requests(), "Input.dispatchKeyEvent") == 0);
@@ -274,10 +267,7 @@ void test_dispatch_key_refuses_unknown() {
 
 // ---- one socket, many clients -------------------------------------------------------------------
 
-// The seven-clients-seven-sockets shape this replaced. A DevToolsClient is a handle onto a shared
-// CdpSession, so every client for one endpoint rides ONE WebSocket. Note the fake server serves
-// connections serially: under the old design the second client's upgrade would never be accepted
-// while the first held the socket, so this test could not have passed at all.
+// Every DevToolsClient for one endpoint shares one CdpSession, i.e. one WebSocket.
 void test_clients_to_one_endpoint_share_one_connection() {
   FakeServer srv;
   {
@@ -292,14 +282,13 @@ void test_clients_to_one_endpoint_share_one_connection() {
     assert(c.eval_bool("WANT_TRUE") == true);
 
     assert(a.connected() && b.connected() && c.connected());
-    // The whole claim, on the wire: three clients, one WebSocket, one target discovery.
+    // Three clients, one WebSocket, one target discovery.
     assert(srv.ws_upgrades() == 1);
     assert(srv.http_gets() == 1);
   }
 }
 
-// Sticky state belongs to the CONNECTION, not to whichever client armed it. It used to live on one
-// client, so the TV UA's lifetime was tied to the navigator's socket and its 1 Hz re-arm.
+// Sticky state (UA override, scripts) belongs to the session, not to the client that armed it.
 void test_sticky_state_is_shared_and_survives_a_reconnect() {
   FakeServer srv;
   DevToolsClient nav("127.0.0.1", srv.port());
@@ -307,24 +296,20 @@ void test_sticky_state_is_shared_and_survives_a_reconnect() {
   assert(nav.set_user_agent_override("TV-UA/1.0"));
   srv.take_requests();
 
-  // A second, independent handle drives traffic; the UA armed by the first is already on the
-  // session, so no client can be "the one holding the UA".
   assert(pad.dispatch_key("Enter"));
   assert(srv.ws_upgrades() == 1);
 
-  // Re-arming the same sticky script twice must not grow the list or double-inject the page.
+  // The same sticky script added twice is remembered once.
   assert(nav.add_script_on_new_document("/*x*/1"));
   assert(nav.add_script_on_new_document("/*x*/1"));
   auto reqs = srv.take_requests();
   int installs = 0;
   for (const std::string& r : reqs)
     if (r.find("addScriptToEvaluateOnNewDocument") != std::string::npos) ++installs;
-  assert(installs == 2);  // two explicit calls...
-  // ...but the session remembers one, so a reconnect re-arms it once, not twice.
+  assert(installs == 2);  // two explicit calls; a reconnect re-arms it once
 }
 
-// Chromium sorts /json/list by last activity, so the front entry can be a service worker (or
-// another tool's page). Attaching there would steer and navigate the wrong document.
+// /json/list is sorted by last activity, so the client must pick the page target, not the first.
 void test_attaches_to_the_page_not_the_first_target() {
   FakeServer srv;
   srv.set_list_decoy(true);
@@ -333,10 +318,8 @@ void test_attaches_to_the_page_not_the_first_target() {
   assert(srv.last_ws_path() == "/devtools/page/DECK");
 }
 
-// Several threads that all see the socket die reconnect at once. Unserialized, two of them joined
-// the same reader thread (std::system_error) or assigned over a joinable one -- std::terminate,
-// i.e. the launcher crashing on an ordinary Leanback teardown. Passing = the process survives
-// many reconnects and keeps delivering keys.
+// Several threads reconnecting at once after the socket dies: the process survives and replies
+// keep arriving.
 void test_concurrent_reconnects_do_not_crash() {
   FakeServer srv;
   srv.close_after_frames(3);
@@ -355,9 +338,8 @@ void test_concurrent_reconnects_do_not_crash() {
   assert(delivered.load() > 10);
 }
 
-// Page.navigate replies at commit, not on receipt. A navigation slower than the default request
-// timeout must still count as sent, and must not tear down the shared session (and with it the TV
-// UA and the sticky scripts).
+// Page.navigate replies at commit. One slower than the default request timeout still counts as
+// sent and keeps the shared session.
 void test_slow_navigation_is_not_a_transport_failure() {
   FakeServer srv;
   srv.set_navigate_delay_ms(3500);
@@ -368,7 +350,7 @@ void test_slow_navigation_is_not_a_transport_failure() {
   assert(srv.ws_upgrades() == 1);
 }
 
-// Different endpoints must NOT share: the registry is keyed by host:port.
+// Different endpoints do not share: the registry is keyed by host:port.
 void test_different_endpoints_do_not_share() {
   FakeServer a, b;
   DevToolsClient ca("127.0.0.1", a.port());
@@ -379,9 +361,7 @@ void test_different_endpoints_do_not_share() {
   assert(b.ws_upgrades() == 1);
 }
 
-// A caller waiting on a slow reply must not hold a lock that stops another thread SENDING. This is
-// the property that made seven sockets necessary; if it regresses, gamepad key injection stalls
-// behind the navigator's poll again.
+// A caller waiting on a reply does not block another thread from sending.
 void test_requests_from_two_threads_do_not_serialize_on_a_lock() {
   FakeServer srv;
   DevToolsClient a("127.0.0.1", srv.port());
@@ -409,8 +389,7 @@ void test_dispatch_mouse() {
   assert(client.eval_bool("true").has_value());
   server.take_requests();
 
-  // Trusted synthetic clicks land on an element's rect centre in CSS pixels (input-ux
-  // §13.2). CDP mouse coords are CSS pixels, so no letterbox transform is applied here.
+  // CDP mouse coords are CSS pixels; no letterbox transform is applied.
   assert(client.mouse_click(640.5, 360));
   auto r = server.take_requests();
   assert(count_method(r, "Input.dispatchMouseEvent") == 2);
@@ -420,7 +399,7 @@ void test_dispatch_mouse() {
   assert(sent(r, "Input.dispatchMouseEvent", R"("y":360)"));
   assert(sent(r, "Input.dispatchMouseEvent", R"("button":"left")"));
 
-  // press/release are separable so hold-to-talk can hold the mic button down.
+  // press and release can be sent separately.
   assert(client.mouse_press(10, 20));
   r = server.take_requests();
   assert(count_method(r, "Input.dispatchMouseEvent") == 1);
@@ -445,10 +424,6 @@ void test_unreachable_server() {
 
 }  // namespace
 
-// A fresh socket is not usable until the sticky state is back on it. It used to be usable the
-// moment it was published, so another thread's Page.navigate could reach the new target ahead of
-// the UA override (an extra desktop-redirect cycle). The fake holds the re-arm's first reply to
-// open that window wide; the navigate must still land after the UA.
 int index_of(const std::vector<std::string>& reqs, const std::string& method) {
   for (size_t i = 0; i < reqs.size(); ++i)
     if (reqs[i].find("\"method\":\"" + method + "\"") != std::string::npos)
@@ -456,6 +431,8 @@ int index_of(const std::vector<std::string>& reqs, const std::string& method) {
   return -1;
 }
 
+// A fresh socket is unusable until sticky state is re-armed, so another thread's navigate lands
+// after the UA override. The fake delays the re-arm's first reply to widen the window.
 void test_rearm_finishes_before_another_caller_navigates() {
   FakeServer srv;
   DevToolsClient nav("127.0.0.1", srv.port());
@@ -480,9 +457,8 @@ void test_rearm_finishes_before_another_caller_navigates() {
   assert(ua < navigate);
 }
 
-// Page.enable once per connection, as part of arming it; navigate/reload/install each re-sent it.
-// And no Network.enable at all: the UA override does not need it (checked on the shipped engine),
-// and it streams a network event per media segment during playback.
+// Page.enable is sent once per connection, and Network.enable never (it would stream an event per
+// media segment; the UA override does not need it).
 void test_enable_commands_are_not_repeated() {
   FakeServer srv;
   DevToolsClient c("127.0.0.1", srv.port());
@@ -496,7 +472,7 @@ void test_enable_commands_are_not_repeated() {
   assert(count_method(reqs, "Network.enable") == 0);
   assert(count_method(reqs, "Network.setUserAgentOverride") >= 1);
 
-  // A new connection is a new target: it is armed again, once, before anything else runs on it.
+  // A new connection is armed again, once, before anything else runs on it.
   srv.close_after_frames(static_cast<int>(reqs.size()));  // drop the next frame and the socket
   assert(!c.eval_bool("WANT_TRUE").has_value());
   srv.close_after_frames(0);

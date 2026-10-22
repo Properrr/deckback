@@ -1,6 +1,5 @@
-// Unit tests for the Phase 3 input layer's pure logic: keymap resolution, direction resolution,
-// button-map construction, and analog-trigger hysteresis. No evdev device and no CDP connection is
-// needed — GamepadInput's I/O is deliberately kept out of these helpers.
+// Input layer tests: keymap/direction resolution, button maps, trigger hysteresis, layers, and the
+// input thread against a fake CDP server.
 #include "input.hpp"
 
 #include <linux/input.h>
@@ -39,8 +38,7 @@ int find_key(const std::vector<ButtonBinding>& v, int code, std::string* key) {
 // ---- resolve_binding ----------------------------------------------------------------------------
 
 void test_binding_accepts_dom_keys_verbatim() {
-  // A DOM key passes straight through. This is what makes app.json hot-swappable: a Leanback change
-  // can be worked around by editing config, without a launcher rebuild.
+  // A DOM key passes straight through, so app.json can rebind without a rebuild.
   assert(resolve_binding("Enter") == "Enter");
   assert(resolve_binding("Escape") == "Escape");
   assert(resolve_binding("ArrowUp") == "ArrowUp");
@@ -52,7 +50,7 @@ void test_binding_translates_semantic_actions() {
   assert(resolve_binding("select") == "Enter");
   assert(resolve_binding("back") == "Escape");
   assert(resolve_binding("playpause") == "MediaPlayPause");
-  // These dispatch arrows, which scrub the progress bar — they are not a fixed-interval seek.
+  // Arrows scrub the progress bar; they are not a fixed-interval seek.
   assert(resolve_binding("scrub_back") == "ArrowLeft");
   assert(resolve_binding("scrub_fwd") == "ArrowRight");
 }
@@ -80,11 +78,9 @@ void test_caption_language_subtag() {
 }
 
 void test_deprecated_seek_aliases_still_resolve() {
-  // A remotely hot-swapped app.json written against the old names must keep working for one release
-  // (doc §6 R1), so these resolve to exactly what they always did...
+  // Deprecated aliases still resolve, and report their replacement so startup can warn.
   assert(resolve_binding("seek_back_10") == "ArrowLeft");
   assert(resolve_binding("seek_fwd_10") == "ArrowRight");
-  // ...but they are reported as deprecated so startup can warn instead of staying silent.
   assert(deprecated_action_replacement("seek_back_10") == "scrub_back");
   assert(deprecated_action_replacement("seek_fwd_10") == "scrub_fwd");
 
@@ -97,10 +93,7 @@ void test_deprecated_seek_aliases_still_resolve() {
   assert(deprecated_action_replacement("").empty());
 }
 
-// The scan keys became dispatchable when devtools.cpp learned MediaRewind/MediaFastForward. That
-// does NOT bind them: Leanback's handling of those codes is unverified, so the aliases stay
-// unmapped until the on-Deck spike says otherwise. A user can still opt in via app.json by naming
-// the DOM key.
+// The scan aliases stay unbound (Leanback's handling is unverified), but the DOM keys pass through.
 void test_scan_keys_dispatchable_but_still_unbound() {
   assert(resolve_binding("scan_rewind").empty());
   assert(resolve_binding("scan_forward").empty());
@@ -109,8 +102,7 @@ void test_scan_keys_dispatchable_but_still_unbound() {
 }
 
 void test_binding_refuses_to_guess_unknown_actions() {
-  // These appear in config/app.json but have no established Leanback key. Dispatching *something*
-  // would look like it works while doing nothing; an empty result makes startup warn instead.
+  // Actions with no established Leanback key resolve empty, so startup warns instead of guessing.
   assert(resolve_binding("nosuch_action").empty());
   assert(resolve_binding("player_menu").empty());
   assert(resolve_binding("scan_rewind").empty());
@@ -171,9 +163,7 @@ void test_button_map_from_shipped_keymap() {
   assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");     // RB
   assert(!find_key(m, BTN_SELECT, nullptr));
 
-  // Y is unbound since the voice feature was removed. Start dispatches no DOM key -> not bound,
-  // and reported: show_controls is a *launcher* action, which build_button_map does not know, so it
-  // honestly reports it as unmapped and the constructor removes it once the OSD is enabled.
+  // Y is unbound. Start (show_controls) is a launcher action, so it is reported unmapped here.
   assert(!find_key(m, BTN_Y, nullptr));
   assert(!find_key(m, BTN_START, nullptr));
   assert(m.size() == 5);
@@ -214,22 +204,21 @@ void test_trigger_hysteresis() {
   assert(trigger_pressed(192, false));
   assert(trigger_pressed(255, false));
 
-  // Once held, it stays held until it falls well back — a trigger resting at ~150 must not chatter.
+  // Once held, it stays held until it falls well back, so a resting trigger does not chatter.
   assert(trigger_pressed(150, true));
   assert(trigger_pressed(65, true));
   assert(!trigger_pressed(64, true));
   assert(!trigger_pressed(0, true));
 }
 
-// ---- fixed-interval skip (input-ux §18) ---------------------------------------------------------
+// ---- fixed-interval skip and chapter seek -------------------------------------------------------
 
 void test_skip_action_sign() {
-  // Forward and back, plus the longer spellings a hot-swapped app.json might use.
   assert(skip_action_sign("skip_fwd") == 1);
   assert(skip_action_sign("skip_forward") == 1);
   assert(skip_action_sign("skip_back") == -1);
   assert(skip_action_sign("skip_backward") == -1);
-  // Everything else — including the scrub actions and DOM keys — is NOT a skip.
+  // Scrub actions and DOM keys are not skips.
   assert(skip_action_sign("scrub_fwd") == 0);
   assert(skip_action_sign("scrub_back") == 0);
   assert(skip_action_sign("ArrowRight") == 0);
@@ -248,7 +237,7 @@ void test_chapter_action_sign() {
 }
 
 void test_chapter_seek_script_renders_with_dir_and_skip() {
-  // config/scripts/chapter_seek.js rendered with the direction + the fixed-skip fallback interval.
+  // Rendered with the direction and the fixed-skip fallback interval.
   const std::string js = ScriptLibrary::instance().render(
       "chapter_seek", ScriptParams().set("dir", -1).set("skip", 10));
   assert(js.find(R"("dir":-1)") != std::string::npos);
@@ -258,8 +247,7 @@ void test_chapter_seek_script_renders_with_dir_and_skip() {
 }
 
 void test_skip_script_renders_with_the_signed_delta() {
-  // The seek is now config/scripts/skip.js rendered with the signed delta as a param (input-ux
-  // §18).
+  // config/scripts/skip.js rendered with the signed delta as a param.
   const std::string fwd = ScriptLibrary::instance().render("skip", ScriptParams().set("delta", 10));
   assert(fwd.find(R"(({"delta":10}))") != std::string::npos);  // invoked with the param
   assert(fwd.find("seekBy") != std::string::npos);             // the real body (public player API)
@@ -268,14 +256,13 @@ void test_skip_script_renders_with_the_signed_delta() {
   const std::string back =
       ScriptLibrary::instance().render("skip", ScriptParams().set("delta", -10));
   assert(back.find(R"(({"delta":-10}))") != std::string::npos);
-  // A negative jump must not run off the front of the media: the <video> fallback clamps at 0.
+  // The <video> fallback clamps a negative jump at 0.
   assert(back.find("Math.max(0,") != std::string::npos);
 }
 
 // ---- config keymap parsing ----------------------------------------------------------------------
 
 void test_config_parses_keymap_object() {
-  // The parser is a hand-rolled top-level extractor; the keymap is its first nested object.
   const char* json = R"({
     "url": "https://www.youtube.com/tv",
     "keymap": {
@@ -294,11 +281,10 @@ void test_config_parses_keymap_object() {
 
   auto cfg = Config::load(path);
   assert(cfg.has_value());
-  // $comment must not become a binding, and a later top-level key must not leak in.
+  // $comment is not a binding, a later top-level key does not leak in, and keys after it parse.
   assert(cfg->keymap.size() == 3);
   assert(cfg->keymap[0].first == "a" && cfg->keymap[0].second == "select");
   assert(cfg->keymap[2].first == "select" && cfg->keymap[2].second == "toggle_captions");
-  // The keys after the nested object still parse.
   assert(cfg->remote_debugging_port == 9222);
   std::remove(path.c_str());
 }
@@ -316,10 +302,7 @@ void test_config_missing_keymap_is_empty_not_fatal() {
   std::remove(path.c_str());
 }
 
-// The retired EVIOCGRAB lock's keys must still LOAD. app.json is hot-swappable, so a config written
-// for an older launcher is a normal thing to be handed; the keys are listed as known-and-ignored
-// (config.cpp kKnownExtraPaths) precisely so it does not warn on every one of them. What must not
-// survive is any *effect* — `disable_touch` is the only touch knob left.
+// The touch_lock_* keys still load without error; only `disable_touch` has an effect.
 void test_config_accepts_the_retired_touch_lock_keys() {
   const char* json = R"({
     "url": "https://x",
@@ -338,11 +321,11 @@ void test_config_accepts_the_retired_touch_lock_keys() {
   std::fclose(f);
   auto cfg = Config::load(path);
   assert(cfg.has_value());
-  assert(cfg->disable_touch == false);  // overridable off — the live knob
+  assert(cfg->disable_touch == false);
   std::remove(path.c_str());
 }
 
-// Defaults when the keys are absent: touch is inert via disable_touch (Options A+B).
+// Defaults when the keys are absent.
 void test_config_touch_defaults() {
   const char* json = R"({"url":"https://x"})";
   const std::string path = (deckback_test_tmpdir() / "deckback_input_test_cfg4.json").string();
@@ -352,11 +335,9 @@ void test_config_touch_defaults() {
   std::fclose(f);
   auto cfg = Config::load(path);
   assert(cfg.has_value());
-  assert(cfg->disable_touch == true);  // touch is inert by default
+  assert(cfg->disable_touch == true);
   assert(cfg->captions_toast == true);
   assert(cfg->caption_language.empty());
-  // Right stick on by default: the axis is otherwise dead, and arrows are the only Leanback keys we
-  // have actually verified, so this adds no new assumption.
   assert(cfg->right_stick_scroll == true);
   assert(cfg->right_stick_deadzone == 13000);
   assert(cfg->right_stick_slow_ms == 200);
@@ -387,7 +368,7 @@ void test_config_parses_right_stick() {
 }
 
 void test_config_skip_seconds() {
-  // Present: parsed. Absent: the default 10 s stands (a hot-swapped app.json need not carry it).
+  // Present: parsed. Absent: the default 10 s.
   const char* json = R"({ "url": "https://x", "skip_seconds": 30 })";
   const std::string path = (deckback_test_tmpdir() / "deckback_input_test_skip.json").string();
   FILE* f = std::fopen(path.c_str(), "w");
@@ -419,7 +400,6 @@ void test_fast_scroll_idle_inside_the_deadzone() {
   assert(fast_scroll(0, 0, c).interval_ms == 0);
   assert(fast_scroll(13000, 13000, c).key == nullptr);  // exactly at the edge is still idle
   assert(fast_scroll(-13000, 0, c).key == nullptr);
-  // Just past it, the stick scrolls.
   assert(fast_scroll(0, 13001, c).key != nullptr);
 }
 
@@ -442,21 +422,17 @@ void test_fast_scroll_directions() {
 
 void test_fast_scroll_dominant_axis_wins_ties_go_vertical() {
   FastScrollConfig c;
-  // Unlike the digital resolve_direction, magnitude is meaningful here: a diagonal push means
-  // whichever way the thumb pushed harder.
+  // The larger deflection wins; a perfect diagonal resolves vertical.
   assert(std::string(fast_scroll(30000, -20000, c).key) == "ArrowRight");
   assert(std::string(fast_scroll(20000, -30000, c).key) == "ArrowUp");
-  // A perfect diagonal resolves vertical, the way rails run.
   assert(std::string(fast_scroll(25000, 25000, c).key) == "ArrowDown");
-  // The rate comes from the *dominant* axis, not the other one. A hard right push with a slight
-  // vertical lean must scroll at the hard-push rate.
+  // The rate comes from the dominant axis.
   assert(fast_scroll(32767, 14000, c).interval_ms == fast_scroll(32767, 0, c).interval_ms);
 }
 
 void test_fast_scroll_rate_is_analog_not_timed() {
   FastScrollConfig c;  // slow 200, fast 45
-  // The whole point of the feature: deflection sets the rate. A nudge steps deliberately; a full
-  // push scrolls fast. If these two are ever equal, the right stick is just a slow D-pad.
+  // Deflection sets the rate: a nudge steps slowly, a full push scrolls fast.
   const long nudge = fast_scroll(0, 14000, c).interval_ms;
   const long half = fast_scroll(0, 23000, c).interval_ms;
   const long full = fast_scroll(0, 32767, c).interval_ms;
@@ -466,29 +442,23 @@ void test_fast_scroll_rate_is_analog_not_timed() {
 }
 
 void test_fast_scroll_clamps_the_axis_minimum() {
-  // The axis floor is -32768, one past the +32767 ceiling. The observable consequence of not
-  // clamping is NOT the interval (the lo/hi clamp already catches that) — it is the tie-break:
-  // |-32768| > |32767|, so a full down-left push would resolve Left instead of Down, and pushing a
-  // stick to its physical corner would scroll a different way depending on which corner.
+  // -32768 and values past +32767 clamp to full deflection, so a full corner push is a tie that
+  // resolves vertical, and the rate at the floor equals the rate at the ceiling.
   FastScrollConfig c;
   assert(std::string(fast_scroll(-32768, 32767, c).key) == "ArrowDown");
   assert(std::string(fast_scroll(-32768, -32768, c).key) == "ArrowUp");
   assert(std::string(fast_scroll(32767, -32768, c).key) == "ArrowUp");
 
-  // Same at the top: a pad reporting past +32767 saturates rather than out-voting a full-deflection
-  // vertical push. Both axes at full is a tie, whatever the device claims.
   assert(std::string(fast_scroll(40000, 32767, c).key) == "ArrowDown");
   assert(fast_scroll(40000, 0, c).interval_ms == fast_scroll(32767, 0, c).interval_ms);
 
-  // And the rate at the floor equals the rate at the ceiling: both are full deflection.
   assert(fast_scroll(0, -32768, c).interval_ms == fast_scroll(0, 32767, c).interval_ms);
   assert(fast_scroll(0, -32768, c).interval_ms == 45);
   assert(std::string(fast_scroll(0, -32768, c).key) == "ArrowUp");
 }
 
 void test_fast_scroll_never_returns_a_busy_looping_interval() {
-  // A hot-swapped app.json is not trusted input. Every one of these must still yield an interval a
-  // poll loop can survive: never zero, never negative.
+  // Untrusted config values never yield a zero or negative interval.
   FastScrollConfig c;
   c.slow_ms = 10;
   c.fast_ms = 10;
@@ -502,8 +472,7 @@ void test_fast_scroll_never_returns_a_busy_looping_interval() {
   c.fast_ms = -100;
   assert(fast_scroll(0, 20000, c).interval_ms >= 25);
 
-  // Inverted (fast slower than slow) is a preference, not an error: it must stay inside its own
-  // range rather than extrapolate off the end.
+  // Inverted (fast slower than slow) stays inside its own range.
   c.slow_ms = 50;
   c.fast_ms = 300;
   const long edge = fast_scroll(0, 14000, c).interval_ms;
@@ -514,8 +483,7 @@ void test_fast_scroll_never_returns_a_busy_looping_interval() {
 }
 
 void test_fast_scroll_degenerate_deadzone() {
-  // A deadzone at or past full deflection swallows the axis: the stick is simply off. It must not
-  // divide by a zero (or negative) span on the way to saying so.
+  // A deadzone at or past full deflection turns the stick off without dividing by a zero span.
   FastScrollConfig c;
   c.deadzone = 32767;
   assert(fast_scroll(0, 32767, c).key == nullptr);
@@ -523,9 +491,7 @@ void test_fast_scroll_degenerate_deadzone() {
   c.deadzone = 99999;
   assert(fast_scroll(0, 32767, c).key == nullptr);
 
-  // A negative deadzone must mean zero, not a widened rate ramp. Untreated, the ramp normalises
-  // over [deadzone, 32767] and a barely-touched stick lands mid-ramp — the faintest brush would
-  // scroll at half speed. Assert the rate, not merely that nothing crashed.
+  // A negative deadzone means zero, not a widened rate ramp.
   FastScrollConfig zero = c;
   zero.deadzone = 0;
   c.deadzone = -32767;
@@ -535,19 +501,17 @@ void test_fast_scroll_degenerate_deadzone() {
   assert(t.interval_ms == 200);  // slow_ms: a 1-unit deflection is the slowest step, not the middle
 }
 
-// ---- layers
-// --------------------------------------------------------------------------------------
+// ---- layers -------------------------------------------------------------------------------------
 
 void test_resolve_layer() {
   assert(resolve_layer(false, false) == Layer::Browse);
   assert(resolve_layer(true, false) == Layer::Player);
   assert(resolve_layer(false, true) == Layer::Osk);
-  // Typing outranks transport: a search field can be focused over a playing video, and there every
-  // key must mean a character or an edit.
+  // Typing outranks transport: a search field can be focused over a playing video.
   assert(resolve_layer(true, true) == Layer::Osk);
 }
 
-// The base map alone must behave exactly as it did before layers existed.
+// With only a base map, every layer resolves the same.
 void test_layers_absent_is_context_free() {
   Keymaps m =
       build_keymaps(KeymapConfig{{{"a", "select"}, {"b", "back"}}, {}, {}, {}, {}}, nullptr);
@@ -565,12 +529,10 @@ void test_context_layer_overrides_then_falls_through() {
   cfg.osk = {{"b", "Delete"}};  // inside the OSK, B erases rather than leaving search
   Keymaps m = build_keymaps(cfg, nullptr);
 
-  // Browse/Player keep the base binding for B...
   assert(resolve_button(m, BTN_EAST, Layer::Browse, false, false) == "Escape");
   assert(resolve_button(m, BTN_EAST, Layer::Player, false, false) == "Escape");
-  // ...the OSK overrides it.
   assert(resolve_button(m, BTN_EAST, Layer::Osk, false, false) == "Delete");
-  // A control the layer does not bind falls through to base — a context layer only overrides.
+  // A control the layer does not bind falls through to base.
   assert(resolve_button(m, BTN_SOUTH, Layer::Osk, false, false) == "Enter");
   assert(resolve_button(m, BTN_X, Layer::Osk, false, false) == "MediaPlayPause");
 }
@@ -581,7 +543,6 @@ void test_modifier_layer_wins_and_absorbs() {
   cfg.lt_mod = {{"left", "MediaRewind"}, {"right", "MediaFastForward"}};
   Keymaps m = build_keymaps(cfg, nullptr);
 
-  // Not held: plain arrows and plain buttons.
   assert(resolve_direction_key(m, "ArrowLeft", Layer::Browse, false, false) == "ArrowLeft");
   assert(resolve_button(m, BTN_SOUTH, Layer::Browse, false, false) == "Enter");
 
@@ -589,8 +550,7 @@ void test_modifier_layer_wins_and_absorbs() {
   assert(resolve_direction_key(m, "ArrowLeft", Layer::Browse, true, false) == "MediaRewind");
   assert(resolve_direction_key(m, "ArrowRight", Layer::Browse, true, false) == "MediaFastForward");
 
-  // A modifier layer ABSORBS what it does not bind. Falling through would fire a plain A/Up while
-  // the user is holding a modifier precisely to mean "not the normal action".
+  // A modifier layer absorbs what it does not bind instead of falling through.
   assert(resolve_button(m, BTN_SOUTH, Layer::Browse, true, false).empty());
   assert(resolve_direction_key(m, "ArrowUp", Layer::Browse, true, false).empty());
 
@@ -602,9 +562,7 @@ void test_modifier_layer_wins_and_absorbs() {
 }
 
 void test_empty_modifier_layer_is_not_a_modifier() {
-  // With no keymap_lt configured, holding LT must change nothing — the trigger keeps its own
-  // binding and the rest of the pad behaves normally. Otherwise a resting trigger would eat every
-  // button.
+  // With no keymap_lt configured, holding LT changes nothing.
   Keymaps m = build_keymaps(KeymapConfig{{{"a", "select"}}, {}, {}, {}, {}}, nullptr);
   assert(resolve_button(m, BTN_SOUTH, Layer::Browse, true, true) == "Enter");
   assert(resolve_direction_key(m, "ArrowUp", Layer::Browse, true, true) == "ArrowUp");
@@ -627,7 +585,7 @@ void test_build_layer_reports_unmapped_with_layer_label() {
   cfg.osk = {{"b", "no_such_action"}, {"up", "also_bogus"}};
   build_keymaps(cfg, &unmapped);
   assert(unmapped.size() == 2);
-  // The message must name the layer, or a warning about "b" is unactionable across five sections.
+  // Each message names its layer.
   for (const std::string& u : unmapped) assert(u.rfind("keymap_osk.", 0) == 0);
 }
 
@@ -640,12 +598,11 @@ void test_empty_base_keeps_builtin_defaults() {
 // ---- launcher-action control resolution ---------------------------------------------------------
 
 void test_find_control_for_action() {
-  // `show_controls` is not a DOM key: the OSD intercepts its control by evdev code rather than
-  // looking it up in the button map. find_control_for_action is that lookup.
+  // Finds the evdev code bound to a launcher action (not a DOM key).
   assert(find_control_for_action({{"start", "show_controls"}, {"a", "select"}}, "show_controls") ==
          BTN_START);
   assert(find_control_for_action({{"y", "show_controls"}}, "show_controls") == BTN_Y);
-  // Absent, or bound to a control we do not know: -1, and startup warns rather than guessing.
+  // Absent, or bound to an unknown control: -1.
   assert(find_control_for_action({{"a", "select"}}, "show_controls") == -1);
   assert(find_control_for_action({{"nosuch", "show_controls"}}, "show_controls") == -1);
   assert(find_control_for_action({}, "show_controls") == -1);
@@ -657,8 +614,7 @@ void test_find_control_for_action() {
   assert(find_control_for_action({{"x", "toggle_captions"}}, "toggle_captions") == BTN_X);
   assert(find_control_for_action({{"a", "select"}}, "toggle_captions") == -1);
 
-  // Aliased launcher actions resolve through their predicate, so every name the predicate accepts
-  // binds. "touch_gestures" was accepted by gestures_action and bound to nothing.
+  // Aliased launcher actions resolve through their predicate, so every accepted name binds.
   for (const char* alias : {"toggle_gestures", "touch_gestures", "toggle_touch"})
     assert(find_control_for({{"a", "select"}, {"y", alias}}, gestures_action) == BTN_Y);
   for (const char* alias : {"toggle_captions", "captions"})
@@ -673,14 +629,12 @@ void test_without_action() {
   assert(out.size() == 2);
   assert(out[0].first == "a" && out[1].first == "b");  // order otherwise preserved
   assert(without_action({{"a", "select"}}, "show_controls").size() == 1);
-  // Removing one action leaves the other alone.
   auto both = without_action({{"start", "show_controls"}, {"y", "player_menu"}}, "show_controls");
   assert(both.size() == 1 && both[0].second == "player_menu");
 }
 
-// With the OSD enabled, Menu must not ALSO be reported as an unmapped binding: it is mapped, to
-// something that is not a key. Without it the binding really is dead, and the startup warning is
-// the honest output. This mirrors what the GamepadInput constructor does.
+// With the OSD enabled (show_controls removed, as GamepadInput does), Start is not reported
+// unmapped.
 void test_launcher_action_is_not_reported_unmapped_when_enabled() {
   const std::vector<std::pair<std::string, std::string>> keymap = {
       {"a", "select"}, {"start", "show_controls"}, {"y", "player_menu"}};
@@ -695,8 +649,7 @@ void test_launcher_action_is_not_reported_unmapped_when_enabled() {
   assert(on[0].find("y") != std::string::npos);
 }
 
-// ---- the input thread itself
-// ------------------------------------------------------------------------
+// ---- input thread -------------------------------------------------------------------------------
 
 double process_cpu_seconds() {
   timespec ts{};
@@ -704,11 +657,8 @@ double process_cpu_seconds() {
   return static_cast<double>(ts.tv_sec) + static_cast<double>(ts.tv_nsec) / 1e9;
 }
 
-// With no gamepad open the thread must SLEEP until its next rescan. poll() on an empty fd set
-// returns at once, so a loop that only blocks in poll() burns a whole core whenever no pad is
-// attached (a workstation, CI, or the Deck before Steam's virtual pad appears). Port 1: nothing
-// listens there, and an idle loop sends no CDP traffic anyway. A machine with a readable pad opens
-// it and exercises the poll() path instead -- the test still holds, it just proves less.
+// With no gamepad the thread sleeps until its next rescan instead of spinning on an empty poll().
+// Port 1 has no listener.
 void test_idle_without_a_gamepad_does_not_spin() {
   GamepadInput in("127.0.0.1", 1);
   const double cpu0 = process_cpu_seconds();
@@ -723,47 +673,34 @@ void test_idle_without_a_gamepad_does_not_spin() {
   assert(stop_ms < 500);  // the idle sleep must wake on stop(), not run out its 2 s
 }
 
-// ---- the actually-shipped config/app.json
-// --------------------------------------------------------
+// ---- shipped config/app.json --------------------------------------------------------------------
 
-// The tests above use a hand-written copy of the keymap, which cannot catch app.json drifting away
-// from the code (a rename landing in C++ but not in the config, or vice versa). This one reads the
-// real file the Flatpak ships.
+// The keymap in the real app.json resolves against the current code.
 void test_shipped_app_json_keymap_is_current() {
   auto cfg = Config::load(DECKBACK_APP_JSON);
   assert(cfg.has_value());
   assert(!cfg->keymap.empty());
 
-  // The voice feature was removed (it never worked on this engine), so nothing may bind
-  // `voice_search` — a config binding to a feature that does not exist is a dead control.
   assert(find_control_for_action(cfg->keymap, "voice_search") == -1);
 
-  // The layer sections ship EMPTY on purpose: no Leanback key is bound without an on-Deck spike. If
-  // this ever fails, someone guessed a binding — that is the thing to re-examine, not this test.
+  // Layer sections ship empty: no Leanback key is bound without an on-Deck check.
   assert(cfg->keymap_player.empty());
   assert(cfg->keymap_osk.empty());
   assert(cfg->keymap_lt.empty());
   assert(cfg->keymap_rt.empty());
 
-  // The whole shipped config resolves with nothing unmapped beyond the two documented controls.
   std::vector<std::string> layer_unmapped;
   build_keymaps(KeymapConfig{cfg->keymap, cfg->keymap_player, cfg->keymap_osk, cfg->keymap_lt,
                              cfg->keymap_rt},
                 &layer_unmapped);
   assert(layer_unmapped.size() == 1);  // keymap.start=show_controls, absorbed by the OSD
 
-  // The touch-gesture toggle ships bound to Y -- the one free face button (voice search vacated it)
-  // -- so enabling touch_gestures is one config key, not two. It is a LAUNCHER action, so it must
-  // resolve to no DOM key and must not appear in the unmapped list: input-ux §4 requires the touch
-  // state to be controllable from the pad, and a toggle that silently does nothing is worse than
-  // no toggle at all.
+  // The touch-gesture toggle ships bound to Y as a launcher action (no DOM key).
   assert(find_control_for_action(cfg->keymap, "toggle_gestures") == BTN_Y);
   assert(gestures_action("toggle_gestures"));
   assert(resolve_binding("toggle_gestures").empty());
 
   for (const auto& [name, value] : cfg->keymap) {
-    // Nothing we ship may use a deprecated alias — the compatibility path exists for *remote*
-    // hot-swapped configs written against an older launcher, not for our own file.
     assert(deprecated_action_replacement(value).empty());
   }
 
@@ -774,15 +711,13 @@ void test_shipped_app_json_keymap_is_current() {
   assert(find_key(m, BTN_TR, &k) && k == "ArrowRight");  // rb = scrub_fwd
   assert(find_key(m, BTN_SOUTH, &k) && k == "Enter");
 
-  // Exactly one documented unmapped control: start (show_controls is a launcher action the OSD
-  // absorbs, not a DOM key). A second would mean we broke a binding.
+  // Only start (show_controls, absorbed by the OSD) is unmapped.
   assert(unmapped.size() == 1);
 }
 
 }  // namespace
 
-// ---- axis bookkeeping, press resolution, axis ranges
-// ---------------------------------------------
+// ---- axes and press resolution ------------------------------------------------------------------
 
 void test_track_axes() {
   AxisState s;
@@ -813,8 +748,7 @@ void test_normalize_axis() {
   for (int v : {0, 64, 191, 192, 255}) assert(normalize_axis(ABS_Z, v, {0, 255}) == v);
   assert(normalize_axis(ABS_HAT0X, -1, {-1, 1}) == -1);  // the hat is read by sign alone
 
-  // A pad whose triggers report 0..32767: a light touch used to read as a full press (>= 192); it
-  // is now a light touch, and only a deep press crosses the threshold.
+  // Triggers reporting 0..32767 are rescaled to 0..255.
   assert(normalize_axis(ABS_Z, 1000, {0, 32767}) < 64);
   assert(normalize_axis(ABS_RZ, 32767, {0, 32767}) == 255);
   assert(normalize_axis(ABS_RZ, 0, {0, 32767}) == 0);
@@ -839,8 +773,7 @@ void test_resolve_press_respects_a_held_modifier_layer() {
   const Press sel = resolve_press(maps, a, Layer::Browse, false, false, view, y);
   assert(sel.kind == Press::Kind::Key && sel.key == "Enter");
 
-  // LT held, with an LT layer: it owns every button. View is not in it, so it is absorbed -- it
-  // used to toggle captions straight past the layer.
+  // LT held, with an LT layer: it owns every button, so View and Y are absorbed.
   assert(resolve_press(maps, view, Layer::Browse, true, false, view, y).kind == Press::Kind::None);
   assert(resolve_press(maps, y, Layer::Browse, true, false, view, y).kind == Press::Kind::None);
   const Press next = resolve_press(maps, a, Layer::Browse, true, false, view, y);
@@ -863,8 +796,7 @@ int osd_cmds(const std::vector<std::string>& reqs, const std::string& cmd) {
   return count_containing(reqs, "\\\"cmd\\\":\\\"" + cmd + "\\\"");
 }
 
-// The Exit hold belongs to a press the kernel may lose. A SYN_DROPPED (queue overflow while the
-// thread sat on CDP) can swallow the Y release, and the deadline must not then complete and quit.
+// The Exit hold is cancelled by SYN_DROPPED (which can swallow the Y release) and by a release.
 void test_exit_hold_is_cancelled_by_a_dropped_queue_and_by_release() {
   testing::FakeServer srv;
   OsdMenuConfig oc;
@@ -895,9 +827,7 @@ void test_exit_hold_is_cancelled_by_a_dropped_queue_and_by_release() {
   assert(osd_cmds(reqs, "hold_cancel") == 1 && osd_cmds(reqs, "ignore") == 1);
 }
 
-// The first-run card is modal and swallows the D-pad, but it must still see a release: a direction
-// let go under the card stayed "held" and came back as a phantom afterwards. Here the stale
-// D-pad-right outranked the stick, so pushing the stick left resolved to Right.
+// A D-pad release swallowed by the modal first-run card still clears the held direction.
 void test_a_release_under_the_card_is_not_a_phantom_direction() {
   testing::FakeServer srv;
   const std::string marker = (deckback_test_tmpdir() / "input-card" / "first_run").string();

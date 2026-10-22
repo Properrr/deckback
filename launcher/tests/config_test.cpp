@@ -1,8 +1,4 @@
-// Config::load — the JSON-shape contract, the validation, and the failure modes.
-//
-// Before the parser rewrite this file covered exactly one happy path and one missing file. It had
-// no malformed-input case at all, which is why a corrupt app.json silently loading as all-defaults
-// went unnoticed. app.json is HOT-SWAPPABLE: a half-written file is a normal event on that path.
+// Config::load: the JSON shape, validation, and failure modes.
 #include "config.hpp"
 
 #include <cassert>
@@ -50,11 +46,8 @@ void test_happy_path() {
 void test_missing_file_is_an_error() { assert(!Config::load("does_not_exist.json").has_value()); }
 
 // ---- failure is representable --------------------------------------------------------------
-//
-// THE regression. Config::load's only nullopt path used to be "cannot read the file", so every one
-// of these loaded "successfully" into all-defaults — including remote_debugging_port 0, which
-// disables the navigator, gamepad, OSD and onboarding. A controller-less content_shell, silently.
 
+// Malformed input is refused (nullopt), never loaded as all-defaults.
 void test_malformed_config_is_refused_not_defaulted() {
   assert(!load("").has_value());
   assert(!load("{").has_value());
@@ -66,12 +59,9 @@ void test_malformed_config_is_refused_not_defaulted() {
   assert(!load("\"just a string\"").has_value());
 }
 
-// ---- the nesting is real now ----------------------------------------------------------------
-//
-// app.json nests (power.*, log.*, quality.*, watchdog.*). The old extractor found those leaves by
-// searching the raw bytes for the name ANYWHERE, so nesting was decorative and a nested key
-// silently shadowed a top-level one. Paths are bound exactly now.
+// ---- nested sections ----------------------------------------------------------------------------
 
+// Nested keys (power.*, log.*, quality.*, watchdog.*) bind by exact path.
 void test_nested_sections_bind_by_path() {
   auto c = load(R"({
       "power": { "devtools_poll_ms": 500, "resume_probe_host": "example.com",
@@ -92,8 +82,7 @@ void test_nested_sections_bind_by_path() {
 }
 
 void test_nested_key_no_longer_shadows_a_top_level_one() {
-  // `{"keymap":{"url":...},"url":...}` used to resolve `url` to the NESTED value — the launcher
-  // would navigate somewhere else entirely.
+  // A nested `url` does not shadow the top-level one.
   auto c = load(R"({"keymap":{"url":"https://SHADOWED/"},"url":"https://www.youtube.com/tv"})");
   assert(c.has_value());
   assert(c->url == "https://www.youtube.com/tv");
@@ -102,8 +91,7 @@ void test_nested_key_no_longer_shadows_a_top_level_one() {
 // ---- typed reads distinguish absent from wrong ------------------------------------------------
 
 void test_wrong_type_keeps_the_default_and_says_so() {
-  // A quoted port used to leave remote_debugging_port at 0 silently — the whole app degraded from
-  // one pair of quotes. It still keeps the default, but now warns (see the WARN in the log).
+  // A wrongly typed value keeps the default and logs a WARN.
   auto c = load(R"({"remote_debugging_port":"9222"})");
   assert(c.has_value());
   assert(c->remote_debugging_port == 0);
@@ -113,21 +101,15 @@ void test_wrong_type_keeps_the_default_and_says_so() {
   assert(b->disable_touch == true);  // the default, not the string
 }
 
-void test_bool_is_not_prefix_matched() {
-  // read_bool did `compare(p, 4, "true")`, so `truthy` was true. It is now a parse error.
-  assert(!load(R"({"error_page": truthy})").has_value());
-}
+void test_bool_is_not_prefix_matched() { assert(!load(R"({"error_page": truthy})").has_value()); }
 
 void test_exponent_numbers_are_read_whole() {
-  // std::stol over the rest of the file read `5e6` as 5 — log_max_bytes off by 10^6.
   auto c = load(R"({"log":{"log_max_bytes": 5e6}})");
   assert(c.has_value());
   assert(c->log_max_bytes == 5000000);
 }
 
 void test_string_escapes_survive() {
-  // error_title/error_hint are the designated R1 config-push surface, and could not express a
-  // newline: "a\nb" arrived as "anb".
   auto c = load(R"({"error_title":"Can’t reach YouTube","error_hint":"One.\nTwo.\tTabbed."})");
   assert(c.has_value());
   assert(c->error_title == "Can’t reach YouTube");
@@ -135,8 +117,6 @@ void test_string_escapes_survive() {
 }
 
 void test_array_with_a_bracket_inside_a_string() {
-  // read_string_array ended the array at the first `]` BYTE. This is the shape that broke
-  // voice_mic_selectors in the shipped config.
   auto c = load(R"({"cobalt_flags":["--a=[x]","--b","--c=]"]})");
   assert(c.has_value());
   assert(c->cobalt_flags.size() == 3);
@@ -147,7 +127,6 @@ void test_array_with_a_bracket_inside_a_string() {
 // ---- validation --------------------------------------------------------------------------------
 
 void test_out_of_range_values_are_clamped() {
-  // There was no range validation at all: devtools_poll_ms 0 meant a busy-loop poll.
   auto c = load(R"({"power":{"devtools_poll_ms":0},"skip_seconds":100000,
                     "right_stick_deadzone":-5})");
   assert(c.has_value());
@@ -199,8 +178,7 @@ void test_self_update_modes() {
 
 void test_schema_version() {
   assert(load(R"({"schema_version":1})").has_value());
-  // A file written for a newer launcher may rely on settings this build cannot honour; refusing
-  // beats half-applying an emergency config push.
+  // A newer or malformed schema_version is refused rather than half-applied.
   assert(!load(R"({"schema_version":99})").has_value());
   assert(!load(R"({"schema_version":"1"})").has_value());
   assert(!load(R"({"schema_version":1.5})").has_value());
@@ -209,7 +187,7 @@ void test_schema_version() {
 }
 
 void test_empty_object_is_all_defaults() {
-  // Valid but empty: defaults, and NOT an error — distinct from malformed.
+  // Valid but empty: defaults, not an error.
   auto c = load("{}");
   assert(c.has_value());
   assert(c->url == "https://www.youtube.com/tv");

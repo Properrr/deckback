@@ -1,10 +1,6 @@
-// L0 smoke for the self-updater lifecycle. The portal path itself (sd-bus → the Flatpak update
-// portal) is integration-level and is verified on a Deck — `--selftest-update` plus a real update
-// round-trip against a repo (findings/durable/self-update.md). Here we pin only the contract that
-// holds off-Deck: the factory always yields a usable object, and the lifecycle is crash-free and
-// idempotent regardless of whether a session bus / portal exists. Run under ASan (the test targets
-// force -UNDEBUG) it also guards the thread-join lifetime — the exact bug an `exchange`-guarded
-// stop() would have introduced (a self-exited thread destroyed while still joinable).
+// Self-updater pure decoders and lifecycle. The factory always yields a usable object, and
+// start/stop is crash-free and idempotent whether or not a session bus or portal exists. The portal
+// path itself needs a Deck.
 #include "updater.hpp"
 
 #include <cassert>
@@ -16,19 +12,15 @@
 using namespace deckback;
 
 DECKBACK_TEST_MAIN(updater) {
-  // The Progress.status decode the whole feature hinges on (findings/durable/self-update.md:
-  // "correctness hinges on 2 == Done"). Pure + always-compiled, so this runs in CI where the
-  // sd-bus portal path compiles out. An off-by-one here would silently never apply an update.
+  // The portal's Progress.status codes (2 == Done).
   assert(decode_progress_status(0) == UpdateProgress::Running);
   assert(decode_progress_status(1) == UpdateProgress::Empty);
   assert(decode_progress_status(2) == UpdateProgress::Done);
   assert(decode_progress_status(3) == UpdateProgress::Failed);
   assert(decode_progress_status(42) == UpdateProgress::Unknown);
 
-  // Permission decode mirrors flatpak-portal's get_update_permission() exactly: only the FIRST
-  // element counts, "yes"/"ask" match verbatim, any other value (including "no" and garbage) is
-  // No, and a missing entry is Unset. A drift here and the seeder either forges consent over an
-  // explicit "no" or never seeds at all.
+  // Mirrors flatpak-portal's get_update_permission(): only the first element counts, "yes"/"ask"
+  // match verbatim, anything else is No, and a missing entry is Unset.
   assert(decode_update_permission({}) == UpdatePermission::Unset);
   assert(decode_update_permission({"yes"}) == UpdatePermission::Yes);
   assert(decode_update_permission({"ask"}) == UpdatePermission::Ask);
@@ -60,7 +52,7 @@ DECKBACK_TEST_MAIN(updater) {
   assert(parse_flatpak_app_id("name=orphan-before-any-section\n").empty());
   assert(parse_flatpak_app_id("").empty());
 
-  // The generic keyfile read behind it: [Instance] app-commit is the RUNNING commit (U4).
+  // The generic keyfile read: [Instance] app-commit is the running commit.
   const std::string info =
       "[Application]\nname=io.github.properrr.deckback\n"
       "[Instance]\ninstance-id=123\napp-commit-extra=nope\napp-commit=abc123\n";
@@ -72,8 +64,7 @@ DECKBACK_TEST_MAIN(updater) {
   assert(short_commit("0123456789abcdef") == "0123456789ab");
   assert(short_commit("abc") == "abc");
 
-  // Reconnect backoff (durable/dbus-reconnect.md): exponential from 1s, doubling, capped at 60s.
-  // The shift is clamped so a large attempt index is defined, not UB (review N9).
+  // Reconnect backoff: doubling from 1 s, capped at 60 s, defined for any attempt index.
   assert(reconnect_delay_ms(0) == 1000);
   assert(reconnect_delay_ms(1) == 2000);
   assert(reconnect_delay_ms(2) == 4000);
@@ -90,43 +81,35 @@ DECKBACK_TEST_MAIN(updater) {
   assert(reconnect_should_give_up(12));
   assert(reconnect_should_give_up(13));
 
-  // create() always yields a usable object: the real backend where sd-bus is compiled in, else a
-  // stub.
+  // create() yields the real backend where sd-bus is compiled in, else a stub.
   auto up = Updater::create(UpdaterConfig{});
   assert(up);
-  (void)up->backend_live();  // must not crash whether or not a session bus exists
+  (void)up->backend_live();
 
   // stop() before start() is a no-op.
   up->stop();
 
-  // start()+stop() must be safe even when the portal is unreachable: start() may launch a thread
-  // that self-exits on a failed CreateUpdateMonitor, and stop() must still join it — and be
-  // idempotent.
+  // start() may launch a thread that self-exits when the portal is unreachable; stop() still joins
+  // it, idempotently.
   up->start();
   up->stop();
   up->stop();
 
-  // A notify-mode instance (auto_deploy=false) with a CDP port set is still a no-op off-Deck: no
-  // toast can fire without a delivered update, and request_update() is safe before/after
-  // start/stop.
+  // Notify mode: request_update() is safe with no pending update, before and after start/stop.
   auto up2 = Updater::create(
       UpdaterConfig{.auto_deploy = false, .cdp_port = 65000, .on_terminal = nullptr});
-  up2->request_update();  // no pending update, no portal: must not crash
+  up2->request_update();
   up2->start();
   up2->request_update();
   up2->stop();
 
-  // An auto-deploy instance is lifecycle-safe off-Deck too: the consent seeder finds no
-  // /.flatpak-info outside a sandbox and skips, and a missing portal still leaves the updater
-  // inert.
+  // Auto-deploy outside a sandbox (no /.flatpak-info) stays inert.
   auto up3 = Updater::create(UpdaterConfig{.auto_deploy = true, .on_terminal = nullptr});
   up3->start();
   up3->stop();
 
-  // The one deploy failure with a different remedy: the portal refusing a build that widens the
-  // sandbox. Keyed on the D-Bus error NAME, because the message is run through gettext and is not
-  // English on every host — matching only the message would leave a localized Deck showing a
-  // generic "try again" for something retrying can never fix.
+  // A portal refusal because the update widens the sandbox. Keyed on the D-Bus error name, since
+  // the message is localized.
   assert(is_permission_change_failure("org.freedesktop.DBus.Error.NotSupported", ""));
   assert(is_permission_change_failure(
       "", "Self update not supported, new version requires new permissions"));
@@ -135,9 +118,7 @@ DECKBACK_TEST_MAIN(updater) {
   assert(!is_permission_change_failure("org.freedesktop.DBus.Error.Failed", "network unreachable"));
   assert(!is_permission_change_failure("", ""));
 
-  // UpdateState is the updater->UI hand-off: availability + the commit, nothing else. Dismissal
-  // ("ignore this version") is keyed to the commit via the on-disk dot marker
-  // (decide_notification), so a newer commit re-arms the pill without any state here.
+  // UpdateState carries availability and the commit from updater to UI.
   UpdateState state;
   assert(!state.available());
   assert(state.commit().empty());

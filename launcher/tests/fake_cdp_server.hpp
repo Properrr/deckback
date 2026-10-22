@@ -1,12 +1,11 @@
 #pragma once
-// A loopback fake of Cobalt's --remote-debugging-port endpoint, shared by the devtools and player
-// tests. Serves GET /json/list for target discovery, performs the WebSocket upgrade, and answers
-// Runtime.evaluate frames. Reply shape is chosen from markers or from the real expression text:
-//   *  "pause()" in the expression  -> a number (a stand-in currentTime), for the suspend
-//   checkpoint
-//   *  "play()"  in the expression  -> boolean true, for the resume nudge
-//   *  WANT_NUM / WANT_VOID / WANT_EXC / WANT_NOISE -> explicit shapes for the codec-level tests
-//   *  otherwise -> boolean == playing() (defaults true), the is-playing poll answer
+// A loopback fake of Cobalt's --remote-debugging-port endpoint. Serves GET /json/list, performs the
+// WebSocket upgrade, and answers CDP frames. The reply shape is chosen from the expression text:
+//   *  "pause()" -> a number (a stand-in currentTime)
+//   *  "play()"  -> boolean true
+//   *  WANT_NUM / WANT_VOID / WANT_EXC / WANT_NOISE / WANT_STR / WANT_TRAP -> explicit shapes
+//   *  otherwise -> boolean == playing() (defaults true)
+// Connections are served one at a time.
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
@@ -89,14 +88,12 @@ class FakeServer {
 
   int port() const { return port_; }
   void set_playing(bool p) { playing_.store(p); }
-  // The other two signals PlayerController's poll bitmask carries (watch view up / text field
-  // focused), so a test can drive the input-layer switch without a real Leanback.
+  // The other bits of PlayerController's poll bitmask: watch view open, text field focused.
   void set_player_open(bool p) { player_open_.store(p); }
   void set_text_focused(bool p) { text_focused_.store(p); }
-  // Whether the page exposes a soft-mic button (the V0 question). Default: it does.
 
-  // Page.navigate fails with this errorText for any URL except about:blank. "" = navigations
-  // succeed. Models a network outage: `about:blank` still commits, so the error page can be drawn.
+  // Page.navigate fails with this errorText for any URL except about:blank ("" = succeed). Models a
+  // network outage in which about:blank still commits.
   void set_nav_error(std::string e) {
     std::lock_guard lk(req_mu_);
     nav_error_ = std::move(e);
@@ -107,9 +104,8 @@ class FakeServer {
   void clear_error_page() { error_page_up_.store(false); }
   bool saw_reload() const { return saw_reload_.load(); }  // was a Page.reload request received?
 
-  // What osd.js `op:"state"` returns: a live "tab=..;idx=.." string, "detached" (a keep-alive'd
-  // node momentarily off-DOM), or "gone" (JS context wiped by a full reload). Drives the OSD
-  // reconciler.
+  // What osd.js `op:"state"` returns: "tab=..;idx=..", "detached" (node off-DOM), or "gone" (JS
+  // context wiped by a reload).
   void set_osd_state(std::string s) {
     std::lock_guard lk(req_mu_);
     osd_state_ = std::move(s);
@@ -119,8 +115,8 @@ class FakeServer {
     std::lock_guard lk(req_mu_);
     osd_cmd_reply_ = std::move(s);
   }
-  // List a service worker BEFORE the page in /json/list, as Chromium does when the worker was
-  // active last. `last_ws_path` is the path the client upgraded on.
+  // List a service worker before the page in /json/list. `last_ws_path` is the path the client
+  // upgraded on.
   void set_list_decoy(bool on) { list_decoy_.store(on); }
   std::string last_ws_path() {
     std::lock_guard lk(req_mu_);
@@ -130,7 +126,7 @@ class FakeServer {
   void close_after_frames(int n) { close_after_.store(n); }
   // Hold the Page.navigate reply this long, as Chromium does until the navigation commits.
   void set_navigate_delay_ms(int ms) { navigate_delay_ms_.store(ms); }
-  // Hold the reply to every frame naming `method` this long. Widens a race window on demand.
+  // Hold the reply to every frame naming `method` this long.
   void set_method_delay_ms(std::string method, int ms) {
     std::lock_guard lk(req_mu_);
     delay_method_ = std::move(method);
@@ -147,22 +143,16 @@ class FakeServer {
     std::lock_guard lk(req_mu_);
     return gestures_.empty();
   }
-  // Whether the persistent Settings button is still painted. Lets the OSD unit test model a
-  // same-URL document reload: the old local `button_shown_` flag survives, the DOM does not.
+  // Whether the persistent Settings button is still painted (false models a document reload).
   void set_osd_button_present(bool present) { osd_button_present_.store(present); }
-  // Model a Leanback reload deleting an injected overlay node out from under us.
+  // Whether an injected overlay node is still in the document (false models a reload).
   void set_overlay_present(bool present) { overlay_present_.store(present); }
 
-  // How many WebSocket sessions and /json/list probes this server has served. Every DevToolsClient
-  // for one host:port shares a single CdpSession, so N clients must produce exactly ONE of each --
-  // this is the assertion behind that claim. Note this fake serves connections SERIALLY, so the
-  // seven-independent-sockets design could not even have passed the test below.
+  // How many WebSocket sessions and /json/list probes this server has served.
   int ws_upgrades() const { return ws_upgrades_.load(); }
   int http_gets() const { return http_gets_.load(); }
 
-  // Every CDP text frame the client sent, in order. Lets a test assert on the *wire format* of an
-  // Input.dispatchKeyEvent rather than on our own return value (TEST-PLAN §0: never assert on a
-  // value we chose). `take_requests` drains, so each test starts from a clean slate.
+  // Drains every CDP text frame the client sent, in order.
   std::vector<std::string> take_requests() {
     std::lock_guard lk(req_mu_);
     return std::exchange(reqs_, {});
@@ -244,10 +234,7 @@ class FakeServer {
           k == std::string::npos ? "0" : e.substr(k + 5, e.find_first_of(",}", k) - (k + 5));
 
       std::string result;
-      // Page.navigate. Real CDP reports a failed navigation as a *successful* command carrying an
-      // `errorText` field — never as a CDP error — which is exactly the trap the navigator has to
-      // avoid. about:blank always commits, even when the network is down, so the error page itself
-      // can always be drawn.
+      // Like real CDP, a failed navigation is a successful command carrying `errorText`.
       if (e.find("Page.navigate") != std::string::npos) {
         if (const int ms = navigate_delay_ms_.load(); ms > 0)
           std::this_thread::sleep_for(std::chrono::milliseconds(ms));
@@ -275,15 +262,11 @@ class FakeServer {
       } else if (e.find("/*osd-button-state*/") != std::string::npos) {
         result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
                  (osd_button_present_.load() ? "true" : "false") + "}}";
-        // PageOverlay's "is my node still in the document?" probe. Settable so a test can model the
-        // thing that actually happens on a Deck: Leanback reloads and silently deletes it.
       } else if (e.find("/*overlay-state*/") != std::string::npos) {
         result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
                  (overlay_present_.load() ? "true" : "false") + "}}";
       } else if (e.find("\\\"op\\\":\\\"state\\\"") != std::string::npos) {
-        // The osd.js expression is JSON-escaped into the CDP frame, so the {"op":"state"} arg
-        // arrives as \"op\":\"state\". Match that, and reply with whatever paint state the test
-        // set.
+        // The osd.js arg arrives JSON-escaped inside the CDP frame.
         std::lock_guard lk(req_mu_);
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"" + osd_state_ + "\"}}";
       } else if (e.find("\\\"op\\\":\\\"cmd\\\"") != std::string::npos) {
@@ -294,18 +277,12 @@ class FakeServer {
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"ok\"}}";
       else if (e.find("\\\"op\\\":\\\"close\\\"") != std::string::npos)
         result = "\"result\":{\"result\":{\"type\":\"string\",\"value\":\"closed\"}}";
-      // The REAL CDP shape: a thrown expression nests `exceptionDetails` inside `result`, alongside
-      // the RemoteObject. This used to emit it at the top level — which no Chromium ever sends, and
-      // which only "worked" against a client that searched the whole payload for the key rather
-      // than reading its documented path. A fake that models the wrong shape cannot test the
-      // client that reads the right one.
+      // A thrown expression nests `exceptionDetails` inside `result`, as real CDP does.
       else if (e.find("WANT_EXC") != std::string::npos)
         result =
             "\"result\":{\"result\":{\"type\":\"object\",\"subtype\":\"error\"},"
             "\"exceptionDetails\":{\"text\":\"boom\"}}";
-      // The error page's retry flag. Modelled as a real one-shot: the expression both reads and
-      // clears `window.__deckbackRetry`, so a launcher that forgets to consume it would retry
-      // forever off a single keypress — and only a stateful fake can catch that.
+      // The error page's retry flag: a one-shot, read and cleared by the same expression.
       else if (e.find("window.__deckbackRetry=false;return r;") != std::string::npos)
         result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
                  (retry_flag_.exchange(false) ? "true" : "false") + "}}";
@@ -315,13 +292,12 @@ class FakeServer {
                e.find("innerHTML") == std::string::npos)
         result = std::string("\"result\":{\"result\":{\"type\":\"boolean\",\"value\":") +
                  (error_page_up_.load() ? "true" : "false") + "}}";
-      // The error page injection itself. Records that the page went up.
+      // The error page injection.
       else if (e.find("documentElement.innerHTML") != std::string::npos) {
         error_page_up_.store(true);
         result = "\"result\":{\"result\":{\"type\":\"boolean\",\"value\":true}}";
       }
-      // PlayerController's poll: one expression, three signals, returned as a bitmask number.
-      // Keyed on `activeElement`, which appears only in that expression.
+      // PlayerController's poll (the only expression using `activeElement`): a bitmask number.
       else if (e.find("activeElement") != std::string::npos)
         result = "\"result\":{\"result\":{\"type\":\"number\",\"value\":" +
                  std::to_string((playing_.load() ? 1 : 0) | (player_open_.load() ? 2 : 0) |
@@ -332,13 +308,11 @@ class FakeServer {
       else if (e.find("WANT_VOID") != std::string::npos)
         result = "\"result\":{\"result\":{\"type\":\"undefined\"}}";
       else if (e.find("WANT_STR") != std::string::npos)
-        // A JSON-escaped URL (\/ escapes) to exercise the string reader's unescaping.
+        // A URL with \/ escapes.
         result =
             "\"result\":{\"result\":{\"type\":\"string\","
             "\"value\":\"https:\\/\\/www.youtube.com\\/tv#\\/\"}}";
-      // A page string that merely CONTAINS the failure markers. Nothing here is a CDP error, so the
-      // client must return the string. Reading `error` / `exceptionDetails` by path rather than by
-      // searching the payload is what makes that possible.
+      // A page string that merely contains the failure markers; not a CDP error.
       else if (e.find("WANT_TRAP") != std::string::npos)
         result =
             "\"result\":{\"result\":{\"type\":\"string\","

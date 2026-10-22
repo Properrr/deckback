@@ -1,8 +1,6 @@
-// L1: the logind backend's reconnect, against a real dbus-daemon standing in for the system bus.
-// A private bus (DBUS_SYSTEM_BUS_ADDRESS) carries a PrepareForSleep to the suspend hook; then the
-// daemon is killed and restarted on the same socket, and a second PrepareForSleep must arrive too.
-// Before busloop.hpp the platform loop had no reconnect: after the drop it warned once a second
-// forever and the second signal never arrived.
+// The logind backend's reconnect, against a real dbus-daemon standing in for the system bus. A
+// private bus (DBUS_SYSTEM_BUS_ADDRESS) carries a PrepareForSleep to the suspend hook; then the
+// daemon is restarted on the same socket, and a second PrepareForSleep must arrive too.
 //
 // SKIPs (passes) without libsystemd or dbus-daemon. logind is not on this bus, so the Inhibit calls
 // fail and are logged; only the PrepareForSleep(true) path is driven, because the (false) path
@@ -83,8 +81,8 @@ struct PrivateBus {
     pid = fork();
     if (pid < 0) return false;
     if (pid == 0) {
-      // Dies with the test (an assert() abort runs no destructor), and never holds ctest's output
-      // pipe: an orphaned daemon writing to it kept ctest waiting for EOF until its timeout.
+      // Dies with the test (an assert() abort runs no destructor), and keeps off ctest's output
+      // pipe so ctest never waits on it for EOF.
       prctl(PR_SET_PDEATHSIG, SIGKILL);
       if (getppid() != parent) _exit(1);
       const int null = open("/dev/null", O_RDWR | O_CLOEXEC);
