@@ -8,13 +8,12 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.10] - 2026-10-21
+
 ### Changed
-- **Check for updates only checks.** It now asks the Deckback repo directly and tells you what it
-  found; nothing installs until you choose *Update now*. Deckback also checks once each time it
-  starts, so a new release shows up right away instead of up to half an hour later (or never, on a
-  metered connection).
-- **Smaller updates.** The repo now keeps its history, so an update downloads only what changed:
-  measured on the real releases, going from 0.0.8 to 0.0.9 this way is 4 MB instead of 77 MB.
+- **Check for updates only checks.** It tells you whether a new version is out; nothing installs
+  until you choose *Update now*. Deckback also checks each time it starts, so a new version shows
+  up right away.
 
 ### Added
 - **Update progress.** *Updating…* now shows how far along it is, e.g. "step 2 of 3 (45%)".
@@ -23,32 +22,28 @@ minor versions may include breaking changes.
 
 ### Fixed
 - "Updating…" could stay on screen until you restarted; it now reports a failure after 10 minutes
-  of silence, and a refused update says so.
-- After "Check for updates" said you were on the latest version, a release published later in the
-  same session was never offered.
-- Re-running the one-line installer, the documented fix for an update that needs new permissions,
-  now really updates the app instead of saying it is already installed.
+  without progress, and a refused update says so.
+- A version released while Deckback was open was never offered once a check had found nothing new.
+- Re-running the one-line installer, the fix for an update that needs new permissions, now really
+  updates the app instead of saying it is already installed.
 - Deckback no longer uses a full CPU core while no controller is connected.
-- Backing out of the menu while holding Y could quit the app.
+- Backing out of the settings menu while holding Y could quit the app.
 - With touch gestures on, tapping the settings menu could start the video behind it.
-- If the launcher was killed, the engine kept running and blocked the next launch.
-- A rare crash when the connection to the engine was re-established from two places at once, and a
-  page that took more than a few seconds to load being restarted over and over.
-- When the engine was slow to answer while the settings menu was open, the menu stayed on screen
-  but your buttons went to YouTube behind it.
+- After Deckback was force-closed, it could refuse to open again until the Deck restarted.
+- A rare crash, and slow-loading pages being reloaded over and over.
+- When Deckback was slow to respond with the settings menu open, the menu stayed on screen while
+  your buttons went to the video behind it.
 - A D-pad direction let go while the first-run controls card was up came back as a phantom move once
   the card closed.
-- Waking from sleep no longer holds up other system events while Deckback waits for the network,
-  and quitting during that wait is no longer delayed by up to 8 seconds.
-- If the system's message bus restarted, sleep handling and keep-awake stopped working until the
-  next launch; Deckback now reconnects.
-- A Widevine CDM cut short by a crash or a full disk was treated as installed forever; it is now
-  re-checked at launch and fetched again.
-- `"touch_gestures"` in the keymap now binds the gesture toggle, like its two other names.
-- Controllers that report their sticks or triggers on a different scale than Steam Input's virtual
-  pad are now scaled to it, instead of a small push reading as a full one.
-- Less engine chatter during playback: Deckback no longer turns on network event reporting, which it
-  never used.
+- Quitting, or putting the Deck back to sleep, right after waking it could be held up for up to 8
+  seconds.
+- If a system service restarted, sleep handling and keep-awake during playback stopped working until
+  the next launch; Deckback now recovers on its own.
+- A protected-video component (Widevine) cut short by a crash or a full disk is now detected at
+  launch and downloaded again.
+- In a custom keymap, `touch_gestures` now binds the gesture toggle, like its other two names.
+- Controllers that report their sticks or triggers on a different scale are now read correctly,
+  instead of a small push counting as a full one.
 
 ## [0.0.9] - 2026-07-31
 
@@ -258,7 +253,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.9...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.10...HEAD
+[0.0.10]: https://github.com/properrr/deckback/releases/tag/v0.0.10
 [0.0.9]: https://github.com/properrr/deckback/releases/tag/v0.0.9
 [0.0.8]: https://github.com/properrr/deckback/releases/tag/v0.0.8
 [0.0.7]: https://github.com/properrr/deckback/releases/tag/v0.0.7
