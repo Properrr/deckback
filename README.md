@@ -30,8 +30,8 @@ handheld.
 ## ✨ Features
 
 - **Console-style controller navigation** — the whole TV UI driven from the gamepad (A select,
-  B back, D-pad navigate, LB/RB seek ∓10 s, sticks scroll), mapped at the embedder layer, not
-  fragile page scripting.
+  B back, D-pad navigate, LB/RB scrub, sticks scroll), mapped at the embedder layer, not fragile
+  page scripting.
 - **Hardware-decoded video** — VP9 through VA-API on the Deck's APU, measured at **~5.6 W** under
   1080p playback (well under the ≤9 W target); H.264/AAC fallback built in, AV1 steered away from.
 - **Clean sleep/resume** — suspends and wakes with the app alive, playback and audio intact — no
@@ -50,7 +50,7 @@ handheld.
 - **In-app Settings (OSD)** — a controller-driven overlay (Menu button) for key hints, an About
   panel, and self-update status — drawn by the launcher, so a YouTube UI change can't break it.
 - **Self-update, opt-in and painless** — detects a new release from our Flatpak repo and offers to
-  install it from inside the app (notify mode; verified end-to-end on both OLED and LCD APUs).
+  install it from inside the app (notify mode; verified end-to-end on both OLED and LCD units).
 - **Handheld-appropriate touch** — the touchscreen is made inert by default so a stray palm tap
   never yanks you out of what you're watching; gestures are one setting away when you want them.
 - **Stays awake while you watch** — and only while you watch: the screen is allowed to sleep again
@@ -76,17 +76,17 @@ handheld.
 - Deckback does **not** bundle, redistribute, or circumvent any DRM. The Widevine CDM is never
   shipped by this project; a user may optionally supply their own. See [`docs/legal.md`](docs/legal.md).
 
-- **Targets:** Steam Deck **OLED (Sephiroth)**, SteamOS 3.x, Game Mode only. The **LCD (Van Gogh)** shares the same code path and should work, but we own no LCD unit and have never tested one — treat it as best-effort.
+- **Targets:** Steam Deck **OLED (Sephiroth)**, SteamOS 3.x, Game Mode only. The **LCD (Van Gogh)**
+  shares the same code path and should work, but we own no LCD unit and, apart from self-update,
+  have never tested one — treat it as best-effort.
 - **App id:** `io.github.properrr.deckback`
 - **Status:** pre-alpha, and honest about it. It boots, signs in, browses and plays on a real Deck in
-  Game Mode; controller navigation, persistent sign-in, sleep/resume (verified 2026-07-10) and audio
-  work. It **ships hardware VP9 decode** (VA-API): blocked on m114 by green-band corruption, it was
-  re-tested and came back **clean on M138/cobalt-27** (the current pin) and verified on-Deck
-  2026-07-10 — at **5.6 W** average under HW-decode playback (`just power`, OLED), under the ≤~9 W
-  target. Suspend/resume (`just soak`) also passed on 2026-07-10. The touchscreen is
-  made **inert by default** (`disable_touch`, verified 2026-07-10); the earlier touch-*lock* is proven
-  dead and disabled. Voice search, Widevine, and text entry are unverified or unbuilt. Every result so
-  far is from an **OLED** unit — the LCD has run nothing.
+  Game Mode; controller navigation, persistent sign-in, sleep/resume (`just soak`) and audio work.
+  It **ships hardware VP9 decode** (VA-API), verified pixel-clean on-Deck at **5.6 W** average under
+  playback (`just power`, OLED), under the ≤~9 W target. The touchscreen is **inert by default**
+  (`disable_touch`), with opt-in touch gestures; both verified on-Deck. Voice search, Widevine, and
+  text entry are unverified or unbuilt. Apart from self-update, every result so far is from an
+  **OLED** unit.
 - **How it works:** [`docs/HOW-IT-WORKS.md`](docs/HOW-IT-WORKS.md) walks through every subsystem and
   its honest status. The full design lives in
   [`.internal/steamdeck-cobalt-youtube-plan.md`](.internal/steamdeck-cobalt-youtube-plan.md); the
@@ -158,10 +158,11 @@ standard buttons reach the in-app input layer:
 
 | Button | Action | Button | Action |
 |---|---|---|---|
-| **A** | Select / play | **D-pad** | Navigate |
-| **B** | Back | **LB / RB** | Seek ∓10 s |
-| **X** | Details | **Y** | Voice / search |
-| **View** | Toggle controls card | **Menu** | Home |
+| **A** | Select / play | **D-pad** / left stick | Navigate |
+| **B** | Back | **LB / RB** | Scrub back / forward |
+| **X** | Play / pause | **LT / RT** | Previous / next chapter |
+| **View** | Toggle captions | **Menu** | Settings menu |
+| **Y** / **R4** | Touch gestures on / off (when enabled) | **Right stick** | Fast scroll |
 
 > ℹ️ The one-line installer already sets the library artwork. Steam only exposes a **name and icon**
 > for non-Steam shortcuts — there is no *description* field — so that part of a store listing simply
@@ -199,8 +200,8 @@ install and the store link, and updates will arrive automatically. Until then, u
 |---|---|
 | `cobalt/` | gclient-managed Chromium/Cobalt checkout (gitignored), pinned by `DEPS.pin` |
 | `patches/` | rebaseable quilt series applied over the pinned commit (C++17, in-tree toolchain) |
-| `launcher/` | standalone C++23 shim: config, sleep-watcher, idle-inhibit, watchdog, CDM fetcher |
-| `config/` | `app.json` (UA/URL/caps/keymap, hot-swappable), injected JS (`av1_steering.js`, `no_pointer.js`) + `steam_input.vdf` controller template |
+| `launcher/` | standalone C++23 shim: config, gamepad + touch input, sleep-watcher, idle-inhibit, OSD menu + self-update, watchdog, CDM fetcher |
+| `config/` | `app.json` (UA/URL/caps/keymap, hot-swappable), injected page scripts (`scripts/`) + `steam_input.vdf` controller template |
 | `args/` | GN arg presets: `dev`, `deck`, `asan` |
 | `docker/`, `docker-compose.yml` | Debian 12 build env matching Cobalt trunk (source bind-mounted, never baked in) |
 | `scripts/`, `justfile` | command runner — every `just` recipe delegates to a `scripts/*.sh` |

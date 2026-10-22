@@ -9,8 +9,8 @@ sources: deep-research pass 2026-07-09 (25 claims, 3-vote adversarial verify —
 
 Platform-side (not Cobalt-version-side) facts driving the P4 power/smoothness work. Hard
 constraint: everything must work from a Flatpak/user session on an immutable rootfs — root-only
-levers are marked infeasible. M114-specific flag facts live in `../milestones/m114.md`
-§"Platform-optimization research" (re-derive on bump).
+levers are marked infeasible. Engine flag facts are version-specific: re-derive them against the
+pinned tree on each bump (`../../MIGRATION.md`).
 
 ## Compositor (gamescope, Game Mode)
 
@@ -47,17 +47,17 @@ levers are marked infeasible. M114-specific flag facts live in `../milestones/m1
   backoff already covers the reconnect side.
 - **Audio wakeups are tunable from the user session**: PipeWire quantum via the pulse-compat path
   Chromium uses (`PULSE_LATENCY_MSEC` env) and Chromium's `--audio-buffer-size=<frames>` (switch
-  verified present in M114). Bigger buffers = fewer wakeups = better idle residency during
-  playback; must verify A/V sync unharmed.
+  present in the M114 tree; re-check on each bump). Bigger buffers = fewer wakeups = better idle
+  residency during playback; must verify A/V sync unharmed.
 
 ## Memory / storage
 
 - SteamOS 3.6+ defaults to **zram** swap (~half of RAM, zstd, swappiness 60 — single unverified
   source): memory pressure on the 16 GB shared LPDDR5 is survivable, but decode surfaces and
   Chromium heaps compete with the GPU carve-out. Single-origin kiosk lever: `--process-per-site`
-  (verified present in M114) collapses renderer count.
-- Shader/Gr caches and the profile live under `--data-path` (persistent since the P1 flag fix) —
-  keep the Flatpak on internal storage; a microSD-resident profile slows cold start (unmeasured).
+  (present in the M114 tree; re-check on each bump) collapses renderer count.
+- Shader/Gr caches and the profile live under the persistent `--data-path` — keep the Flatpak on
+  internal storage; a microSD-resident profile slows cold start (unmeasured).
 
 ## Quirks
 
@@ -72,5 +72,5 @@ levers are marked infeasible. M114-specific flag facts live in `../milestones/m1
   surfaces as disjoint dma-buf planes, breaking Chromium's zero-copy import on AMD; workarounds
   only apply under X11/XWayland with Vulkan output (unverified,
   [thubble gist](https://gist.github.com/thubble/235806c4c64b159653de879173d24d9f)). Engine side,
-  M114 has no zero-copy-GL feature at all (tree-verified, m114.md). The plan §P4 "zero-copy if
+  M114 had no zero-copy-GL feature (not re-checked on M138). The plan §P4 "zero-copy if
   achievable (else tolerate one copy)" hedge is resolved to the fallback.

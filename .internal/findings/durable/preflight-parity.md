@@ -1,6 +1,6 @@
-# Preflight parity — local and CI run the SAME gate, or they drift and you ship red
+# Preflight parity — local and CI run the SAME gate
 
-**Status:** ★ ADOPTED 2026-07-13. Applies to every push and every release, on every machine.
+**Status:** adopted. Applies to every push and every release, on every machine.
 
 ## The rule
 
@@ -20,52 +20,35 @@ share it, so none can drift from the others:
 and refuses unless **every check-run on the tagged commit is `completed/success`** (`FORCE=1` to
 override for an offline/emergency build).
 
-## What preflight runs (mirrors `.github/workflows/lint.yml` exactly)
+## What preflight runs
 
 | target | checks |
 |---|---|
-| `shell` | `shellcheck -S warning scripts/*.sh tests/harness/*.sh` + `tests/harness/run.sh` |
+| `shell` | `shellcheck -S warning scripts/*.sh scripts/sim/*.sh tests/harness/*.sh` + `tests/harness/run.sh` + `scripts/check-permissions.sh` (no `finish-args` addition against any self-updatable release tag) |
 | `launcher` | clang-format `--dry-run --Werror` + gcc `Release` build & `ctest` + clang build (`-Wall -Wextra -Werror`) |
 | `gn` | `args/*.gn` contain overrides only (no `target_os`/`target_cpu`/`is_debug`/`is_official_build`) |
 
-No Chromium checkout, no Deck, no Docker — it runs on any contributor's machine.
+No Chromium checkout, no Deck, no Docker — it runs on any contributor's machine. Exit codes follow
+the harness taxonomy: `2` a check failed, `3` a required tool/lib is missing, `5` usage.
 
 ## Local tool requirements (for CI-equivalent results)
 
 - **Pinned lint tools**: clang-format always comes from a cached venv at exactly
-  `CLANG_FORMAT_VERSION` (`scripts/lib.sh`, 23.1.3), in CI too, because releases format
-  differently; `shellcheck` is bootstrapped there (`shellcheck-py`) when the system has none.
-- **Launcher toolchain** (must be installed; preflight errors with `EX_ENV` if absent):
-  `cmake`, `ninja`, `g++`, `clang++`, and the dev libs `libsystemd-dev libcurl4-openssl-dev
-  libpulse-dev libxcb1-dev` — install these so the local build matches CI's fully-featured one.
+  `CLANG_FORMAT_VERSION` (`scripts/lib.sh`, **23.1.3**, the PyPI wheel), in CI too, because
+  clang-format releases format differently; `shellcheck` is bootstrapped there (`shellcheck-py`)
+  when the system has none.
+- **Launcher toolchain** (must be installed; preflight exits `3` if absent): `cmake`, `ninja`,
+  `g++`, `clang++`, and the dev libs `libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev`.
   Without `libxcb1-dev`/`libpulse-dev`, features compile out and a bug in that code can pass locally
   yet fail CI.
-- **Harness suite** needs Python 3 + **Pillow** (`python3-pil`); preflight errors clearly if missing.
+- **Harness suite** needs Python 3 + **Pillow** (`python3-pil`); preflight exits `3` if missing.
 
-## The incident this exists to prevent (2026-07-13)
+## Why both compilers
 
-The seek/ScriptLibrary/build-slimming commits were pushed and CI went red **three times in a row**,
-each a different check that the old pre-push hook did not run:
+clang has warnings gcc lacks (e.g. `-Wunused-private-field`), and test binaries do not get every
+private define of the main target (e.g. `DECKBACK_HAVE_XCB`), so a field can be unused only in a test
+build. Only running both builds locally catches that.
 
-1. **Stale test** — `test_cdp_lib.py` still pointed at `config/av1_steering.js` after the
-   ScriptLibrary refactor moved it to `config/scripts/`. The old hook ran shellcheck + clang-format
-   but **not the harness suite**, so it never saw the `FileNotFoundError`.
-2. **Unformatted C++** — 16 launcher files were not clang-format-18 clean. (The hook *did* cover this,
-   but only helps on a machine where `just hooks` was run.)
-3. **clang-only `-Werror`** — `TouchModeGuard::poll_ms_` is unused in the no-xcb build of `loop()`
-   that the `touchmode_test` target always compiles (the `DECKBACK_HAVE_XCB` define is PRIVATE to the
-   `deckback-launcher` target, so test binaries never get it). `gcc` has no `-Wunused-private-field`;
-   `clang` does. The old hook ran **neither the gcc nor the clang launcher build**, so it could not
-   catch this — and it was *masked* in CI until #2 was fixed, because the clang-format step failed
-   first and short-circuited the job.
-
-Root causes: **incomplete local checks**, **two definitions that could drift** (hook vs CI), and
-**missing/unpinned local tools**. Preflight closes all three: one definition, shared by hook and CI,
-with pinned tools bootstrapped on demand.
-
-## Regression coverage
-
-Each of the three failures above was reproduced against `preflight` and confirmed to exit `2`
-(`EX_ASSERT` — "the product is wrong"): the stale path fails `preflight shell`; unformatted code and
-a removed `[[maybe_unused]]` each fail `preflight launcher`. If you touch preflight, re-run those
-three.
+Origin, in one line: three consecutive red CI pushes — a stale harness path, unformatted C++, and a
+clang-only `-Werror` — each slipped through a hook that ran only part of CI. Each was reproduced
+against preflight and exits `2`; re-run those three cases if you change preflight.

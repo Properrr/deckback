@@ -1,6 +1,6 @@
 ---
 scope: durable
-verified: 2026-07-08
+verified: 2026-07-10
 sources:
   - .internal/steamdeck-cobalt-youtube-plan.md
 ---
@@ -12,18 +12,17 @@ Approaches that stay valid across Cobalt versions. The *implementation* of each 
 ## Media
 
 - **Format steering is the highest-leverage battery fix.** Shape `MediaCapabilities`/`canPlayType`
-  to report AV1 unsupported and VP9/H.264 supported (and `powerEfficient=true` if a working
-  hw-decode path ever lands — see below) so YouTube's ABR picks hw-friendly streams. This is
-  independent of whether hw decode is done yet.
-- **Superseded on M138 (2026-07-10): we ship hardware decode** — the same flags are pixel-clean on
-  M138's ANGLE (OLED, dual gate, 5.6 W; `milestones/m138.md`). The m114 history follows.
-- **(m114) We shipped software decode.** VA-API hardware decode was tried and engaged on-Deck but **renders
-  green-band corruption on every frame** — reverted 2026-07-10; any re-enable is gated on a
-  pixel-clean result, never a decoder-name check. See `hardware.md` and `milestones/m114.md`
-  §"VA-API decode is VISUALLY CORRUPT". Do **not** assert "no AV1 hardware on either Deck" as fact:
-  it's disputed (libva on the OLED advertises `AV1Profile0` under VLD; we've never observed AV1
-  decoding *through* `VaapiVideoDecoder`, and the LCD is untested), so AV1 steering stays default-on
-  regardless — see `hardware.md`.
+  to report AV1 unsupported and VP9/H.264 supported so YouTube's ABR picks hw-friendly streams.
+  This is independent of the decode path.
+- **We ship VA-API hardware decode on M138** (OLED, dual gate: `VaapiVideoDecoder` +
+  `kIsPlatformVideoDecoder` AND a pixel-clean composited screenshot; ≈5.6–5.9 W under the ≤~9 W
+  gate; `hardware.md`, `milestones/m138.md`). The same flags rendered green-band corruption on
+  every frame on m114 while every decoder metric passed, so **after any Cobalt bump hardware decode
+  is re-enabled only on a pixel-clean result, never on a decoder-name check.** LCD is untested.
+- **Do not assert "no AV1 hardware on either Deck" as fact.** It is disputed: libva on the OLED
+  advertises `AV1Profile0` under VLD, we have never observed AV1 decoding *through*
+  `VaapiVideoDecoder`, and the LCD is untested. AV1 steering stays default-on regardless — see
+  `hardware.md`.
 
 ## Identity & resilience
 
@@ -39,8 +38,9 @@ Approaches that stay valid across Cobalt versions. The *implementation* of each 
 ## Distribution
 
 - Flatpak on `org.freedesktop.Platform//25.08`, zypak-sandboxed (never `--no-sandbox`). Minimal
-  permissions. Self-hosted runner for Chromium-scale builds; free runners for lint only. Current
-  packaging facts: `packaging-toolchain.md`.
+  permissions — and no permission may be added once users are installed, because the portal then
+  refuses their self-update (`self-update.md`). Self-hosted runner for Chromium-scale builds; free
+  runners for lint only. Current packaging facts: `packaging-toolchain.md`.
 
 ## Risk register
 

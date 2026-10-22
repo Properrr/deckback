@@ -1,261 +1,157 @@
-# Self-update via the Flatpak portal (launcher/src/updater.cpp)
+# Self-update via the Flatpak portal (launcher/src/updater.cpp, updateprompt.cpp)
 
-## ★★★★ U1–U6 LANDED 2026-10-20 — off-device evidence only (no Deck, no production publish)
+**Status in one paragraph.** The portal path is **verified on hardware**: the notify round-trip
+(detect → Settings ▸ Updates → *Update now* → deploy → next launch runs the new version) passed
+against the production remote on the **OLED** (0.0.5 → 0.0.6, 2026-07-15) and was recorded the same
+day as confirmed on an **LCD** (Van Gogh) unit too — the only LCD result in the project, which owns
+no LCD unit (`decisions.md`). It passed again on the OLED for 0.0.7 → 0.0.8 (2026-07-24, ordinary
+Steam-shortcut launch). The consent seed, `Progress` status 2 (Done) and 3 (Failed), and the old
+check-by-deploy answering Empty are all observed on-Deck. **Off-device only** (L0, TSan, CI replay,
+harness): the ref probe, progress display, *Close now*, the stuck-deploy timeout, the stale-verdict
+fixes, linear repo history with bsdiff deltas, the live permission gate, and the recall runbook —
+T1 below is the pending gate; T2 passed with v0.0.10.
 
-**Launcher (U4/U5/U6, `updateprompt.cpp`).**
-- **The ref probe.** At launch and on *Check for updates* the launcher GETs
-  `repo/refs/heads/app/io.github.properrr.deckback/x86_64/master` (65 B, served with
-  `max-age=600`, verified 200 on the live site). It compares that with `[Instance] app-commit` from
-  `/.flatpak-info`: equal means "latest", different means an update to confirm. A check installs
-  nothing. The portal remains the only installer and signature verifier.
-- **Guards, each with an L0 test that fails without it:**
-  - The probe only ever ADDS availability: a CDN-stale "up to date" never hides a portal
-    announcement.
-  - A staged deploy (Done) is never re-offered.
-  - A commit the portal then answers Empty for is not re-announced by the probe, for 10 min (the
-    CDN's `max-age`, the likely cause).
-  - After a failed deploy, Check offers the same commit again: it is the retry the Failed text
-    promises.
-  - An unreadable repo falls back to the old portal check-by-deploy, the path verified on-Deck.
-  - No running commit (outside the sandbox) keeps the old behaviour.
-- **Keys.** Commits use the same 12-char short form as the portal (`short_commit`), so the
-  ignore and card markers dedup across both sources.
-- **Staging.** `DECKBACK_UPDATE_REF_URL` points the probe at a staging repo for T1.
-- **Progress (U5).** It reaches the tab ("step 2 of 3 (45%)"; `op` is 0-based per flatpak-portal
-  source), and every report restarts the 10-min no-answer timeout.
-- **Close now (U6).** Done offers it, through the same graceful exit as the Exit hold.
+## Why the portal
 
-**Release pipeline (U1/U2/U3, `scripts/publish-repo.sh`).**
-- **How a publish works:**
-  - Mirror the live repo (head + `DECKBACK_REPO_DEPTH`=2 parents).
-  - Gate the bundle's permissions against the live head (`metadata_permissions`, L0).
-  - `build-commit-from --timestamp=NOW` on top of the head.
-  - Generate the from-parent delta with ostree directly.
-  - Run `build-update-repo --generate-static-deltas --prune --prune-depth=2`.
-- **It fails closed.** An unreachable live repo exits 3. `DECKBACK_REPO_FRESH=1` (workflow input
-  `fresh_history`) starts a new history only on purpose.
-- **Correction to U1's premise.** "From-parent deltas make an update a few MB" was only true with
-  bsdiff on large files. ostree's default delta does not bsdiff files above its size cap, so the
-  ~159 MB `content_shell` ships whole whenever it changes. Measured on the real v0.0.8 → v0.0.9
-  bundles:
+The launcher runs **inside the Flatpak sandbox**, so it cannot run `flatpak update`. The sanctioned
+path for a sandboxed app to update itself is the **Flatpak portal** (`org.freedesktop.portal.Flatpak`),
+a privileged host service that updates **only this app's own ref, from this app's own origin remote**
+(our `--user` `deckback` remote) — no root, and for a `--user` install **no polkit/password prompt**
+(which Game Mode could not answer). Blast radius = Deckback. Updating the runtime and every other app
+is a separate `flatpak update` (Desktop Mode / Discover).
 
-  | Delta | Size |
-  |---|---|
-  | from-scratch | 77.1 MB |
-  | from-parent, flatpak defaults | 66.7 MB (63.8 MB of it the engine binary as a fallback object) |
-  | from-parent, `--max-bsdiff-size=512 --min-fallback-size=512` | **4.2 MB** |
+The update deploys a **new ostree commit without swapping the running deployment**, so playback is
+never interrupted; the new version binds on the **next launch**. The portal compares **ostree commits,
+not version strings**: version labels are cosmetic to it.
 
-  Generating the bsdiff delta took 40 s at 2.5 GB peak RSS, fine on the 16 GB Actions runner. A
-  release that leaves the engine untouched gets a small delta either way.
-- **Verified:**
-  - **Real-bundle end-to-end.** A local signed repo (throwaway key), with a real `flatpak --user`
-    client on 0.0.8, updated to 0.0.9 via the bsdiff delta: 4.2 MB, no whole-object fetches, and
-    the exact published commit. A repo holding two releases is 145 MB, against Pages' 1 GB.
-  - **Production mirror.** Run against the production repo (read-only, nothing deployed), the
-    `--depth=2` mirror pull worked even though the live head's parent 404s.
-  - **Same-tree republish.** Re-publishing the tree that is already live makes no commit: a safe
-    re-run.
-  - **`tests/harness/test_publish_repo.sh`, 27 checks**, green on flatpak 1.18.1/ostree 2025.6 and
-    on Ubuntu 24.04's 1.14.6/2024.5:
-    - the delta is used, asserted from the server's request log;
-    - a client two behind updates;
-    - a recall lands as a new commit the client takes as an ordinary update;
-    - `update --commit` goes back one release, and `mask` holds a version;
-    - a permission add exits 2, and an unreachable repo exits 3.
+## Portal interface (pinned so nobody re-derives it)
 
-    Against the pre-U1 script, 12 of the checks fail.
-- **Recall (U2):** RELEASING.md §"Recall a bad release". Turn the bad GitHub release back into a
-  draft, so the Updates tab's changelog stops offering it, and re-dispatch *release-pages* with the
-  last good tag.
+From `data/org.freedesktop.portal.Flatpak.xml`:
+- `org.freedesktop.portal.Flatpak` at `/org/freedesktop/portal/Flatpak`:
+  `CreateUpdateMonitor(a{sv} options) → o handle`
+- `org.freedesktop.portal.Flatpak.UpdateMonitor` (on the returned handle path):
+  - `Update(s parent_window, a{sv} options)` — we pass `""` + empty dict
+  - `Close()`
+  - signal `UpdateAvailable(a{sv})` — keys `running-commit`, `local-commit`, `remote-commit`
+  - signal `Progress(a{sv})` — keys `n_ops,op,progress,status,error,error_message`;
+    **status: 0 Running · 1 Empty (nothing to do) · 2 Done · 3 Failed**; `op` is 0-based.
 
-**Not verified — do these before claiming any of it:**
-- **T1 (Deck, staging repo, `DECKBACK_UPDATE_REF_URL`):**
-  - Launch with a newer staging commit: the badge appears within seconds of start.
-  - Check reads "latest" and installs nothing; the journal has no "deploy requested".
-  - Update now shows progress, then Close now exits cleanly.
-  - Relaunch from the Library runs the new commit.
-- **T2 (production):** the first real *release-pages* run. The production dry run mirrored
-  *unsigned* (no key on the workstation); the signed mirror pull has only been exercised against a
-  locally signed repo, so a key mismatch would first show here.
-  - It must log `Live head: 7869c172…` and `Published … (parent 7869c172…)`, and not hit the
-    permission gate.
-  - Then a 0.0.9 Deck should download ~MBs, not 77 MB, if the engine is unchanged.
-- **U8 stays open.** A bundle with `--repo-url` installs as a `deckback-origin` remote, which
-  `channel_of_origin` treats as the DEV channel and `web-install.sh` refuses. It needs the dev and
-  release origins told apart by URL first.
+`updater.cpp` mirrors `platform.cpp`'s shape on the **session** bus (`sd_bus_open_user`): one owned
+event-loop thread, sd-bus only, a stub when `<systemd/sd-bus.h>` is absent. The two sync calls carry
+a 5 s timeout so a missing portal fails fast instead of sd-bus's 25 s default.
 
-## ★★★ REVIEW 2026-10-20 — what is still weak, what was fixed, the plan (no device)
+## Modes (`self_update_mode`)
 
-A desk review of the whole update path, from the launcher through the release pipeline to the live
-Pages repo, done without a Deck. Tags: **[V]** checked in our code, the flatpak 1.16.x source, or
-the live repo; **[I]** inference; **[U]** unverified. Nothing in this section has run on hardware.
-The plan is TASKS Phase 8 §"Self-update hardening".
+`notify` (default) | `auto` | `off`; the legacy boolean `self_update` still parses (`true`→`auto`,
+`false`→`off`). `app.json` is read-only inside the Flatpak and `self_update_mode` is not in the
+`user.json` allowlist, so **notify is what users run**; auto is not user-reachable today.
 
-**Facts the earlier sections did not have:**
-- **The repo is signed** [V]. The live `.flatpakrepo`/`.flatpakref` inline `GPGKey`, and
-  `summary.sig`/`summary.idx.sig` are served. The key is EdDSA `E16880BE44008CDC`, held only as an
-  Actions secret, with no expiry (RELEASING.md). Only the first v0.0.1 deploy (~20 min) was
-  unsigned. This matters because flatpak refreshes remote config (`xa.redirect-url`, keys) only on
-  signed remotes, so moving hosts or rotating keys stays possible.
-- **The published repo is rebuilt from zero every release** [V]. `publish-repo.sh` runs `rm -rf` +
-  `ostree init` + one bundle. The static-delta and prune flags therefore do nothing: the live
-  commit's parent 404s, there is no from-parent delta, and every update is a ~77 MB download
-  (185 MB installed, from the live `xa.cache`). **There is also nothing to roll back to.**
-- **A bad release cannot be recalled today** [V chain].
-  - Re-publishing an older tag re-imports that bundle's original, older commit.
-  - The portal compares commits for inequality, so it offers that commit to everyone.
-  - flatpak then refuses the downgrade ("Update is older than current version").
-  - Result: every user is offered an update that can never install, over and over.
-- **Detection is 0–30 min by construction** [V source]. flatpak-portal arms ONE global poll timer and
-  every app's monitor shares it, so a fresh launch inherits whatever is left on it. This explains
-  both the "60 s" and the "~30 min" observations above. It **never checks on a metered network**,
-  and the app is not told.
-- **The runtime and GL.default (Mesa, i.e. the VA-API driver) refresh only alongside a real Deckback
-  update**, and only if they live in the same (user) installation [V source, U Deck]. Nothing on
-  SteamOS updates Flatpaks in Game Mode. A system-wide runtime is never refreshed by us.
-- The CDN caches `summary*` for `max-age=600` [V headers]. Because each deploy deletes the old
-  objects, a client holding a cached summary can 404 right after a release [I].
+- **notify** — detection publishes availability into a shared `UpdateState` (atomic `available`,
+  mutex-guarded remote commit) and waits. Deploy happens only on consent, via
+  `Updater::request_update()`; the loop (never the caller) issues `Update()`. Verdicts go to the OSD
+  Updates tab; notify never toasts.
+- **auto** — deploys on detection; a completed deploy toasts "restart to apply"
+  (`config/scripts/toast.js`). No per-update prompt and no couch-reachable rollback: a bad published
+  commit reaches every auto Deck on next launch (ostree keeps the prior deployment, so
+  `flatpak update --commit=<prev>` can roll back from a shell; a Game-Mode user cannot).
+- **off** — the `Updater` is never constructed; fully inert.
 
-**Fixed in `1f4e398` (L0 tests + a CI replay on GCC 13/Clang 18; NOT run on a Deck):**
-- **The documented recovery for a permission-adding release was a no-op.** The in-app
-  PermissionBlocked text, this file and `check-permissions.sh` all say "re-run install.sh", which
-  ran a plain `flatpak install` and printed "already installed". It now uses `--or-update`, and
-  explains instead of aborting when the app came from another remote.
-- **A "Check for updates" that answered Empty hid every later release in that session.** The
-  verdict pinned the phase. A newer commit now clears Empty/Failed/PermissionBlocked.
-- **"Updating…" could hang until relaunch.**
-  - A synchronously rejected `Update()` produced no verdict.
-  - An accepted `Update()` with no terminal Progress produced none either.
-  - Rejections are now reported as Failed, and Requested times out after 10 min.
-- **Auto mode:** `on_terminal` was never null, which silenced the fallback "restart to apply" toast,
-  and the OSD offered a Check button with no handler. Neither mode is user-reachable today
-  (app.json is read-only; the user.json allowlist excludes it).
-- The Failed text no longer promises a retry that does not exist. The Pages terminal instructions
-  now use `--user`, and the `.flatpakref` suggests the remote name `deckback`.
+The consent seed (below) runs in both notify and auto.
 
-**Still weak (ranked; plan items in brackets, see TASKS). Items 1, 2 and 4 were addressed
-off-device the same day (★★★★ above):**
-1. No recall or rollback, and full-size updates [U1 linear repo history, U2 recall runbook].
-2. Slow or silent detection; Check for updates *installs* rather than checks, skipping notify
-   mode's consent step [U4 non-installing check].
-3. Stale runtime and Mesa in Game Mode [U7 host timer — owner decision].
-4. No "Restart now" [U6]; no progress display [U5].
-5. Install paths diverge: Releases bundles carry no `--repo-url` and never update [U8].
-6. No kill-switch or incident banner [U9], no beta channel [U10]. Pages' soft 100 GB/month at
-   77 MB/update is ≈1,300 updates/month [U11].
-7. Key custody: one never-expiring key, CI-only, no rotation plan (owner decision).
+## Detection
 
-**None of the plan adds a sandbox permission.** In particular, never add
-`--talk-name=org.freedesktop.Flatpak` to run host flatpak commands: that permission add would
-strand every installed user, exactly as 0.0.7 did.
+**The ref probe (launcher, at launch and on *Check for updates*).** It GETs
+`https://properrr.github.io/deckback/repo/refs/heads/app/io.github.properrr.deckback/x86_64/master`
+(65 B, served with `max-age=600`) and compares it with `[Instance] app-commit` from `/.flatpak-info`:
+equal means "latest", different means an update to confirm. **A check installs nothing.** The portal
+remains the only installer and signature verifier, so a forged ref can at worst cause a harmless
+Empty. `DECKBACK_UPDATE_REF_URL` points it at a staging repo. Guards, each with an L0 test that fails
+without it:
 
-**Corrections to the sections below:**
-- §"Design decisions" says connect-once with no reconnect. The code reconnects with backoff and
-  goes inert only after repeated failures (`durable/dbus-reconnect.md`).
-- §"Config & permission" names a `self_update` bool defaulting to true. The setting is the
-  tri-state `self_update_mode`, default `notify`; the legacy bool still maps onto it.
-- §"Architecture" says "toast + mark ready". Notify mode reports the verdict to the OSD Updates tab
-  instead; only auto mode toasts.
+- The probe only ever ADDS availability: a CDN-stale "up to date" never hides a portal announcement.
+- A staged deploy (Done) is never re-offered.
+- A commit the portal then answers Empty for is not re-announced by the probe for 10 min (the CDN's
+  `max-age`, the likely cause).
+- After a failed deploy, Check offers the same commit again — the retry the Failed text promises.
+- An unreadable repo falls back to the portal check-by-deploy (the path verified on-Deck).
+- No running commit (outside the sandbox) keeps the portal-only behaviour.
+- Commits use the portal's 12-char short form (`short_commit`), so the ignore marker dedups across
+  both sources.
 
-## ★★ FIX VERIFIED ON-DECK, REAL REMOTE, 0.0.7 → 0.0.8 (2026-07-24, OLED, Game Mode)
+**The portal's own `UpdateMonitor`.** flatpak-portal arms ONE global poll timer shared by every
+app's monitor, so a fresh launch inherits whatever is left on it: first detection lands anywhere in
+**0–30 min** (observed on-Deck: 60 s once, ~30 min once). It **never checks on a metered network**,
+and the app is not told. The ref probe exists to close both gaps. After a successful deploy the portal
+**re-announces the same commit** (the running instance still has the old one bound); the UI ignores it
+because a deploy verdict takes precedence over availability. A manual Desktop-Mode `flatpak update`
+binds on next launch and the portal then announces nothing.
 
-The permission fix below is **proven on hardware**, on the production GitHub-Pages remote, through an
-ordinary Steam-shortcut launch. Journal, unedited:
+## UI — OSD Settings ▸ Updates
 
-```
-21:27:38  deckback-launcher 0.0.7
-21:27:38  updater: watching for updates to this app via the Flatpak portal
-21:28:38  updater: an update is available (remote 472feab2e72a)
-21:28:38  updater: notify mode — awaiting user confirmation in Settings ▸ Updates
-21:30:31  updater: update requested; deploying in the background
-21:30:31  update: user confirmed — deploy requested
-21:30:35  updater: update deployed — it will apply the next time Deckback is launched
-21:30:42  deckback-launcher 0.0.8
-21:31:02  update: user asked to check — deploy requested
-21:31:02  updater: nothing to deploy — the installed commit is already the newest on the remote
-```
+`updateprompt.cpp::tick` feeds `OsdMenuController::set_update_state`, which draws the amber badge on
+the Settings button and the **Updates** tab. The OSD is our own injected markup (`osd.js`), not
+built on YouTube's elements, so a Leanback frontend change cannot break it.
 
-Confirmed by this run: the **permission removal works** (0.0.7 → 0.0.8 deployed in 4 s, where 0.0.6 →
-0.0.7 had been refused outright); the **Done verdict** reaches the UI from a real portal for the
-first time; 0.0.8 **bound on the next launch**; and **Check for updates** answers `Empty` correctly
-against a live remote. `flatpak info` after: Version 0.0.8, Origin `deckback`, Commit `472feab2e7` —
-matching the published summary.
+- Actions: A on *Update now* (`confirm_update()`), Y / focused *Ignore* (`ignore_version()`),
+  *Check for updates* (the ref probe), and *Close now* once a deploy is Done (the same graceful exit as
+  the Exit hold).
+- `updates_view()` is one pure function that derives status *and* buttons, so they cannot disagree.
+  Terminal verdicts route `UpdaterConfig::on_terminal` → `UpdatePromptController::on_deploy_result` →
+  `updates_view()`.
+- Progress reaches the tab ("step 2 of 3 (45%)"). A deploy with no verdict times out as Failed after
+  10 min, and every progress report restarts that timeout; a synchronously rejected `Update()` is
+  reported as Failed.
+- A newer commit clears a stale Empty / Failed / PermissionBlocked verdict.
+- *Ignore* is persisted in `update_dot_dismissed_v1` in the state dir, keyed on the remote commit; a
+  newer commit re-arms it.
+- Idle text never claims "you are current" from silence: the portal only announces availability.
+- **Changelog is lazy:** when shown, one short-timeout libcurl GET of
+  `api.github.com/repos/properrr/deckback/releases`, keep versions newer than the compiled
+  `kDeckbackVersion`, normalise the Keep-a-Changelog markdown to 10-foot text; on failure, a releases
+  link. The release-notes contract (tag `v<X.Y.Z>`, body = the CHANGELOG section) is in `RELEASING.md`.
 
-**Detection fired 60 s after launch on the DEFAULT poll — no `--poll-timeout` drop-in was
-installed.** That contradicts ★ T1 RESULT below ("nothing fired for ~30 min; a fresh monitor does NOT
-force an immediate check"), which is left in place because it is a real prior observation. Two data
-points, opposite results, so treat the detection latency as **unpredictable between ~1 min and
-~30 min** rather than either number. Do not promise a user a first-check time. The likely difference
-is when flatpak-portal itself last started (the Deck had slept and woken between the two runs), which
-is not something the app controls or can observe.
+## Consent seed — Game Mode has no Access-portal backend
 
-**Also confirmed, by inspection of this same journal:** after a successful deploy the portal
-**re-announces the same commit** (`21:30:39`, remote `472feab2e72a` again) because the running
-instance still has the old commit bound. The UI correctly ignores it — `updates_view()` gives a
-deploy verdict precedence over availability (`announce = notify_ && phase == Idle`), so the tab stays
-on "Update installed. Restart Deckback…" instead of re-offering an update that is already staged.
+flatpak-portal asks the **Access portal** for consent before deploying a self-update, and **SteamOS
+Game Mode has no working Access implementation**: SteamOS points portal loading at
+`/usr/share/xdg-desktop-portal/gamescope-portals` (`XDG_DESKTOP_PORTAL_DIR`); `gamescope.portal` there
+declares `org.freedesktop.impl.portal.Access` but lacks the `UseIn` key, so it fails to load
+(`Error loading gamescope.portal: Key file does not have key "UseIn" in group "portal"`), and
+`holo.portal` does not declare Access at all. Without the seed the deploy fails with **`No portal
+support found`** (reproduced on-Deck, flatpak 1.16.6).
 
-**Heartbeat keep-awake detection: POSITIVE case verified same day (2026-07-24, OLED).** After
-running `scripts/install-idle-nudge.sh` on the Deck, `deckback-idle-nudge --check` reported
-`heartbeat: /home/deck/.var/app/io.github.properrr.deckback/data/deckback/idle-nudge.alive (23s
-old)` alongside `playback detected: True`, and logind's inhibitor list carried
-`["idle","Deckback","Deckback: playback active","block",…]`. 23 s against the 150 s window means
-`decide_keep_awake()` returns Active and stays silent — correct, the helper was running. So the
-path that replaced `--talk-name=org.freedesktop.systemd1` works on hardware: the host helper writes
-the file, the sandbox reads it, and no permission is involved.
+**Mechanism (traced in flatpak `portal/flatpak-portal.c`, 1.14.x and 1.16.x):**
+`request_update_permissions_sync()` → `get_update_permission(app_id)` reads the xdg-permission-store,
+table `"flatpak"`, id `"updates"`, and maps `perms[0]`: `"yes"` → YES, `"ask"` → ASK, anything else →
+NO, no entry → UNSET. **The Access dialog is consulted only for UNSET or ASK**; YES proceeds with no
+dialog; NO fails with "Application update not allowed". Seeding `yes` writes exactly what the dialog's
+"allow" would.
 
-**NEGATIVE case verified too (2026-07-24, OLED) — a true A/B on one device, minutes apart.** Same
-build, same launch, same playback; the only variable was heartbeat freshness:
+**The seed is writable by us:** xdg-permission-store's `SetPermission(s table, b create, s id, s app,
+as permissions)` does no caller validation, so the sandboxed launcher can record the consent given
+`--talk-name=org.freedesktop.impl.portal.PermissionStore` (in the manifest). The user's consent is
+*Update now* in notify mode (the opt-in itself in auto); the launcher writes only what the
+unreachable dialog would record.
 
-```
-14:47:13  deckback-launcher 0.0.8 → 14:47:18  idle inhibitor held (playing)      heartbeat 14s: SILENT
-14:48:32  deckback-launcher 0.0.8 → 14:48:37  WARN: player: deckback-idle-nudge.service is not
-                                              running — the screen may dim …    heartbeat 600s: WARNED
-```
+`seed_update_permission()` runs on the loop thread before the monitor is created: read the app id from
+`/.flatpak-info` (`[Application]` `name=`), `Lookup` the current value, then — `yes`: nothing; **`no`:
+respected, never overwritten** (warn + the `flatpak permission-set` hint); unset/`ask`:
+`SetPermission` → `yes`. The pure decoders (`decode_update_permission`, `update_permission_name`,
+`parse_flatpak_app_id`) are pinned by `updater_test.cpp` against flatpak's semantics (first element
+only, case-sensitive, unknown → No).
 
-The toast was confirmed on screen by the user, not just in the journal. Method: `systemctl --user
-stop deckback-idle-nudge.service`, `touch -d '10 minutes ago'` on the heartbeat, relaunch, play.
-Restored afterwards (helper started, heartbeat back to 1 s). So the probe is proven in **both**
-directions — it stays quiet when the helper is alive and speaks when it is not — which is what makes
-it a check rather than a thing that merely never fires.
+Host-side equivalent, no rebuild: `flatpak permission-set flatpak updates io.github.properrr.deckback
+yes` as user `deck`; inspect with `flatpak permissions flatpak`.
 
-**Two mechanics to know before repeating it:** the check is once per process, on the first poll that
-observes playback (`player.cpp`, `warned_keep_awake_`), so a running instance that has already
-decided cannot be re-tested — a **fresh launch** is mandatory; and it fires on playback start, not at
-launch, so a null result on the home screen means nothing.
+**Rejected: fixing the Access backend.** The portal dir is in the read-only rootfs, flatpak-portal
+has its own legacy `.portal` resolver, and even a loaded gamescope Access impl would need a dialog UI
+nobody has verified in Game Mode. These environment facts still matter for any feature that genuinely
+needs an Access dialog in Game Mode.
 
-**Known wording nit (not worth a release on its own):** the warning ends "install the keep-awake
-helper in Desktop Mode", which reads oddly in the installed-but-stopped case that this test
-exercised. The lead clause ("is not running") is accurate either way, and the dominant real cause is
-a helper that was never installed or self-uninstalled, so it is left as is.
+## ★★ Permission adds break self-update
 
-**Still unverified:** the `Failed` / `PermissionBlocked` UI paths, which need a deliberately broken
-remote or a permission-adding build to reach. `scripts/check-permissions.sh` now makes the latter
-hard to produce by accident, which is the point — but it also means that copy has never been read by
-a user, only by a unit test.
-
-**Gotcha for anyone repeating this over SSH:** `~/.local/bin` is not on a non-interactive SSH PATH,
-so `deckback-idle-nudge --check` is `command not found` there — call it by full path. That is a
-shell detail, not the helper being missing.
-
-## ★★ PERMISSION ADDS BREAK SELF-UPDATE — v0.0.7 SHIPPED ONE (2026-07-24, OLED, user-reported)
-
-**Read this before touching `finish-args`.** A user on 0.0.6 was offered 0.0.7, pressed *Update
-now*, was told "new version will be applied after restart", restarted, and was still on 0.0.6 with
-the tab reading "no updates". Nothing about the report was a mystery once the journal was read:
-
-```
-18:53:49  updater: an update is available (remote f627b22147d3)
-19:06:23  updater: update requested; deploying in the background
-19:06:23  update: user confirmed — deploy requested
-19:06:25  updater: update failed: Self update not supported, new version requires new permissions
-```
-
-**Cause, traced not guessed.** v0.0.7 added one line to the manifest —
-`--talk-name=org.freedesktop.systemd1`, so `player.cpp` could ask systemd whether
-`deckback-idle-nudge.service` was alive. flatpak-portal refuses any self-update that widens the
-sandbox (`portal/flatpak-portal.c` `transaction_ready()`, confirmed in the 1.16.0 source the Deck
-runs):
+**Read this before touching `finish-args`.** flatpak-portal refuses any self-update that widens the
+sandbox (`portal/flatpak-portal.c` `transaction_ready()`, confirmed in the 1.16.0 source the Deck runs):
 
 ```c
 /* Actual app updates need to not increase premission requirements */
@@ -264,599 +160,154 @@ if (type == UPDATE && g_str_has_prefix (ref, "app/"))
       g_set_error (..., "Self update not supported, new version requires new permissions");
 ```
 
-`flatpak_context_adds_permissions` (common/flatpak-context.c) compares shares, sockets, devices,
-features, **bus policies**, filesystems and generic policy. A talk-name counts. User `flatpak
-override`s are NOT consulted, so there is no client-side workaround, no consent path, and no retry
-that helps — unlike the *consent* gate, which does have a bypass we already use (the permission-store
-seed, ★ SOLUTION below).
-
-**Three properties that make this far worse than it looks:**
-1. The comparison is against **what is deployed on that user's machine**, not the previous release,
-   and flatpak jumps straight to the newest commit. One addition strands every user installed before
-   it through *every* later release, permanently, until they update by hand.
-2. It is **invisible**. The failure was a single journal line. The app had already toasted success
-   the instant the button was pressed.
-3. `Progress` status 3 arrives with a usable `error` name, so it was always distinguishable — nothing
-   was looking.
-
-**Fixed in 0.0.8:**
-- The talk-name is **gone**. The helper now reports its own liveness by touching
-  `$XDG_DATA_HOME/deckback/idle-nudge.alive` (the Flatpak points that at `~/.var/app/<id>/data`, so
-  host and sandbox name the same file) and `decide_keep_awake()` reads its age. Costs no permission.
-  Absent reads as **Unknown, never Inactive** — a helper installed before heartbeats existed writes
-  nothing, and warning those users that a working helper is dead would be worse than silence. The
-  installer seeds the file so an installed-but-dead service still goes stale and warns.
-- `scripts/check-permissions.sh` (in `just preflight`, so every push) diffs `finish-args` against
-  **every release tag that can self-update at all**, and fails on any addition. Re-running it with
-  v0.0.7's manifest reproduces the failure exactly. `ALLOW_PERMISSION_ADD=1` is the deliberate
-  override; a release using it must tell users to re-run the installer.
-- `is_permission_change_failure()` keys on the D-Bus error **name**
-  (`org.freedesktop.DBus.Error.NotSupported`), not the message — the message goes through gettext
-  and is not English on every host. The Updates tab then offers nothing (every button would fail
-  identically) and shows the one thing that works.
-
-**The recovery path, and why it works:** `scripts/web-install.sh` runs `flatpak install --user -y`,
-which on an installed app performs the update and auto-confirms the permission change. It runs on
-the **host**, so the portal's rule does not apply. Re-running the one-line installer in Desktop Mode
-is therefore a complete, one-command fix for a stranded install — worth remembering as the standing
-answer whenever this class of thing happens.
-
-**Also fixed, same report — the app lied about the outcome.** `confirm_update()` toasted "it will
-apply the next time you open Deckback" at button-press time, before the portal had answered, and
-`Progress` Failed only ever reached the journal. Terminal verdicts now route through
-`UpdaterConfig::on_terminal` → `UpdatePromptController::on_deploy_result` → `updates_view()`, one
-pure function deriving status *and* buttons together so they cannot disagree. And the idle text is
-no longer "No update is currently available." — UpdateMonitor only ever announces availability, on
-its own ~30 min poll, so silence means "nothing announced", not "you are current". A *Check for
-updates* button now issues `Update()` directly (the portal answers `Empty` when there is nothing to
-do), which is a real check the user can run at any moment.
-
-## ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK, REAL REMOTE (2026-07-15, OLED, Game Mode)
-
-The on-Deck notify round-trip that every section below calls "still pending" **ran end-to-end and
-passed** — and against the **production** GitHub-Pages remote (`https://properrr.github.io/deckback/
-repo/`), a real **0.0.5 → 0.0.6** hop, so this doubles as the **T2 real-URL** verification, not just
-T1 staging. Trigger: a user reported "0.0.6 released but it won't auto-update." Diagnosis: nothing
-was broken — the release/publish pipeline was fine (remote `master` = commit `29e676d`, confirmed by
-importing the actual v0.0.6 release bundle: its metainfo lists 0.0.6 latest; `flatpak update` already
-reported `u`). The app simply behaves as designed: **`self_update_mode: notify` never auto-installs**,
-and the portal's ~30-min poll rarely coincides with short sessions.
-
-**What was verified (journal + `flatpak info` + the user's own eyes, OLED, ordinary Steam-shortcut
-launch in Game Mode):**
-- Real portal **detection** on the fast poll: fresh launch → 60 s later `updater: an update is
-  available (remote 29e676d7d4b3)` → `updater: notify mode — awaiting user confirmation in Settings ▸
-  Updates`. Genuine portal detection of the real published commit, correctly routed to notify.
-- The **OSD Updates UI rendered and worked**: the user found Settings ▸ Updates and pressed A on
-  *Update now* (human-confirmed; the settings button DOM was correct via CDP —
-  `#__deckback_settings_btn` `btnRect [1116,10,149,36]`, a proper top-right button, NOT the old
-  1279×0 mis-render). Per this file's own caveat, trust DOM assertions + a human's eyes over the
-  unreliable gamescope screenshot — a mid-session CDP snapshot with the OSD *closed* showed no badge
-  child, which is expected (the badge lives on the button/tab only while relevant), not a defect.
-- **Deploy** via the shipped consent seed (`flatpak permission-show` already had `flatpak updates …
-  yes`): `update requested; deploying in the background` → `update: user confirmed — deploy
-  requested` → 6 s later `update deployed — it will apply the next time Deckback is launched`.
-  `flatpak info` then read Version **0.0.6** / Commit `29e676d`; the next launch (fresh startup) bound
-  it and **ran 0.0.6**. This also confirms `Progress.status 2 (Done)` against a real successful update
-  (the earlier T1-REPLAY proved it from staging; this is the production remote).
-
-**Gotcha for anyone repeating this with a poll-timeout drop-in:** a portal **restart orphans an
-already-created `UpdateMonitor`** — the app subscribes once at start and never recreates it, and the
-orphaned monitor goes *silent* (no `sd_bus_process` error, just no signals). So install the
-`flatpak-portal.service` `--poll-timeout` drop-in and restart the portal **first**, *then* launch the
-app, or detection never fires that session. (This is how the first attempt today produced "watching
-for updates" but no detection: the app came up ~1 s before the portal restart.)
-
-**Method (Deck restored afterward):** the temporary portal poll override is now a first-class,
-reversible harness — **`just portal-poll set 60`** installs a user drop-in
-(`~/.config/systemd/user/flatpak-portal.service.d/zz-deckback-fastpoll.conf`,
-`ExecStart=/usr/lib/flatpak-portal --poll-timeout=60`; built-in default is ~30 min) and
-**`just portal-poll restore`** removes it and restarts the portal to default (`just portal-poll
-status` reports the effective interval). Pure logic is L0-tested (`tests/harness/test_portal_poll.sh`);
-`scripts/lib/portal_poll.sh` is the shared source of truth. **Run `set` BEFORE launching Deckback** —
-a portal restart orphans a running app's already-created monitor (see the ★ gotcha above). No other
-Deck changes; the 0.0.6 deploy is the only intended, kept result.
-
-**LCD (Van Gogh) — also VERIFIED (2026-07-15).** The same notify round-trip was confirmed working on
-the LCD unit too, so self-update is now proven on **both** the OLED (Sephiroth) and LCD (Van Gogh)
-APUs — the first Deckback feature verified on both. (This is the notify/OSD path specifically; other
-LCD-untested claims elsewhere still stand.)
-
-**Known reliability nit (being addressed):** the journal shows a recurring `updater: sd_bus_process
-error — self-update inactive until next launch` at **session teardown** that kills the updater thread
-for that session (it re-arms next launch, per the connect-once design), so a *very short* session may
-never reach the first poll. A **session-bus reconnect** for `updater.cpp` is planned to make the
-watcher survive a mid-session bus drop instead of going inert until relaunch (see
-`.internal/findings/durable/dbus-reconnect.md` once landed).
-
-## ★ UI MOVED INTO THE OSD (2026-07-15) — see osd-menu-plan.md
-
-The standalone notify overlays described below (the amber **pill** and the modal **card**,
-`update_badge*.js`/`update_card*.js`, and `input.cpp::handle_update_card`) are **removed**. The
-detect/deploy engine (`updater.cpp`, `UpdateState`) and `updateprompt.cpp`'s
-detection/changelog/consent logic are **unchanged and still the source of truth** — but the UI is now
-the in-app **OSD Settings menu** (`.internal/osd-menu-plan.md`): `updateprompt.cpp::tick` feeds
-`OsdMenuController::set_update_state`, which draws the amber badge on the Settings button and the
-**Updates** tab; `confirm_update()`/`ignore_version()` are OSD action callbacks (A on *Update now* /
-Y / focused *Ignore*). This also fixes BUG 2b structurally (capture ⇔ paint, `osd-menu-plan.md` §2).
-Everything below about the portal deploy, the permission-store seed, and the on-Deck T1 results still
-holds verbatim; only the notify *surface* changed. The on-Deck notify round-trip **is now VERIFIED**
-against the OSD UI — see ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK at the top of this file (2026-07-15,
-real 0.0.5→0.0.6 on the production remote).
-
-## ★ NOTIFY MODE is the default (2026-07-14) — detect, don't enforce
-
-The config key is now **`self_update_mode`: `notify` | `auto` | `off`, default `notify`** (the legacy
-boolean `self_update` still parses: `true`→`auto`, `false`→`off`). The portal detect+deploy machinery
-below is unchanged and still the engine; what changed is the *trigger* and a launcher-owned UI:
-
-- **detect → notify → deploy** is split (`updater.cpp`). In `notify`, `on_update_available` no longer
-  sets `want_update_`; it publishes availability into a shared `UpdateState` (thread-safe: an atomic
-  `available`, a mutex-guarded remote commit) and waits. Deploy happens only when
-  the user consents, via `Updater::request_update()` (sets an atomic, nudges the loop; the loop — never
-  the caller — issues `Update()`, preserving the no-reentrant-`sd_bus_call` rule). `auto` keeps the old
-  behaviour (deploy on detection). The consent **seed still runs in both** notify and auto, so a
-  user-confirmed notify deploy takes the same no-dialog path as auto (★ SOLUTION below).
-- **UI is launcher-drawn, not YouTube's DOM** (`launcher/src/updateprompt.cpp` + `config/scripts/
-  update_badge*.js`, `update_card*.js`), so a Leanback frontend change can't break it — same principle
-  as the controls card. The corner indicator is a **pill** — an amber dot + "Update available" + a
-  **☰ keycap** telling the user the card opens from the Menu button — appended to `documentElement`.
-  The input thread's `tick()` reconciles it each poll: shown when an un-dismissed update exists AND
-  no video is up, and **hidden while a video plays** so it never sits over playback; it returns on
-  browse. The watch signal is `LayerState::video_up` (the raw `player_open` bit), deliberately NOT
-  `layer() == Layer::Player`: the OSK outranks the player in `resolve_layer()` while a video can
-  still be playing underneath, so the layer alone would draw the pill over playback during text
-  entry (2026-07-14 review). `tick()` is the **sole owner of the pill DOM** — dismiss handlers only
-  clear `dot_desired_` and let the same-iteration reconcile hide it. `on_page_reloaded()` (navigator
-  thread) flags a full-reload wipe so `tick()` redraws it (playback-aware) and only the input
-  thread's `client_` ever touches it. Two accepted timing windows (both bounded by polls, judged
-  imperceptible-to-minor): the pill can sit over a just-started video for up to one player-poll
-  interval (`devtools_poll_ms`, 1000 ms) because `#/watch` is an SPA route change the poll must
-  observe, and after a full reload the redraw waits for the input loop's next poll wake (≤1–2 s).
-  Once per *new* commit an **"Update available" card** auto-shows (modal, owned by the input thread
-  like the onboarding card) — **also gated off playback**: the card is modal (it swallows direction
-  keys), so `want_card_` stays armed while a video is up and the card pops only once the user leaves
-  the watch view (2026-07-14 review; before that only the pill was gated). Fixed buttons **A** =
-  Update now (`request_update()` + "restart to apply" toast), **B** = Not now (keep the dot), **Y**
-  = Ignore this version (hide the dot until a newer commit — persisted solely in the
-  `update_dot_dismissed_v1` marker; the old in-memory `UpdateState::dot_suppressed_` lost its last
-  reader in the pill rework and was deleted). The **Menu (☰)** opens the card any time an update
-  exists — reachable even after the dot is dismissed, and deliberately allowed over playback because
-  it is user-initiated.
-- **Painless + ignorable + reachable** is enforced by two versioned state files in the state dir,
-  keyed on the portal's **remote commit** (precise dedup; version labels are cosmetic to the portal):
-  `update_card_shown_v1` (suppresses the one-time auto card) and `update_dot_dismissed_v1` (hides the
-  dot). `decide_notification()` maps (commit, card_shown, dot_dismissed) → {show_card, show_dot}; a
-  newer commit re-arms both. A manual Desktop-Mode `flatpak update` binds the new commit on next
-  launch → the portal reports nothing → no dot/card, and the card's up-to-date text reads "You're on
-  the latest version".
-- **Changelog is lazy** (`updateprompt.cpp::changelog`): only when the card is displayed does the
-  launcher do one short-timeout libcurl GET of `api.github.com/repos/properrr/deckback/releases`,
-  parse it (`parse_github_releases`), keep versions newer than compiled `kDeckbackVersion`
-  (`compare_versions`), and normalise the Keep-a-Changelog markdown to 10-foot text
-  (`notes_to_plain`). No launch-time network; on any failure the card falls back to a releases link.
-  The release-notes contract the updater depends on (tag `v<X.Y.Z>`, body = the CHANGELOG section) is
-  documented in `RELEASING.md`.
-- **Tests:** pure helpers in `launcher/tests/updateprompt_test.cpp` (version compare, releases parse,
-  changelog summary + markdown normalise, the show-card/show-dot decision incl. a mandatory suppress
-  case, marker round-trip + write-failure tolerance) and `UpdateState`/`request_update` lifecycle in
-  `updater_test.cpp`. On-Deck verification of the card/dot/deploy round-trip is still pending (the
-  portal deploy itself is proven — ★ T1-REPLAY below). **Update 2026-07-14: the notify UI round-trip
-  WAS run on-Deck — the logic fires, but BOTH overlays fail to render on-device; see ★ NOTIFY UI
-  ON-DECK below. ROOT-CAUSED and FIXED 2026-07-14 (★ RENDER FIX below): both bugs were the CSP
-  `style-src` (no `'unsafe-inline'`) silently dropping our inline-style / `<style>` injection — the
-  same block `no_pointer.js` already works around. The overlays now style via CSSOM +
-  `adoptedStyleSheets`, and the card self-heals so it can't strand input. Code + unit tests land here;
-  the on-Deck re-run of the round-trip is the remaining gate (implemented, not yet verified).**
-
-## ★ NOTIFY UI on-Deck 2026-07-14 (OLED, Game Mode) — logic fires, overlays DON'T render (2 bugs)
-
-Ran the notify round-trip against the OLED Deck. Setup: a local archive-z2 staging repo served over
-HTTP from the workstation (`192.168.128.3:8099`, `python -m http.server` on `flatpak/repo`); installed
-a **notify-mode base** (0.0.4, `self_update_mode: notify`) on the Deck from a `--user --no-gpg-verify
-deckback-staging` remote, then published a newer commit (0.0.5) into the same repo. `flatpak update`
-saw it (`u`), confirming detection works at the ostree layer. Because the portal's default check is
-**30 min** (see ★ T1 RESULT) and a `flatpak-portal.service --poll-timeout` drop-in was out of scope,
-the notify UI was triggered with the built-in **`DECKBACK_FAKE_UPDATE`** hook (`main.cpp`) set via
-`flatpak override --user --env=...`, launched through the **Steam shortcut** so gamescope actually
-focuses the window (a bare `flatpak run` / SSH / systemd launch renders off-screen behind the Steam UI
-— it is NOT visible in Game Mode; only `steam://rungameid/<id>` is).
-
-**What WORKS (journal-confirmed, `journalctl --user`):** `startup: self-update mode = notify` · the
-fake-update seed (`DECKBACK_FAKE_UPDATE set — simulating an available update`) · `updater: watching
-for updates … via the Flatpak portal` · the lazy GitHub fetch correctly falling back (`update: could
-not fetch release notes from GitHub — showing a link instead`, since no `v0.0.5` release exists) ·
-`update: 'update available' card shown`. CDP confirmed both nodes were injected into the live Leanback
-DOM.
-
-**BUG 1 — the dot mis-renders.** `#__deckback_update_dot` has computed `display:block` but
-`getBoundingClientRect()` = **1279×0 at (0,799)** — a full-width, zero-height strip at the bottom-left,
-not a 14×14 amber circle top-right. `childCount:0`, `z-index:auto`. The inline styling from
-`config/scripts/update_badge.js` (position/top/right/width/height/border-radius/background/z-index) is
-**not applied**. The controls-card/toast overlays DO render on-Deck, so `update_badge.js` differs from
-`toast.js`/`overlay.js` in how it sets style (likely the style is applied in a form Leanback's CSP /
-Trusted Types strips, or set on the wrong node). Fix by mirroring the proven toast/overlay injection.
-
-**BUG 2 — the card is invisible and traps input.** A composited screenshot showed only the YouTube
-home; the card never visibly painted although its node existed. Moments later the card node was **gone**
-(`getElementById → null`) — removed by a Leanback DOM swap — while the launcher still held
-`card_visible_ = true`, so the input thread kept **swallowing direction presses** (user: "I don't see
-anything and keys doesn't work"). Two defects: (a) the card doesn't paint on-Deck (same class of issue
-as BUG 1 — compare to onboarding `overlay.js`, which does render); (b) `card_visible_` desyncs from the
-DOM — a `documentElement`-appended card does NOT reliably survive Leanback body swaps here, so it must
-be re-injected on `on_app_loaded` (like the dot's redraw) AND/OR removal must reset `card_visible_` so
-input is never trapped.
-
-**Caveat for whoever picks this up:** CDP `Page.captureScreenshot` under gamescope is **unreliable for
-overlay verification** — it returned the YT page WITHOUT the injected nodes even when the DOM confirmed
-them present. Trust DOM assertions (`getBoundingClientRect`, `getComputedStyle`) and a human's eyes,
-not the screenshot, when checking on-Deck overlays.
-
-**Code review (2026-07-14, no device) — the overlays are structurally identical to the working ones,
-so there is NO static defect to fix; the cause is runtime/environmental.** Side by side:
-`update_badge.js` styles via `setAttribute('style', …)` exactly like `toast.js` (which renders);
-`update_card.js` uses a `<style>` block + the memoised `window.__dbTTP` Trusted Types policy exactly
-like `overlay.js` (the controls card, which renders). The injection is the same too — `draw_dot()` /
-`show_card()` call `ScriptLibrary::instance().invoke(client_, …)`, the same path `show_toast` and the
-onboarding card use. The scripts DID run on-Deck (node present, `card shown` logged); only the
-**styling failed to take effect** — the dot's computed `z-index` was `auto`, not `2147483647`, i.e. the
-`style` attribute was dropped. Byte-equivalent-to-working code failing means it is not a source bug.
-
-**Discriminating experiment for the next host (settles it in ~2 min on the live page):** draw a toast
-AND the dot, then compare —
-`getComputedStyle(document.getElementById('__deckback_toast')).zIndex` vs
-`…('__deckback_update_dot').zIndex`, and read
-`document.querySelector('meta[http-equiv="Content-Security-Policy"]')?.content` for `style-src`.
-- If BOTH are `auto`: inline styles are now globally CSP-blocked (a Leanback change; the "toast works"
-  claim is stale). Fix = a CSP-exempt style path — inject via CDP `Page.addStyleSheet`, or a
-  constructable `CSSStyleSheet` + `document.adoptedStyleSheets` — NOT inline `style`/`<style>`; and the
-  SAME fix then applies to `toast.js`/`overlay.js`.
-- If only the dot is `auto`: a timing/context race (our overlays are drawn from `tick()` as soon as
-  `UpdateState::available()` flips — with `DECKBACK_FAKE_UPDATE` that is at startup, mid Leanback boot,
-  whereas toast/controls-card only ever show post-load on a user action). Fix = gate the initial
-  draw on `on_app_loaded` and re-inject the CARD on reload (today only the dot has
-  `redraw_dot_on_reload`).
-
-Independently of rendering, BUG 2 has a real code defect: `card_visible_` is never reconciled with the
-card's DOM presence, so a Leanback swap that removes the node leaves the input thread trapping
-direction keys. Whatever fixes rendering must also make card removal reset `card_visible_` (or
-re-inject), so input can never be trapped behind an absent card.
-
-**Next machine:** run the discriminating experiment above, pick the matching fix, then re-run the
-round-trip with *real* portal detection (a `flatpak-portal.service` drop-in
-`ExecStart=/usr/lib/flatpak-portal --poll-timeout=15`, per ★ T1-REPLAY) and drive A=confirm → real
-deploy from staging. The deploy path itself is already proven (★ T1-REPLAY); only the notify UI is the
-gap.
-
-## ★ RENDER FIX 2026-07-14 (no device) — it was the CSP `style-src`, resolved from the touch-lock finding
-
-The discriminating experiment above did not need a device after all: `durable/touch-lock.md` already
-records the answer, verified on-Deck 2026-07-10. On the current pin youtube.com/tv's CSP `style-src`
-has **no `'unsafe-inline'`**, so the browser silently drops **both** an inline `style` attribute
-(`setAttribute('style', …)`, and HTML-parsed `style=""`) **and** a `<style>` element. That is exactly
-why `no_pointer.js` hides the cursor through a **constructable `CSSStyleSheet` + `adoptedStyleSheets`**
-instead of a `<style>` tag. Map it onto the two bugs and both fall out with no ambiguity:
-
-- **BUG 1 (dot):** `update_badge.js` styled via `setAttribute('style', …)` → CSP-dropped → computed
-  `z-index:auto`, an unstyled in-flow block (the 1279×0 strip). ✓
-- **BUG 2a (card invisible):** `update_card.js` styled via a `<style>` block → CSP-dropped → the
-  container had no `position:fixed`/backdrop, so it never painted. ✓
-- The "toast/controls-card render on-Deck" claim that made this look like a dot-only defect is from
-  **m114** (CLAUDE.md attributes it to `m114.md`), i.e. **stale on M138** — `toast.js` used the same
-  blocked `setAttribute('style', …)`, so the feature's own "Updating…" confirm toast was latently
-  broken too. Two exempt paths exist and only these: **CSSOM writes** (`el.style.setProperty`, not
-  subject to CSP) and **`adoptedStyleSheets`**. Both were already proven on-Deck by `no_pointer.js`.
-
-**The fix (shipped in this branch, unit-tested; on-Deck re-run still pending):**
-- `config/scripts/update_badge.js` — every property set via `el.style.setProperty(...)` (CSSOM), no
-  `style` attribute. `config/scripts/toast.js` — same conversion (its fade already used `.style`).
-- `config/scripts/update_card.js` — descendant rules moved into a constructable `CSSStyleSheet` added
-  to `document.adoptedStyleSheets` (memoised on `window.__dbCardSheet`), plus a CSSOM fallback on the
-  container so the dark modal backdrop paints even where constructable sheets are unavailable. The
-  `<style>` block is gone; the Trusted-Types innerHTML for the text content stays.
-- **BUG 2b (input trap), fixed independently of rendering:** a Leanback *in-page* body swap can detach
-  a `documentElement` child, and that swap does **not** fire the navigator's `on_app_loaded` (it only
-  fires when `location.href` re-enters the app needle — SPA route changes keep the same URL). So a
-  shared **keep-alive `MutationObserver`** (`window.__dbKeepAlive`, defined identically in
-  `update_badge.js`/`update_card.js`) re-appends our nodes when detached; the `*_hide` scripts call
-  `window.__dbDropAlive` **first** so a deliberate hide isn't fought. For a *full* navigation (new page
-  global, observer gone) the launcher re-injects: `UpdatePromptController::redraw_card_on_reload()`
-  (navigator thread, own transient `DevToolsClient`, no state/marker side effects) mirrors the dot's
-  `redraw_dot_on_reload()`, wired next to it in `main.cpp`'s `on_app_loaded`. `card_visible_` is now
-  `std::atomic<bool>` for that cross-thread read. Net effect: the card can no longer vanish while
-  `input.cpp` still treats it as modal and swallows direction keys (the "keys don't work" report).
-- **Tests:** `scripts_test.cpp` now asserts the launcher-drawn overlays never regress to the blocked
-  paths (`update_badge`/`toast` use `.setProperty` and never `setAttribute('style'`; `update_card` has
-  no `<style>` and uses `adoptedStyleSheets`) and that the card/dot carry the keep-alive observer while
-  the hide scripts drop from it. `overlay_test.cpp`'s toast-shape assertions updated to the CSSOM form.
-
-**DONE (the real gate) 2026-07-15:** the on-Deck notify round-trip ran end-to-end on the OSD UI via a
-real Steam-shortcut launch and **real portal detection** (not `DECKBACK_FAKE_UPDATE`) against the
-production remote — see ★ NOTIFY OSD ROUND-TRIP VERIFIED ON-DECK at the top. The OSD Settings ▸
-Updates badge/tab rendered, *Update now* drove a real deploy, and 0.0.6 bound on next launch. (The
-pill/card overlays this paragraph originally referred to were since replaced by the OSD menu; the CSP
-render fix below still applies to any remaining `<style>`/inline-`style` injection.) **Follow-up (separate, same cause):** `config/scripts/overlay.js` (the
-onboarding controls card) still uses a `<style>` block and is latently broken on M138 the same way —
-it belongs to onboarding, not this branch, but should get the identical `adoptedStyleSheets` treatment.
-
-Everything from here down documents the **portal deploy mechanism** (shared by notify + auto) and its
-on-Deck verification. It predates the notify split; where it says "`self_update=true` auto-deploys",
-read that as **`auto` mode** — the mechanism is identical, only the trigger differs.
-
-**Status:** IMPLEMENTED 2026-07-13, **ON by default as of 2026-07-14** (`app.json: self_update=true`).
-T1 on-Deck 2026-07-14 (OLED, Game Mode) found the portal deploy blocked by the missing Access backend
-(★ T1 RESULT below). **A FIX shipped 2026-07-14 and is VERIFIED on-Deck (★ T1-REPLAY RESULT below):
-when `self_update` is on, the launcher pre-records the consent in the permission store
-(`flatpak`/`updates`=`yes`), which flatpak-portal honors WITHOUT the Access dialog** — traced in
-flatpak 1.14.x and 1.16.x source (the Deck runs 1.16.6) and proven end-to-end on the OLED Deck in a
-real Game Mode launch: the app auto-seeded consent, the portal deployed the newer commit, and the
-next launch bound it. **Default flipped to `true` by product decision (2026-07-14): releases are
-gated on tests, so auto-deploying a published commit is the intended behaviour.** The tradeoff is
-accepted openly — there is no couch-reachable rollback, so a bad *published* commit reaches every
-Deck on next launch; the mitigation is gating what gets published (see "Known behaviour"), not the
-client. "Implemented" IS now "works on the target," for the OLED unit.
-
-## ★ T1-REPLAY RESULT 2026-07-14 (OLED, Game Mode) — the fix WORKS end-to-end
-
-Rebuilt two bundles into a local staging ostree repo — A' (v0.0.4, this fix, `self_update=true`) and
-B' (v0.0.5) — served over HTTP, installed A' on the OLED Deck from a `--user --no-gpg-verify`
-`deckback-test` remote, and ran two experiments in the live gamescope session (SSH onto the session
-bus `/run/user/1000/bus`; the session's own `xdg-desktop-portal-gamescope` was the running Access
-impl, so this is faithful Game Mode). Commits: A'=`2766f383`, B'=`01d4b838`.
-
-1. **Blocker reproduced, same session.** With the permission store cleared (raw/unset),
-   `deckback-launcher --selftest-deploy` (a new diagnostic: one portal Update cycle on a persistent
-   connection, no seeding) failed with exactly **`No portal support found`** (exit 3). And the
-   poll=15 flatpak-portal's own log printed the traced cause verbatim: `Error loading
-   gamescope.portal: Key file does not have key "UseIn" in group "portal"` (and `holo.portal`) — so
-   flatpak-portal's own portal resolver finds NO Access impl, confirming the ★ T1 RESULT mechanism on
-   flatpak 1.16.6.
-2. **Fix confirmed, same session.** `--selftest-deploy-seed` pre-granted `flatpak/updates=yes` then
-   ran the same Update cycle → **`DEPLOYED (status Done)`** (exit 0); the deployed commit advanced
-   A'→B' and `flatpak permissions flatpak` showed `... updates ... deckback yes`.
-3. **Real product flow, normal Game Mode launch.** Rolled the deployment back to A', cleared the
-   permission, and launched the app the ordinary way (`flatpak run`, `DISPLAY=:0`, into gamescope)
-   with `self_update=true`. journald from the running app:
-   - `updater: pre-granted self-update consent (flatpak/updates=yes)` — the SHIPPED startup path
-     seeds by itself (not the diagnostic);
-   - `updater: an update is available (remote 01d4b838)` — fired on the portal poll;
-   - `updater: update requested; deploying in the background` → `updater: update deployed`;
-   - `flatpak info` Commit = B'; a subsequent `--version` reported **`0.0.5`** — the update bound on
-     the next launch, exactly as designed.
-
-   (To avoid the portal's 30-min default poll, the test ran flatpak-portal with `--poll-timeout=15`
-   via a user systemd drop-in on `flatpak-portal.service` — the app-triggered D-Bus re-activation
-   replaces a manually-started portal, so the interval must be set on the service, not a hand-started
-   instance. Drop-in removed afterward.) Deck restored to production v0.0.3 (origin `deckback`), user
-   data intact, permission store cleared. STILL only the OLED unit; the LCD (Van Gogh) is untested.
-
-## ★ SOLUTION 2026-07-14 — pre-seed the consent in the permission store
-
-## ★ SOLUTION 2026-07-14 — pre-seed the consent in the permission store
-
-**Traced root-cause of the gate (flatpak `portal/flatpak-portal.c`, verified on both the 1.14.x and
-1.16.x branches; the Deck has flatpak 1.16.6):** before deploying a self-update,
-`request_update_permissions_sync()` calls `get_update_permission(app_id)`, which reads the
-xdg-permission-store — table `"flatpak"`, id `"updates"` — and maps `perms[0]`: `"yes"` → YES,
-`"ask"` → ASK, anything else → NO, no entry → UNSET. **The Access-portal consent dialog is consulted
-ONLY when the result is UNSET or ASK**; YES returns TRUE immediately (no dialog), NO fails with
-"Application update not allowed". After a real dialog, an UNSET result is written back as
-`"yes"`/`"no"` — i.e. seeding `yes` writes exactly what the dialog's "allow" would have written.
-So the Game-Mode blocker ("No portal support found" = no loadable Access impl) is only reachable
-from the UNSET/ASK states, and a pre-seeded `yes` bypasses it on the sanctioned path.
-
-**The seed is writable by us:** xdg-permission-store's `SetPermission(s table, b create, s id,
-s app, as permissions)` does no caller validation (traced in xdg-desktop-portal
-`document-portal/xdg-permission-store.c`), so the sandboxed launcher itself can record the consent,
-given `--talk-name=org.freedesktop.impl.portal.PermissionStore` (now in the manifest). The explicit
-`self_update=true` opt-in in app.json IS the user's consent; the launcher only writes what the
-unreachable dialog would record.
-
-**Implementation (launcher/src/updater.cpp):** when `cfg_.enabled`, the loop thread runs
-`seed_update_permission()` before creating the update monitor: read the app id from `/.flatpak-info`
-(`[Application]` `name=`), `Lookup` the current value, then — `yes`: nothing to do; **`no`: respected,
-never overwritten** (warn + the `flatpak permission-set flatpak updates <app> yes` hint); unset/`ask`:
-`SetPermission` → `yes`. All states/parsers are pure functions (`decode_update_permission`,
-`update_permission_name`, `parse_flatpak_app_id`) pinned by `updater_test.cpp` against flatpak's
-exact semantics (first element only, case-sensitive, unknown → No). `--selftest-update` now also
-reports the stored permission, so the on-Deck state is one command away.
-
-**Host-side equivalent (works today, no rebuild):** `flatpak permission-set flatpak updates
-io.github.properrr.deckback yes` as user `deck`; inspect with `flatpak permissions flatpak`.
-
-**Rejected alternative:** fixing the Access backend itself. SteamOS points portal loading at
-`/usr/share/xdg-desktop-portal/gamescope-portals` via `XDG_DESKTOP_PORTAL_DIR`; `gamescope.portal`
-there declares Access but lacks the `UseIn` key (fails to load) and `holo.portal` does not declare
-Access at all. The dir is in the read-only rootfs, flatpak-portal has its own legacy `.portal`
-resolver, and even a loaded gamescope Access impl would need a dialog UI nobody has verified in Game
-Mode. The permission seed avoids the whole subsystem.
-
-**T1 REPLAY — PASSED 2026-07-14 (OLED), see the ★ T1-REPLAY RESULT at the top of this file.** Both
-`Progress` status **2 (Done)** and the seed-then-deploy path are now confirmed on hardware. To repeat
-it: staging repo (commit A' = this fix + `self_update=true`, commit B' newer, both installed from a
-`--user --no-gpg-verify` remote); shrink the portal poll with a `flatpak-portal.service` user
-drop-in `ExecStart=/usr/lib/flatpak-portal --poll-timeout=15` (a hand-started `--replace` instance
-gets replaced when the app re-activates the portal, so set it on the service); use
-`deckback-launcher --selftest-deploy` (raw) / `--selftest-deploy-seed` for a scriptable, no-wait
-A/B of the portal itself; then a real `flatpak run` launch for the full auto-seed→auto-deploy chain.
-
-## ★ T1 RESULT 2026-07-14 (OLED, Game Mode) — detection works, deploy fails ("No portal support found")
-
-Ran the full T1 round-trip against the OLED Deck: built commit A (v0.0.3, `self_update=true`) and
-commit B (v0.0.4) into a local ostree repo (`flatpak/repo`), served it over HTTP, installed A from a
-`--user --no-gpg-verify` staging remote (origin `deckback-test`), published B, and watched the running
-A instance in Game Mode. Sequence observed in journald:
-
-1. **Portal reachable — Open Q #1 ANSWERED YES.** `updater: watching for updates to this app via the
-   Flatpak portal` at launch: `sd_bus_open_user` + `CreateUpdateMonitor` succeed as user `deck` in the
-   gamescope session. The portal (`/usr/lib/flatpak-portal`) is D-Bus-activatable there.
-2. **Detection works, on the portal's cadence (not at launch).** Nothing fired for ~30 min; at
-   **12:43:09** — the portal's first periodic check (its `poll-timeout`, ~30 min after the portal
-   started) — `updater: an update is available (remote 5927f3471c89)`. Confirms the "detection is
-   periodic, not instant-at-launch" note below: a fresh monitor does NOT force an immediate check.
-3. **Our `Update()` request works.** `updater: update requested; deploying in the background` — the
-   portal accepted the `Update()` call (our `do_update()` is correct).
-4. **Deploy FAILS.** `updater: update failed: No portal support found`. Deployed ref stayed at A;
-   next launch would still run A.
-
-**Root cause (traced, not guessed).** `No portal support found` is emitted ONLY by `flatpak-portal`,
-in `request_update_permissions_sync()`, when `find_portal_implementation("org.freedesktop.impl.portal.Access")`
-returns NULL. flatpak-portal shows a **consent dialog** (via the Access portal) before deploying a
-self-update; **SteamOS Game Mode has no working Access backend.** The gamescope backend
-(`/usr/share/xdg-desktop-portal/gamescope-portals/gamescope.portal`) DECLARES
-`org.freedesktop.impl.portal.Access` but is **missing the `UseIn` key**, so xdg-desktop-portal fails to
-load it (`Error loading gamescope.portal: Key file does not have key "UseIn"` in the journal); the
-`gtk`/`kde` backends are scoped `UseIn=gnome`/`KDE`. So in a gamescope session there is no Access impl,
-and the portal's self-update cannot get consent → fails. This is a **SteamOS/gamescope environment
-bug, not a defect in our code** — our updater does exactly the right thing.
-
-**Corroboration:** a plain `flatpak update --user io.github.properrr.deckback` from the same staging
-remote finds and would deploy the 84 MB update with **no** portal/dialog — the ostree/update mechanism
-is fine; only the *portal-driven* deploy is blocked.
-
-**Consequences / recommendation (as of this T1 RESULT — SUPERSEDED by the ★ SOLUTION / ★ T1-REPLAY
-above, which fixed the deploy and flipped the default to `true`).**
-- Portal-driven auto self-update **did not deploy in Game Mode** before the permission-seed fix.
-- The recommendation at the time was to keep `self_update=false`; it is now `true` (verified on-Deck).
-- The Deck's real update path is manual `flatpak update` / Discover (Desktop Mode), or a GitHub-Release
-  `.flatpak` re-install — exactly what `deck-flatpak.sh repo`/`RELEASING.md` already assume.
-- If auto-update is wanted later, options to investigate: (a) whether a future SteamOS fixes the
-  `gamescope.portal` `UseIn` key / ships an Access backend; (b) whether the app can drive
-  `flatpak update` some other sanctioned sandbox-safe way (none known — the portal is *the* sanctioned
-  path); (c) shipping an updater that only *notifies* "an update is available, update from Desktop
-  Mode" (detection works) rather than trying to deploy. NOT retried on-Deck because the blocker is
-  environmental and stable (the missing `UseIn` key is in the read-only SteamOS rootfs).
-- **Superseded 2026-07-14 by the ★ SOLUTION above:** the Access dialog is only consulted when the
-  permission-store entry is unset/`ask`; pre-seeding `flatpak`/`updates`=`yes` makes the deploy take
-  the no-dialog path. The environmental facts in this section remain true and still matter for any
-  feature that genuinely needs an Access dialog in Game Mode.
-
-## Why this shape
-
-The launcher runs **inside the Flatpak sandbox**, so it cannot run `flatpak update`. The sanctioned
-path for a sandboxed app to update itself is the **Flatpak portal** (`org.freedesktop.portal.Flatpak`),
-a privileged host service that performs the update on the app's behalf. It updates **only this app's
-own ref, from this app's own origin remote** (our `--user` `deckback` remote) — no root, and for a
-`--user` install **no polkit/password prompt** (which Game Mode could not answer). It touches nothing
-else the user installed: blast radius = Deckback. (A full `flatpak update` — the systemd timer or
-Discover — is the separate tool that updates the runtime and every other app; see the update-parity
-discussion in `docs/`/`RELEASING.md`.)
-
-The update deploys a **new ostree commit without swapping the running deployment**, so playback is
-never interrupted; the new version binds on the **next launch**. On completion the launcher toasts
-"restart to apply" (reusing the CDP overlay, `config/scripts/toast.js`) if a CDP port is available.
-
-## Architecture
-
-`updater.cpp` mirrors `platform.cpp` exactly, but on the **session** bus (`sd_bus_open_user`) instead
-of the system bus — one owned event-loop thread, sd-bus only, a stub when `<systemd/sd-bus.h>` is
-absent. No new dependency (libsystemd is already linked; the toast reuses DevToolsClient/overlay).
-
-Portal interface (from `data/org.freedesktop.portal.Flatpak.xml`, pinned here so nobody re-derives it):
-- `org.freedesktop.portal.Flatpak` at `/org/freedesktop/portal/Flatpak`:
-  `CreateUpdateMonitor(a{sv} options) → o handle`
-- `org.freedesktop.portal.Flatpak.UpdateMonitor` (on the returned handle path):
-  - `Update(s parent_window, a{sv} options)` — we pass `""` + empty dict
-  - `Close()`
-  - signal `UpdateAvailable(a{sv})` — keys `running-commit`, `local-commit`, `remote-commit`
-  - signal `Progress(a{sv})` — keys `n_ops,op,progress,status,error,error_message`;
-    **status: 0 Running · 1 Empty (nothing to do) · 2 Done · 3 Failed**
-
-Flow: create monitor → on `UpdateAvailable` set a flag → the loop (never the signal callback, to
-avoid a reentrant `sd_bus_call` inside `sd_bus_process`) calls `Update` → on `Progress` status 2,
-toast + mark ready. The two sync calls carry a 5 s timeout so a missing portal fails fast on the
-background thread instead of sd-bus's 25 s default.
-
-Note: the portal compares **ostree commits, not version strings**. "An update is available" means the
-installed ref's remote has a newer commit on its branch — version labels (0.0.3 vs 0.0.4) are
-cosmetic to the portal.
-
-## Config & permission
-
-- `app.json: self_update` (bool, **default true** as of 2026-07-14), hot-swappable like every other
-  flag. Set false = the `Updater` is never constructed; the feature is fully inert.
-- Manifest: `--talk-name=org.freedesktop.portal.Flatpak` and (for the consent seed, ★ SOLUTION)
-  `--talk-name=org.freedesktop.impl.portal.PermissionStore` (session bus). Both inert while the
-  feature is off. Flathub is picky about both names — the PermissionStore one especially (it can
-  write ANY app's permissions); note it for the eventual Flathub submission; we are self-hosted.
-- `--version` and startup now log the real version, compiled in from the repo `VERSION` file
-  (`version.hpp`, CMake `configure_file`; the manifest adds `VERSION` as a flat `file` source).
-
-## Verification — REQUIRED before this is trusted (nothing below has run yet)
-
-Tiered, cheap → expensive:
-
-- **T0 (workstation): `deckback-launcher --selftest-update`** inside the flatpak — creates a monitor
-  and confirms the portal answered. Proves the D-Bus plumbing/types. Off-Deck it correctly reports
-  "no live session bus"/portal-unreachable and exits 1.
-- **T1 (Deck, staging repo): the authoritative functional test.** Install commit A (with the updater)
-  on the Deck from a **local/staging ostree repo** (`just publish-repo` + `python3 -m http.server`,
-  added as a `--user` remote — see RELEASING.md "Test the repo locally"). Publish a newer commit B to
-  the same repo. Launch A, confirm: `UpdateAvailable` fires, `Update` deploys B, the toast shows, and
-  the **next launch runs B** — with **no password prompt**. This proves detect + apply + custom
-  remote + restart-to-apply without touching production.
-- **T2 (Deck, production, at release): the real-URL round-trip.** The official repo URL already
-  delivers updates (that is how 0.0.2→0.0.3 happened via `flatpak update`); the portal pulls from the
-  same remote. So T1 proves the new behaviour; T2 just confirms the production URL, cheaply, as a
-  0.0.4→0.0.4.1 (or 0.0.4→0.0.5) republish once 0.0.4 is live.
-
-**Chicken-and-egg (state it openly):** the updater ships FIRST in 0.0.4, so users already on 0.0.3
-(no updater) must update once manually to get it; auto-update works from 0.0.4 onward. The first hop
-is always manual when introducing a self-updater — that is expected, not a bug.
-
-## Open questions — updated by the T1 run (2026-07-14)
-
-- ~~Is `org.freedesktop.portal.Flatpak` reachable in the gamescope session as user `deck`?~~
-  **ANSWERED YES** (T1 §1) — the monitor is created successfully in Game Mode.
-- ~~Does `Update()` on a `--user` custom-remote ref ever raise a polkit prompt?~~ **No polkit prompt** —
-  but it needs an **Access-portal consent dialog** that Game Mode can't provide, which was the blocker
-  (★ T1 RESULT), bypassed by the permission-store seed (★ SOLUTION). Different failure than expected.
-- Does the seeded permission actually carry the deploy to Done on-Deck? **UNVERIFIED** — the T1
-  replay in ★ SOLUTION is the gate. The claim rests on traced flatpak source, not hardware yet.
-- `Progress.status` codes: **status 3 (Failed) confirmed on hardware** (decoded to "update failed" +
-  the error message). **Status 2 (Done) was NOT reached** — the deploy failed first — so `2 == Done` is
-  still unconfirmed against a real successful update. The mapping stays unit-tested via
-  `decode_progress_status()` (updater.hpp).
-- LCD (Van Gogh) unit: entirely untested, as with everything else. (Immaterial while the Game-Mode
-  Access blocker stands — it is not unit-specific.)
-
-## Design decisions (deliberate — recovery is by relaunch, not in-session)
-
-> **Superseded in part (2026-10-20):** the loop now reconnects (`durable/dbus-reconnect.md`), and the
-> UI times out a deploy with no verdict after 10 min (`updateprompt.cpp`). The "connect-once" and
-> "no deploy watchdog" bullets below record the original design, not the code.
-
-The loop is intentionally minimal: **connect once at start, watch, and on any failure go inert for the
-session.** Updates are not urgent (a kiosk app is relaunched often), so the extra state machine for
-in-session reconnect/retry was rejected as complexity that buys little. What this means:
-
-- **Connect-once, no reconnect.** If the session bus errors or the portal drops mid-session, `loop()`
-  returns and self-update is inert until the **next launch**, which re-creates the monitor from
-  scratch. Each launch is a fresh, independent check — more predictable than depending on the portal's
-  re-emit semantics.
-- **No deploy watchdog / no retry cadence.** If `Update()` is ack'd but no terminal `Progress`
-  arrives, `updating_` stays set and nothing else is attempted **this session**; a failed `Update()`
-  is likewise not retried in-session. Both self-heal on relaunch (fresh process resets the flags).
-- **Idle costs no battery.** The event loop's `poll()` timeout comes only from sd-bus's own deadline;
-  when nothing is pending sd-bus reports an infinite timeout and `loop_timeout_ms()` returns `-1`, so
-  `poll()` blocks until a portal signal or the stop nudge — there are **no periodic wakeups**. (An
-  earlier draft capped the poll at 1 s, i.e. a 1 Hz idle wakeup; that was removed.)
-- **Reentrancy avoided.** `Update()` is invoked from the loop body, never from a signal callback, so
-  `sd_bus_call()` is never re-entered inside `sd_bus_process()`. `want_update_`/`updating_` are
-  loop-thread only.
-- **Toast guard.** The "restart to apply" toast fires on a `Progress` **Done** only if `updating_` was
-  set (an update *we* initiated), so a `Done` from an externally-initiated update can't spuriously
-  toast.
-
-## Known behaviour / accepted limitations
-
-- **Detection is periodic, not instant-at-launch.** The host-side monitor lives for the whole process
-  and the portal re-checks on **its own cadence**, so a release published mid-session is still picked
-  up — but there is a poll-interval lag after launch before the first check. A slow first detection in
-  the T1 test is expected, not a failure.
-- **Auto-deploy is unconditional and has no couch-reachable rollback.** When `self_update` is on, any
-  newer commit on the remote branch is deployed on next launch with no per-update prompt; a bad
-  release therefore reaches every opted-in Deck. ostree keeps the prior deployment (so a *workstation*
-  `flatpak update --commit=<prev>` can roll back), but a Game-Mode user cannot. This is the price of
-  opt-in background updates from a single self-hosted remote — mitigate by gating what gets published,
-  not in the client.
+`flatpak_context_adds_permissions` (`common/flatpak-context.c`) compares shares, sockets, devices,
+features, **bus policies**, filesystems and generic policy — a talk-name counts. User `flatpak
+override`s are not consulted, so there is no client-side workaround, consent path, or retry.
+
+- The comparison is against **what is deployed on that user's machine**, and flatpak jumps straight
+  to the newest commit. One addition strands every user installed before it through *every* later
+  release until they update by hand.
+- The failure arrives as `Progress` status 3 with a usable D-Bus error name;
+  `is_permission_change_failure()` keys on the **name** (`org.freedesktop.DBus.Error.NotSupported`),
+  not the gettext-translated message. The Updates tab then shows the PermissionBlocked text and offers
+  no button (every one would fail identically).
+- **Guards:** `scripts/check-permissions.sh` (in `just preflight`, so every push) fails on any
+  `finish-args` addition against every `v*` release tag; `publish-repo.sh` also gates the bundle's
+  built `metadata` against the **live** repo head (exit 2). `ALLOW_PERMISSION_ADD=1` is the deliberate
+  override, and a release using it must tell users to re-run the installer.
+- **Recovery:** re-run the one-line installer in Desktop Mode (`scripts/web-install.sh`:
+  `flatpak install --user -y --or-update deckback …`). It runs on the **host**, so the portal's rule
+  does not apply and the permission change is auto-confirmed. It refuses, with instructions, when the
+  app was installed from a different remote.
+- **Never add `--talk-name=org.freedesktop.Flatpak`** to run host flatpak commands; that addition would
+  itself strand every installed user. v0.0.7 shipped one addition (`--talk-name=org.freedesktop.systemd1`);
+  0.0.8 removed it, and the keep-awake helper now reports liveness through a heartbeat file instead
+  (`keep-awake.md`; verified in both directions on the OLED).
+
+## ★ RENDER FIX — overlay styling under the page CSP
+
+youtube.com/tv's CSP `style-src` has **no `'unsafe-inline'`**, so the browser silently drops both an
+inline `style` attribute (`setAttribute('style', …)` or HTML-parsed `style=""`) **and** a `<style>`
+element: a node styled that way is present in the DOM but unstyled (measured on-Deck: a fixed
+badge rendered as a 1279×0 in-flow strip with computed `z-index:auto`). The exempt paths are
+**CSSOM writes** (`el.style.setProperty`) and **`adoptedStyleSheets`**. The toast, the OSD and its
+Settings button use only those, and `scripts_test.cpp` asserts they never regress to the blocked
+forms. `config/scripts/overlay.js` (the onboarding controls card) still builds a `<style>` block and
+is latently affected the same way.
+
+Leanback can detach a `documentElement` child with an in-page body swap that does **not** fire the
+navigator's `on_app_loaded` (SPA route changes keep the URL). Anything that holds input modal while
+its node is shown must tie input capture to what is actually painted, or input stays trapped behind
+an absent overlay; the OSD does this structurally (capture ⇔ paint).
+
+## Design decisions
+
+- **Reconnect, then inert.** The loop reconnects to the session bus with backoff and re-creates the
+  monitor when flatpak-portal restarts (`NameOwnerChanged`); it goes inert for the session only after
+  repeated failures, and relaunch starts fresh (`durable/dbus-reconnect.md`; verified in the sim,
+  on-Deck drive pending).
+- **Idle costs no battery.** The loop's `poll()` timeout comes only from sd-bus's own deadline; with
+  nothing pending it blocks until a portal signal or the stop nudge — no periodic wakeups.
+- **No reentrancy.** `Update()` is invoked from the loop body, never from a signal callback, so
+  `sd_bus_call()` is never re-entered inside `sd_bus_process()`.
+- **Toast guard (auto).** "Restart to apply" fires on `Progress` Done only for an update *we*
+  initiated, so an externally-initiated Done cannot toast.
+- **Deploy timeout in the UI**, not the updater: Requested times out after 10 min without a verdict.
+
+## Release pipeline and the published repo (`scripts/publish-repo.sh`)
+
+- **Signed.** The live `.flatpakrepo`/`.flatpakref` inline `GPGKey`; `summary.sig`/`summary.idx.sig`
+  are served. The key is EdDSA `E16880BE44008CDC`, held only as an Actions secret, with no expiry
+  (`RELEASING.md`). This matters because flatpak refreshes remote config (`xa.redirect-url`, keys) only
+  on signed remotes, so moving hosts or rotating keys stays possible.
+- **Linear history.** A publish mirrors the live repo (head + `DECKBACK_REPO_DEPTH`=2 parents), gates
+  permissions against the live head, runs `build-commit-from --timestamp=NOW` on top of it, generates
+  the from-parent delta with ostree directly, then `build-update-repo --generate-static-deltas --prune
+  --prune-depth=2`. Each release's parent is the commit users actually have, there is a rollback
+  target, and objects a CDN-cached summary (`max-age=600`) still points at survive a deploy.
+- **Fails closed.** An unreachable live repo exits 3; `DECKBACK_REPO_FRESH=1` (workflow input
+  `fresh_history`) starts a new history only on purpose. Re-publishing the live tree makes no commit.
+- **Delta size depends on bsdiff for the engine.** ostree's default delta does not bsdiff files above
+  its size cap, so the ~159 MB `content_shell` ships whole whenever it changes. Measured on the real
+  v0.0.8 → v0.0.9 bundles:
+
+  | Delta | Size |
+  |---|---|
+  | from-scratch | 77.1 MB |
+  | from-parent, flatpak defaults | 66.7 MB (63.8 MB of it the engine binary as a fallback object) |
+  | from-parent, `--max-bsdiff-size=512 --min-fallback-size=512` (what we publish) | **4.2 MB** |
+
+  Generating it took 40 s at 2.5 GB peak RSS (fine on the 16 GB Actions runner). A release that
+  leaves the engine untouched gets a small delta either way. A repo holding two releases is 145 MB
+  against Pages' 1 GB.
+- **Verified off-device:** a real `flatpak --user` client on 0.0.8 updated to 0.0.9 from a locally
+  signed repo via the bsdiff delta (4.2 MB, no whole-object fetches, exact published commit); a
+  read-only run against production mirrored with `--depth=2` even though the live head's parent 404s;
+  `tests/harness/test_publish_repo.sh` (27 checks, green on flatpak 1.18.1/ostree 2025.6 and Ubuntu
+  24.04's 1.14.6/2024.5) covers delta use (from the server's request log), a client two releases
+  behind, recall as an ordinary update, `update --commit` back one release, `mask`, a permission add
+  (exit 2) and an unreachable repo (exit 3).
+- **Recall:** `RELEASING.md` §"Recall a bad release" — re-commit the last good tree forward with a
+  fresh timestamp (the portal refuses downgrades, and re-publishing an old bundle as-is would offer
+  every user an update that can never install) by re-dispatching *release-pages* with the last good
+  tag, and turn the bad GitHub release back into a **draft** (not pre-release), or the Updates tab's
+  changelog keeps offering it. `flatpak mask` is the user-side "hold this version".
+- **The runtime and GL.default (Mesa, i.e. the VA-API driver) refresh only alongside a real Deckback
+  update**, and only if they live in the same (user) installation (flatpak source; not observed
+  on-Deck). Nothing on SteamOS updates Flatpaks in Game Mode; a system-wide runtime is never refreshed
+  by us.
+- `--version` and startup log the real version, compiled in from the repo `VERSION` file.
+
+## ★★★★ Verification status — what is pending
+
+- **T1 (Deck, staging repo, `DECKBACK_UPDATE_REF_URL`):**
+  - Launch with a newer staging commit: the badge appears within seconds of start.
+  - Check reads "latest" and installs nothing; the journal has no "deploy requested".
+  - *Update now* shows progress, then *Close now* exits cleanly; relaunch from the Library runs the new
+    commit.
+  - Check → Empty, then publish a newer commit: it is offered.
+  - With a permission-adding staging commit: the tab shows the blocked text, and re-running the
+    installer in Desktop Mode installs it. (The Failed / PermissionBlocked text has never been read on
+    a Deck, only by unit tests.)
+- **T2 (production): passed with v0.0.10 (2026-10-21).** The signed *release-pages* run logged
+  `Live head: 7869c172…` and `Published 3147f33… (parent 7869c172…)` past the permission gate. The
+  OLED Deck on 0.0.9 was offered the update by the portal (notify mode), deployed it from
+  Settings ▸ Updates in 3 s and relaunched into 0.0.10. With the engine unchanged the update is a
+  148 KiB delta; a fresh install pulls 75.6 MB.
+- The reconnect on-Deck drive (`dbus-reconnect.md`).
+
+## ★★★ Open items (REVIEW 2026-10-20 plan, U1–U11 in TASKS Phase 8)
+
+U1–U6 are done off-device (above). Still open:
+
+- **U7** — stale runtime and Mesa in Game Mode (a host timer; owner decision).
+- **U8** — install paths diverge: Releases bundles carry no `--repo-url` and never update. A bundle
+  built with `--repo-url` installs as a `deckback-origin` remote, which `channel_of_origin` treats as
+  the DEV channel and `web-install.sh` refuses; the dev and release origins must be told apart by URL
+  first.
+- **U9** — no kill-switch or incident banner. **U10** — no beta channel.
+- **U11** — Pages' soft 100 GB/month is ≈1,300 updates/month at a full-size 77 MB update (far more at
+  bsdiff-delta sizes).
+- **Key custody** — one never-expiring key, CI-only, no rotation plan (owner decision).
+
+**None of the plan may add a sandbox permission** (§"Permission adds break self-update").
+
+## Testing on a Deck — mechanics worth knowing
+
+- **Staging repo:** `just publish-repo` + `python3 -m http.server`, added as a `--user
+  --no-gpg-verify` remote (`RELEASING.md` §"Test the repo locally").
+- **Fast portal poll:** `just portal-poll set 60` installs a user drop-in
+  (`~/.config/systemd/user/flatpak-portal.service.d/zz-deckback-fastpoll.conf`,
+  `ExecStart=/usr/lib/flatpak-portal --poll-timeout=60`; built-in default ~30 min); `just portal-poll
+  restore` removes it; `status` reports the interval. Set it on the service, not a hand-started
+  instance — D-Bus re-activation replaces a manually started portal. Run `set` **before** launching
+  Deckback.
+- **Diagnostics:** `deckback-launcher --selftest-update` (monitor creation + stored permission),
+  `--selftest-deploy` (one Update cycle, raw permission) and `--selftest-deploy-seed` (seed first) — a
+  scriptable A/B of the portal. `DECKBACK_FAKE_UPDATE=<commit>` publishes availability at launch.
+- **Launch through the Steam shortcut** (`steam://rungameid/<id>`): a bare `flatpak run`/SSH/systemd
+  launch renders off-screen behind the Steam UI in Game Mode.
+- **CDP `Page.captureScreenshot` under gamescope is unreliable for overlays** — it has returned the
+  page without injected nodes the DOM confirmed present. Trust DOM assertions
+  (`getBoundingClientRect`, `getComputedStyle`) and a human's eyes.
+- `~/.local/bin` is not on a non-interactive SSH `PATH`; call host helpers by full path.

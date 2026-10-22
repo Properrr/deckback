@@ -23,13 +23,9 @@ just cert conformance-test dev --update-baseline --freeze-vectors
 as a usage error — exit 5, which is *not* the same as exit 2.)
 
 Then **read the diff before committing it.** A baseline is a claim about what *should* pass, not a
-record of what did. Rubber-stamping the first run bakes today's bugs in as tomorrow's expectations.
-
-This is not a slogan. The first real run reported three failures. Two were bugs in *our own*
-harness — a missing `/echo` route the suite needs and upstream never ships, and its 10-second
-timeout knocking over the test that ran after it. Rubber-stamping would have recorded
-`XHRUint8Array: FAILED` as expected, and the day someone fixed `/echo` the gate would have called
-the fix a regression. Read F11 before you touch a baseline.
+record of what did. Rubber-stamping a run bakes today's bugs — including bugs in our own harness —
+in as tomorrow's expectations, and the day one is fixed the gate calls the fix a regression. Read
+F11 before you touch a baseline.
 
 ## Rules
 
@@ -41,8 +37,8 @@ the fix a regression. Read F11 before you touch a baseline.
   no opinion about the other 397, and silence is not assent. (The harness's own `getTestResults()`
   drops `UNKNOWN` and `TIMEOUT` entirely, which is why we do not use it.)
 - A test that fails and then passes on re-run is recorded **`flaky`**, never `pass`.
-- Widevine key systems stay expected-fail until the P7 `AddContentDecryptionModules` patch lands. CI
-  must never fetch Google's CDM (`docs/legal.md`), so the automated run is **ClearKey only**.
+- Widevine key systems stay expected-fail: CI must never fetch Google's CDM (`docs/legal.md`), so no
+  CDM is ever present and the automated run is **ClearKey only**.
 - Record `harness_commit` and the vector hashes alongside every result. A baseline whose harness you
   cannot name is not a baseline.
 

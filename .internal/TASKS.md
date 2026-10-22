@@ -1,1356 +1,473 @@
 # Deckback — Task Plan
 
-Living execution checklist derived from `.internal/steamdeck-cobalt-youtube-plan.md`.
-The design doc is the source of truth; this file tracks *what to do next* and *what is done*.
+The execution checklist for `.internal/steamdeck-cobalt-youtube-plan.md`, which wins on conflict.
+A finished phase takes one or two lines. Each open item says what is missing and, where known, what
+blocks it or how to verify it. For what has and has not run on hardware, see `.internal/TEST-PLAN.md` §2.
 
 - **App:** Deckback — `io.github.properrr.deckback`
-- **Target:** Steam Deck **OLED (Sephiroth)** — the only unit we have. **LCD (Van Gogh)**: best-effort, untested (decisions.md / R11). SteamOS 3.x, Game Mode only
-- **Engine:** Chromium-based Cobalt trunk (`youtube/cobalt`, ~M114)
+- **Target:** Steam Deck **OLED**, the only unit we have. **LCD**: best-effort and untested
+  (`durable/decisions.md`). SteamOS 3.x, Game Mode only.
+- **Engine:** Chromium-based Cobalt (`youtube/cobalt`, cobalt-27 / Chromium **M138**), pinned by `DEPS.pin`
 - **Legend:** `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked/needs input
 
 ---
 
-## Phase S — Repo scaffolding (this session, no Chromium checkout required)
+## Phase S — Repo scaffolding: done.
 
-- [x] Repo hygiene: `.gitignore`, `.env.example`, `.clangd`, `README.md`, `.internal/TASKS.md`
-- [x] `DEPS.pin` placeholder + guard (real commit set in S0.1)
-- [x] GN arg presets: `args/dev.gn`, `args/deck.gn`, `args/asan.gn`
-- [x] Container env: `docker/Dockerfile` (build/dev/pack stages), `docker-compose.yml`
-- [x] `justfile` + `scripts/*.sh` (every recipe delegates to a script)
-- [x] `config/app.json` (UA, URL, caps, keymap) + `config/steam_input.vdf` template
-- [x] `launcher/` C++23 skeleton + CMake (compiles with zero external deps via `__has_include` guards)
-- [x] `patches/series` (empty quilt series) + `patches/README.md`
-- [x] `flatpak/io.github.properrr.deckback.yml` manifest skeleton
-- [x] `.github/workflows/lint.yml` (free-runner-safe: shellcheck, clang-format, launcher build)
-- [x] `docs/SUPPORT.md`, `docs/legal.md` stubs
-- [x] Docker base = **Debian 12** matching Cobalt trunk (build/test/dev/pack stages, mirrored deps)
-- [x] Knowledge base: `.internal/findings/` (durable vs milestone split) + `.internal/MIGRATION.md` bump playbook
+## Phase 0 — Research spikes: done. The answers still in use:
 
-**Gate:** `just --list` works; `launcher/` builds standalone; docker image builds; no Chromium tree needed.
+- **S0.1:** Chrobalt (Cobalt 26+) builds and runs on generic Linux, and the engine target is
+  `content_shell`. Cobalt ≤25 is classic Starboard Cobalt, the wrong engine (`durable/decisions.md` D1).
+- **S0.2:** the TV UA (`config/app.json:user_agent`) gives interactive Leanback, while a CrKey UA
+  lands in cast-receiver mode. `content_shell` ignores `--user-agent`, so we set the UA through CDP.
+- **S0.3:** the Widevine library-CDM path is intact. Only `enable_widevine` gates it.
+- **S0.4:** `--ozone-platform=x11` on gamescope's Xwayland renders Leanback with a real RADV GPU process.
+- **S0.5:** media goes through Chromium's pipeline, not `SbPlayer`. VA-API needs
+  `--enable-features=VaapiVideoDecodeLinuxGL --use-angle=gl`, because the default ANGLE/Vulkan
+  backend silently falls back to software. libva on the OLED advertises `AV1Profile0` (`durable/hardware.md`).
+- **S0.6:** CDP key events are trusted, so input is launcher-side evdev→CDP with no engine patch.
+  Under Steam Input, the pad we can read is the virtual Xbox 360 pad.
 
----
+## Phase 1 — Build & bring-up on Deck
 
-## Phase 0 — Research spikes & de-risking  (4–6 ED)   → `.internal/findings/milestones/m114.md`
+Done: the persistent profile (`$XDG_DATA_HOME/deckback/profile`, passed as `--data-path`) survives a
+Flatpak reinstall, and the app launches in Game Mode from the Steam shortcut.
 
-- [x] **S0.1** Does trunk Chrobalt build + run on generic Linux? Which Chromium milestone *now*?
-      → **Pinned `DEPS.pin` = `a9181df8` (Cobalt 26.eap, Chromium M114 confirmed).** Checkout +
-      hermetic toolchain fetched OK; `content_shell` **builds, links (1.4G devel), and boots headless**
-      with CDP up (`just smoke`). Build uses `cobalt/build/gn.py -p chromium_linux-x64x11 -c devel` →
-      `content_shell` (NOT raw gn/cobalt). depot_tools py3 bootstrap fixed in the image. **KEY:**
-      Cobalt ≤25 is classic Starboard Cobalt (wrong engine); Chrobalt is 26+. See `m114.md`.
-- [x] **S0.2** Which UA yields full Leanback (voice search, sign-in, settings)? Any attestation beyond UA?
-      → **`Mozilla/5.0 (ChromiumStylePlatform) Cobalt/26.lts.0,gzip(gfe)` UA → interactive Leanback**
-      (onboarding/browse, `ytlr-app`, `youtube.com/tv#/`, no desktop redirect); seeded into
-      `config/app.json`. This is the verified TV-client form: desktop/SteamDeck tokens select a
-      different style bundle and render overlay text with opaque black backgrounds. NOTE: a `CrKey`
-      (Chromecast) UA loads `ytlr-app` but drops into **cast-receiver "Ready to cast"** mode —
-      unusable; smoke asserts not-cast AND not-desktop. **content_shell ignores `--user-agent`**
-      (Cobalt hardcodes Chrome/999) → UA injected via CDP; launcher needs a patch or startup CDP
-      override (R1, Phase 2/3). Full sign-in/voice are on-Deck checks. See `m114.md`.
-- [x] **S0.3** Is Chromium library-CDM path (`enable_library_cdms`/`enable_widevine`) intact or stripped?
-      → **INTACT** (not stripped). `third_party/widevine/cdm/` present; `widevine.gni` gates it behind
-      `enable_widevine` (default false). Re-enable via GN args + user-fetch CDM (gates Phase 7).
-- [x] **S0.4** Ozone: does trunk support `--ozone-platform=x11`? Wayland? What under gamescope?
-      → **YES.** deck build renders **interactive Leanback on the Deck** via `--ozone-platform=x11` on
-      gamescope's Xwayland `DISPLAY=:1`, real RADV gpu-process (no SwiftShader). Confirmed by CDP
-      screenshot (onboarding UI). Still TODO on-device: video playback (S0.5), gamepad (S0.6). See `m114.md`.
-- [x] **S0.5** Media stack: Chromium media pipeline (FFmpeg/mojo) or Starboard `SbPlayer` on Linux?
-      → **Chromium media pipeline** (`RendererImpl`); **zero** `SbPlayer`/starboard symbols in the
-      binary. **VA-API HW decode WORKS** with exactly `--enable-features=VaapiVideoDecodeLinuxGL
-      --use-angle=gl` (verified: `kVideoDecoderName=VaapiVideoDecoder`, `kIsPlatformVideoDecoder=true`,
-      VP9 1280×720, 0/84 frames dropped). `--use-angle=gl` is **required** — the default ANGLE/Vulkan
-      backend silently falls back to software. Ignore-blocklist flags are NOT needed.
-      **Today we ship software decode**, and YouTube serves us AV1 → `Dav1dVideoDecoder` on the CPU.
-      ⚠ **AV1 hardware decode measured PRESENT** on the OLED (libva `AV1Profile0`/VLD) — disputes
-      `durable/hardware.md`. See `m114.md` §"Media stack (S0.5)". Gate for Phase 4 is green.
-- [x] **S0.6** Gamepad: does Blink's Gamepad API see evdev pads? Does Leanback react under console UA?
-      → **Leanback is fully key-navigable**; CDP `Input.dispatchKeyEvent` events are **trusted**
-      (`isTrusted=true`) so Leanback's real handlers fire. Mechanism = **(b′) launcher-side evdev→key
-      over the existing CDP bridge — NO Cobalt patch** (`patches/series` stays empty; keymap can live
-      in `config/app.json`, a plan design goal). Under Steam Input the readable pad is the virtual
-      `Microsoft X-Box 360 pad`, not the raw Deck controller (only it advertises `BTN_SOUTH`).
-      **On-Deck gamepad exercise DONE 2026-07-08** — physical presses and a synthetic uinput pad both
-      drive Leanback focus end-to-end. See `m114.md` "Input on-Deck verification".
+- [ ] Reproducible build: verify `just gen dev/deck` and sccache. The pin itself is set in `DEPS.pin`.
+- [ ] First run in Desktop Mode (X11): no run is recorded. Game Mode launch is verified.
+- [ ] Force a 1280×720 render surface and check text sharpness against 1080p-authored Leanback. Not built.
+- [ ] Crashpad on, local minidumps only, no telemetry. Not built.
 
-**Gate:** `.internal/findings/milestones/m114.md` filled in; go/no-go on plan adjustments; `DEPS.pin` pinned.
+**Gate (not run):** cold boot → Game Mode → launch → browse → play 1080p + audio, stable for 30 min.
 
----
+## Phase 2 — Session & lifecycle   → `launcher/`
 
-## Phase 1 — Build & bring-up on Deck  (5–7 ED)
+Done: env, flags and config; the rotating log (`log.cpp`); watchdog restart-on-crash; deep links
+(`app://<id>` → `#/watch?v=<id>`, verified on-Deck). On a fresh profile, Leanback's account gate
+swallows every route until someone dismisses it. A failed navigation shows a controller-focusable
+Retry page (`errorpage.cpp`), and `error_title`/`error_hint` in `app.json` are the R1 hotfix surface.
 
-- [ ] Reproducible build: pin trunk commit in `DEPS.pin`; `just gen dev/deck` + sccache verified.
-- [ ] First run on Deck: Desktop Mode (X11) then Game Mode as non-Steam shortcut.
-- [ ] Force 1280×720 render surface; verify text sharpness vs. 1080p-authored Leanback.
-- [x] Persistent profile dir (`~/.var/app/...` shape) so sign-in survives updates.
-      **DONE in code** (`main.cpp:resolve_profile_dir`): default is now `$XDG_DATA_HOME/deckback/profile`
-      (Flatpak points that at the durable `~/.var/app/<id>/data`), then `~/.local/share/...`; the
-      ephemeral `XDG_RUNTIME_DIR` is a last resort only (it was the previous default — a tmpfs wiped on
-      logout, so sign-in would not have survived a reboot). `$DECKBACK_PROFILE` still overrides.
-      **Correction 2026-07-09 (review):** the dir was being passed as `--user-data-dir`, a
-      chrome/-layer switch content_shell/cobalt-shell silently ignore — the engine's switch is
-      **`--data-path`** (`shell_switches.cc:kContentShellDataPath`). Fixed in `main.cpp` +
-      `smoke.sh`; earlier runs actually kept state in `$XDG_CONFIG_HOME/content_shell`.
-      **On-Deck VERIFIED 2026-07-09:** sign-in survived the rebuilt Flatpak reinstall and Steam
-      Game Mode relaunch. Startup migration now copies a non-empty legacy runtime/config profile
-      into the durable path through staged atomic promotion, without overwriting an existing
-      durable profile (`launcher/src/profile.cpp`, `profile_test`).
-- [ ] Crashpad on, local minidumps only (no telemetry).
+- [~] Single-instance lock (`flock`): implemented, not verified on-Deck.
+- [~] Clean exit: the OSD's Y-hold (600 ms) and SIGTERM both shut down cleanly with exit 0. Steam's
+      "Close game" path in Game Mode is not verified on-Deck.
+- [ ] Error page on hardware: pull the network, then check that the injected page renders under
+      gamescope and that an injected Enter reaches Retry (an L2 test).
 
-**Gate:** cold boot → Game Mode → launch → browse (touch) → play 1080p+audio, stable 30 min.
+**Gate (not run):** 50 launch/kill cycles through the Steam UI with zero profile corruption.
 
-## Phase 2 — Session & lifecycle plumbing  (3–4 ED)   → `launcher/`
+## Phase 3 — Input: PS5-parity controls   → `launcher/src/input.cpp`, `config/steam_input.vdf`
 
-- [~] Launcher owns env/flags/config/log-rotation/watchdog restart-on-crash.
-      **log-rotation DONE** (`launcher/src/log.cpp`: size-capped rotating file sink + stderr mirror,
-      config-driven, thread-safe; `log_test`). env/flags/config/watchdog already in place.
-- [~] Single-instance lock; deep-link support (`app://` → `youtube.com/tv#?v=`).
-      Both implemented in `main.cpp` (flock guard + `apply_deep_link`). **Deep link on-Deck VERIFIED
-      2026-07-08**: `app://<id>` lands on `#/watch?v=<id>` with `readyState=4`. Caveat — on a fresh
-      profile Leanback's account gate ("Watch as guest") swallows every route until dismissed, which
-      mimics a broken deep link. Single-instance lock still unverified on-Deck.
-- [~] Clean exit: controller chord + Leanback Exit → proper shutdown; Steam "Close game" safe.
-      **SIGTERM/"Close game" now exits 0** (`watchdog.cpp`; `watchdog_test`). Controller-chord exit
-      is Phase 3 (input layer).
-- [x] **Failure-state UX. DONE 2026-07-09** (findings input-ux §16). `launcher/src/errorpage.{hpp,cpp}`
-      + `DevToolsClient::navigate_checked()`. On a failed navigation the Navigator goes to
-      `about:blank` and injects a controller-focusable Retry page (Enter/Space; Escape deliberately
-      unbound), retrying with 2s→30s backoff; a user-requested retry resets the backoff.
-      `error_title`/`error_hint` in `app.json` are the R1 hotfix surface.
-      **This fixed a silent bug**: `Page.navigate` reports failure as a *successful* command with an
-      `errorText` field, and the failed document keeps `location.href` set to the URL we asked for.
-      The old liveness check read that href and concluded the TV app had loaded, so a network outage
-      parked the user on Chromium's desktop interstitial forever, unlogged.
-      **⚠ Unverified**: that a CDP-injected document renders on `about:blank` under gamescope, and
-      that our injected Enter reaches our own button. Both are L2 tests: pull the network, assert
-      focus.
+Done: evdev→CDP key injection with multi-device merge and hotplug (verified on-Deck). The keymap,
+context layers (`keymap_player`/`keymap_osk`) and held-trigger modifier layers
+(`keymap_lt`/`keymap_rt`) come from `config/app.json`; every layer ships empty until the key spikes
+below. The OSD Settings menu (`osdmenu.cpp`, `config/scripts/osd.js`; Menu ☰, off playback; tabs
+Settings ▸ Keys/Captions, Updates, About) passes `tests/deck/test_osd.py` 8/8 on the OLED.
 
-**Gate:** 50 launch/kill cycles via Steam UI, zero profile corruption. *(on-Deck; not yet run)*
+Shipped bindings: A Enter · B Escape · X play/pause · LB/RB scrub (arrow keys) · LT/RT chapter seek
+(`chapter_seek.js`, falls back to ±`skip_seconds`) · View captions (`toggle_captions.js`) · Menu
+Settings · Y `toggle_gestures`. The triggers report analog `ABS_Z`/`ABS_RZ`, so LT/RT work as
+shipped. The old aliases `seek_back_10`/`seek_fwd_10` still map to scrub and log a startup WARN.
 
-## Phase 3 — Input: PS5-parity controls  (6–8 ED)   → `launcher/src/input.cpp`, `config/steam_input.vdf`
+Touch: `disable_touch` (default on) makes touch inert. `config/no_pointer.js` swallows pointer
+events, and `touchmode.cpp` holds gamescope's touch mode at hover. The `EVIOCGRAB` touch lock does
+not work and its code was removed (`durable/touch-lock.md`). Touch gestures are P12.4.
 
-- [x] Mechanism from S0.6: **(b′) launcher-side evdev→key over CDP**, not the planned in-tree
-      `ui::KeyEvent` patch. `launcher/src/input.{hpp,cpp}` (`GamepadInput`), wired in `main.cpp`
-      behind `cdp_nav`. Reads raw `<linux/input.h>` (no libevdev), opens every gamepad-capable
-      device and merges. **Verified on-Deck 2026-07-08** against the deployed `deck` build: real
-      controller presses AND a synthetic uinput pad both move Leanback focus and activate (A → the
-      Terms & Privacy overlay opened). Multi-device merge confirmed (Steam auto-wraps an attached pad
-      into a second Xbox-360 node; all opened, no duplicate keys). **Also confirmed in Game Mode via
-      the Steam shortcut** (flatpak) after rebuilding it — the installed bundle predated the input
-      commit, so `just deploy` alone leaves Game Mode stale. See `m114.md` "Game Mode (flatpak)".
-- [x] Default mapping now comes from **`config/app.json:keymap`**, not from hardcoded C++.
-      `build_button_map()` resolves each value either as a DOM key (`Enter`, `MediaPlayPause`, `c`)
-      dispatched verbatim, or as a semantic alias (`select`, `back`, `playpause`, `toggle_captions`,
-      `seek_back_10`, `seek_fwd_10`). This keeps the hot-swap promise in doc §1: a Leanback change
-      can be worked around by editing config, with no rebuild. Auto-repeat + acceleration retained
-      (acceleration still not exercised on-device). Bound today: A→Enter, B→Escape, X→MediaPlayPause,
-      LB→ArrowLeft, RB→ArrowRight, Select→c; D-pad + left stick → Arrows.
-      **Deliberate non-guessing:** `voice_search`, `player_menu`, `scan_rewind`, `scan_forward` have
-      no established Leanback key, so they resolve to nothing and are named in a startup `WARN`
-      rather than silently bound to a plausible-looking key.
-- [x] **Hotplug gap fixed.** `rescan_devices()` still handles device-lost; a new
-      `discover_new_devices()` runs every `kHotplugScanMs` (2 s) and opens only paths not already in
-      `paths_`, so an already-open pad is never torn down. **Verified on-Deck 2026-07-09:** with
-      Steam's `event10` open, a uinput pad created *after* startup was adopted (`event11`, plus the
-      second Xbox node Steam spawned in response) and its A press dispatched `btn 304 -> Enter`.
-- [x] **Analog triggers** (LT/RT, `ABS_Z`/`ABS_RZ`) get press/release hysteresis
-      (`trigger_pressed()`: press ≥192, release <64) so a trigger resting mid-travel cannot chatter.
-      **They are dead buttons as shipped**: `lt`/`rt` → `scan_rewind`/`scan_forward` → no DOM key →
-      nothing dispatched. See the L2/R2 modifier task below — this makes them free to repurpose.
-- [ ] **⚠ Trigger binding hazard (verify before relying on L2/R2).** `config/steam_input.vdf` binds
-      the triggers as `"click" → xinput_button TRIGGER_LEFT/RIGHT` (a **digital** press), but
-      `input.cpp` reads the **analog axes** `ABS_Z`/`ABS_RZ`. Whether Steam's virtual pad still emits
-      the analog axis under that binding is **unverified**. If it emits a digital button instead, the
-      hysteresis path never runs and the triggers are dead for a second, unrelated reason. One-line
-      check on-Deck: `evtest` the virtual pad and pull a trigger.
-- [~] **Runtime touchscreen block/unblock** (findings input-ux §4, the explicit requirement).
-      **DONE in code** — `launcher/src/touch.{hpp,cpp}` `TouchGuard`: RAII `EVIOCGRAB` on the FTS3528
-      (resolve by USB id `2808:1015` + MT-capability/name; node re-resolved on every grab so it
-      survives resume renumbering). Initial state from `app.json:block_touchscreen`; a controller
-      chord (`touch_lock_chord`, default `l3+r3` — both stick clicks) toggles the lock at runtime via
-      `GamepadInput::handle_chord`; the grab is always released on exit; **the controller is never
-      disabled**. Needs Flatpak `--device=input` (granted at install). `parse_chord` + config touch
-      parsing unit-tested.
-      **Feedback DONE** (findings input-ux §14): engaging the lock now shows a CDP-injected toast
-      naming the chord, pulses the pad (`EVIOCSFF`/`FF_RUMBLE`, its own `O_RDWR` fd), and
-      **unlocking requires holding the chord for `touch_lock_unlock_hold_ms` (800 ms)** while locking
-      stays immediate — two stick clicks are too easy to trip for an accidental unlock to be
-      acceptable. `TouchLockChord` + `toast_js` + `make_rumble_effect` unit-tested and
-      mutation-checked; `overlay_test` is the new target.
-      **⚠ The fd is grabbed but never read** (`touch.cpp` opens `O_RDONLY`, then only `EVIOCGRAB`s).
-      So the lock is total, and **§4's remaining policy is structurally unimplementable as built** —
-      no deliberate-center-tap escape hatch, no palm rejection. Both need the grab+read path priced
-      out in input-ux §11.
-      **⚠ SUPERSEDED 2026-07-10 — the load-bearing assumption was proven FALSE on a Deck.** gamescope
-      reads the panel *without* an exclusive grab, so `EVIOCGRAB` does NOT starve it — touch flowed
-      straight through the grab. The lock is a no-op (it would have announced a lock that never
-      engaged). Touch is instead made inert by `disable_touch` (page swallow + gamescope hover-lock),
-      verified 2026-07-10; the dead grab machinery ships disabled. See durable/touch-lock.md.
-- [ ] Leanback OSK usable end-to-end. **Steam OSK is NOT a safe fallback** (input-ux §8.3):
-      `STEAM+X` on a non-Steam Chromium shortcut can raise the *desktop* OSK and soft-lock the
-      session → the reliable path is **QAM ("…") → keyboard**; and under `--ozone-platform=x11` the
-      OSK **never auto-appears on `<input>` focus** (needs Wayland `text-input-v3`, which we don't
-      have, and we can't call the Steamworks OSK API). *Spike (input-ux §8.4): what do
-      Escape/Backspace/Delete do INSIDE the OSK? Strong prior from `starboard/key.h`: `kSbKeyBack ==
-      kSbKeyBackspace == 8`, so **B/Backspace likely pops the view rather than deleting** —
-      `Delete`(46) is the candidate erase key. Needs the context-layer task below.*
-- [~] Ship `config/steam_input.vdf` + import instructions; optional focus-move rumble (off by default).
-      **Template expanded** to full groups (face/dpad/sticks/triggers/switches/trackpads/gyro),
-      `controller_neptune`, **rear grips L4/L5/R4/R5 duplicating face buttons** for reachability,
-      right trackpad as an optional pointer (inactive by default), gyro off. Standard controls pass
-      through to the virtual pad so `input.cpp` reads them. *Byte-authoritative binding must be
-      exported from Steam's configurator on-Deck (Phase 3 gate); grid art + rumble still TODO.*
-- [x] **`launcher/tests/input_test.cpp`** covers the pure logic: binding resolution (DOM keys,
-      aliases, and the refusal to guess), direction resolution (diagonal→vertical, D-pad beats stick,
-      stable pointer identity), button-map construction against the shipped keymap, trigger
-      hysteresis, and `Config::load` keymap parsing. `just launcher test` → **8/8** (config, log,
-      devtools, player, watchdog, sha256, profile, input; re-checked 2026-07-09).
-- [x] `deckback-launcher --help` now prints usage and exits 0. It previously fell through the
-      unknown-arg branch and **launched YouTube**, as did any typo'd flag; unknown args now exit 2.
+- [ ] Leanback OSK usable end-to-end. The Steam OSK is not a safe fallback: open it from the QAM,
+      never with `STEAM+X`, which can raise the desktop OSK and soft-lock the session. Under
+      Xwayland it never opens on its own. Spike first: what do Escape, Backspace and Delete do
+      inside the OSK? `Delete` (46) is the erase candidate; Backspace probably pops the view.
+- [ ] Bind the researched keys only after the §8.4 spikes. `j`/`l`/`k` are desktop watch-page
+      shortcuts, and CEA codes 461/415/412/417 belong to Tizen/webOS, not Cobalt.
+- [ ] On-Deck key spikes (input-ux §8.4, TEST-PLAN §4), each with negative controls (CEA `461`/`415`
+      must do nothing): OSK erase (8/27/46), direct printable typing into search, transport keys
+      179/178/227/228/176/177, color keys 403–406, speed and chapters.
+- [ ] Text entry: decide and document the supported paths: the Leanback grid OSK via D-pad, the QAM
+      keyboard, and a physical/BT keyboard (it reaches the app, but Game Mode forces QWERTY
+      scancodes). The launcher only opens devices with `BTN_SOUTH`, so it has no keyboard path of its own.
+- [ ] Steam Input keyboard-emission fallback (input-ux §8.3): Steam Input can bind controls to
+      keyboard scancodes even for non-Steam shortcuts. Evaluate it as a CDP-failure fallback and
+      per-user remap layer (scancode ≠ layout).
+- [ ] `config/steam_input.vdf`: export the exact layout from Steam's configurator on-Deck. Optional
+      focus-move rumble (off by default) is not built.
+- [ ] Focus-trap sweep (input-ux §9): on every surface, press every direction from every focusable
+      element. Focus must always move or be deliberately absorbed.
+- [ ] Smallest-glyph measurement from an on-Deck screenshot: the smallest character must be ≥ 9 px
+      at 1280×800 (12 px recommended).
+- [ ] Back at the root: Back never quits; the deliberate exit is the OSD's Y-hold. Verify that
+      Escape at Leanback's root under our UA neither closes `content_shell` nor leaves a blank shell.
+- [ ] Input latency: log the time from evdev receipt to CDP ack for each key, and calibrate once
+      against a 120/240 fps camera.
+- [ ] Auto-repeat acceleration tuning on-Deck. This code has never run on a device.
+- [ ] Right-stick fast scroll on hardware: confirm the virtual pad emits `ABS_RX`/`ABS_RY` and that
+      Leanback keeps up with a 45 ms arrow cadence. Both fail safe.
+- [ ] First-run card: `config/scripts/overlay.js` still uses an inline `<style>` block, which the M138
+      CSP drops. Move it to `adoptedStyleSheets` + CSSOM. Then confirm on-Deck that the card paints
+      styled and that focus behind it stays frozen.
+- [ ] Captions: the View toggle flips CC on-Deck. Still to check on hardware: the toast and the CC
+      on a captioned video during normal play, and the OSD ▸ Settings ▸ Captions save round trip.
+- [ ] OSD writable settings still missing (via `user.json`): a button remap that keeps `select`/`back`
+      bound and never rebinds the fixed OSD controls; hardware-decode and touchscreen toggles; reset to
+      defaults (per key and all). R1 keys (`url`, `user_agent`, `cobalt_flags`, `cdm_*`) stay non-overlayable.
+- [ ] Exit follow-ups: refuse Exit while an update deploy is in flight (`exit_enabled` is fixed at
+      construction); teach Exit on the first-run card and Keys row (still `Menu (☰) — Settings`);
+      tune the 600 ms Y-hold by hand.
 
-*UX-gap tasks from the 2026-07-09 review (input-ux §7):*
+**Gate:** every Leanback surface is controller-drivable, latency ≤ the PS5 app, and the OSK works.
+Buttons and hotplug are verified; the OSK and latency are not measured.
 
-- [ ] **Touch-lock feedback + deliberate unlock** (input-ux §4 policy, currently violated — the
-      chord toggle is silent, log-only). Engage = lock glyph/toast + haptic; unlock = deliberate
-      hold or two-step so a stray chord can't defeat it. Overlay channel: CDP-injected DOM toast
-      (no engine patch); haptic via FF (`EVIOCSFF`) on the virtual pad — no SDL dep needed.
-- [ ] **Bind the researched keys** — *rewritten 2026-07-09 after input-ux §8.1 corrected §2.*
-      `j`/`l`/`k`/`/`/`Shift+N/P` are **desktop watch-page** shortcuts, not a TV-app contract, and
-      the CEA codes (461/415/412/417) belong to Tizen/webOS, **not Chromium/Cobalt**. Bind nothing
-      without the §8.4 spike.
-- [x] **Seek-model contradiction resolved in docs** (input-ux §12). Three artifacts disagreed:
-      SUPPORT.md promised "L1/R1 seek ±10 s", `app.json` says `seek_back_10`, and `input.cpp` maps
-      that alias to `ArrowLeft` — the console **scrub** model. **SUPPORT.md corrected 2026-07-09** to
-      describe scrubbing and to state plainly that no fixed-interval seek key exists on the TV
-      surface. *No mechanism can deliver ±10 s today — the blocker is the missing action key, not the
-      input device.*
-- [x] **Renamed the misleading aliases** `seek_back_10`/`seek_fwd_10` → `scrub_back`/`scrub_fwd`
-      (they dispatch arrows, not a 10 s jump). **DONE 2026-07-09**: `input.cpp:kActionAliases` gained a
-      `replaced_by` column; the old names still resolve (a remotely hot-swapped `app.json` must not
-      break) but emit a startup `WARN` via the new pure `deprecated_action_replacement()`.
-      `config/app.json` now uses the new names; SUPPORT.md was already correct. A new `input_test`
-      case loads **the real shipped `config/app.json`** (`DECKBACK_APP_JSON` from CMake) and asserts it
-      uses no deprecated alias, so config can no longer drift from the C++. Add a real `seek_back_10`
-      only if spike §8.4 #3 finds a key that actually seeks.
-- [x] **`devtools.cpp` dispatch surface widened. DONE 2026-07-09.** The 12-entry `kKeys` table is
-      replaced by `key_spec()`, which resolves either a named key or **any single printable ASCII
-      character** (letters/digits/space/punctuation, incl. shifted forms carrying the physical key's
-      `code`, e.g. `'?'` → `Slash`). Added `MediaRewind`(227)/`MediaFastForward`(228) (tree-verified in
-      `cobalt/src/starboard/key.h`: `0xE3`/`0xE4`), `Delete`(46) and `Tab`(9). Printable keys dispatch
-      `keyDown`+`text` (not `rawKeyDown`), which is what makes `beforeinput`/`textInput` fire — the
-      prerequisite for text entry. Added the `modifiers` bitfield (`mod::kAlt/kCtrl/kMeta/kShift`) and
-      **`Input.dispatchMouseEvent`** (`mouse_press`/`mouse_release`/`mouse_click`) for voice V1.
-      `devtools_test` asserts the **wire format** against a request-capturing fake CDP server, not our
-      return values; both the VK codes and the `text` field were mutation-tested.
-      *Nothing new is bound:* `scan_rewind`/`scan_forward` remain unmapped until the on-Deck spike.
-- [x] **Re-scoped `y = voice_search`: it is not a key. DONE 2026-07-09** (input-ux §8.2). The input
-      layer no longer treats it as a binding at all: `find_voice_control()` resolves it to an evdev
-      code that `handle_voice()` intercepts, and `without_voice_control()` removes it from the button
-      map **only when voice is enabled** — with voice off it stays in the startup "unmapped" warning,
-      because then it really is a dead control. Activation is a trusted `Input.dispatchMouseEvent` on
-      the soft-mic button's rect centre, not focus+Enter (more robust, and no letterbox transform).
-- [x] **Right stick: fast list traversal. DONE 2026-07-09** (findings input-ux §15). `fast_scroll()`
-      in `input.cpp` (pure, unit-tested, mutation-checked) maps the raw `ABS_RX`/`ABS_RY` deflection
-      to an arrow key plus a **repeat rate**: `right_stick_slow_ms` (200) at the deadzone edge,
-      linear to `right_stick_fast_ms` (45) at full travel, re-read from the current deflection on
-      every step. The rate is analog *on purpose* — the D-pad accelerates over time because it is
-      digital and cannot know how hard you push; a time ramp here would fight the thumb for the same
-      variable. Dominant axis wins, vertical takes the tie. Suppressed while the D-pad/left stick
-      hold a direction. Routed through `resolve_direction_key()`, so layers rebind it and **no new
-      key assumption is introduced** — arrows are verified.
-      **⚠ Unverified**: that Steam's virtual pad emits `ABS_RX`/`ABS_RY` under our `steam_input.vdf`
-      at all (same hazard class as the L2/R2 trigger axes above), and that Leanback tolerates a 45 ms
-      arrow cadence. Both fail safe: no axis = no scroll; dropped keys = slower scroll.
-- [x] **Context-aware keymap layers + L2/R2 held-modifier layer. Mechanism DONE 2026-07-09**
-      (one change: they are the same machinery). New `launcher/src/layers.{hpp,cpp}` holds the
-      `Layer{Browse,Player,Osk}` enum, `resolve_layer()`, and a `LayerState` (relaxed atomic) written
-      by `PlayerController`'s poll thread and read by `GamepadInput`'s.
-      `player.cpp` now fetches **three signals in one CDP round trip** as a bitmask (`playing`,
-      `player_open`, `text_input_focused`) — three separate evaluates per tick would triple poll cost
-      and could observe an inconsistent page. `player_open` keys off the `#/watch` hash route, whose
-      shape is *verified* by the 2026-07-08 deep-link test. An unreachable engine decodes to all-false
-      → `Browse` → today's context-free behavior, so a crash mid-playback can never strand the input
-      on player bindings (`player_test` covers this).
-      `input.cpp` gained `KeyLayer`/`Keymaps`/`build_layer`/`resolve_button`/`resolve_direction_key`.
-      **The two layer kinds differ on purpose:** a *context* layer (player/osk) only overrides — an
-      unbound control falls through to base; a *modifier* layer (held LT/RT) **absorbs** an unbound
-      control, because falling through would make LT+A fire a plain A while the user holds a modifier
-      precisely to mean "not the normal action". An empty modifier layer is not a modifier at all, so
-      the trigger keeps its own binding. LT wins over RT when both are held. Directions are rebindable
-      per-layer and re-resolved on **every auto-repeat**, so releasing a modifier mid-hold takes effect
-      without re-pressing. Config: `keymap_player`/`keymap_osk`/`keymap_lt`/`keymap_rt`, all
-      hot-swappable, **all shipped EMPTY** — the mechanism exists, no key is guessed. `input_test`
-      covers precedence/absorb/fall-through and asserts the shipped `app.json` layers stay empty.
-      Still blocked for *binding* anything: the trigger binding hazard above (does the virtual pad even
-      emit `ABS_Z`?) and the §8.4 key spikes.
-- [ ] **Touch gesture layer** (input-ux §3 "richer touch layer" + §7 — beats the Switch YT app,
-      which shipped without touch scrolling): read FTS3528 MT events in the launcher and translate —
-      flick → arrow-key bursts (**Leanback has NO touch scrolling today**; rails are untraversable
-      by touch), left-edge swipe → Escape (**no touch Back path exists**), double-tap L/R → seek,
-      tap-hold → 2× (pending the speed spike).
-      **⚠ Price this before committing (input-ux §11).** `EVIOCGRAB` is exclusive — there is no
-      "observe without stealing". Reading touch without grabbing gives **double actuation** (our
-      gesture *and* gamescope's click), so a gesture layer **forces the permanent-grab path**. Then:
-      tap-to-activate stops being free and becomes ours to re-inject as CDP mouse clicks (including
-      the 720p→800p letterbox coordinate transform); palm rejection becomes ours; and a launcher
-      crash kills touch until the kernel releases the grab. The same grab+read path is what finally
-      makes §4's escape hatch and soft-suppress possible — **lock and gestures are one mechanism and
-      must be designed together.** This is an architectural commitment, not an incremental feature.
-- [ ] **On-Deck key spikes** (no-guessing policy — bind only after verification; probes + the
-      capturing listener are written out in input-ux §8.4 and TEST-PLAN §4). Every spike ships with
-      **negative controls** (inject CEA `461`/`415` and require they do nothing), else "the key
-      worked" is unfalsifiable. Covers: OSK erase semantics (8 vs 27 vs 46); **direct printable
-      typing** into the search field (the highest-value one — it decides whether a real/BT keyboard
-      can ever type into Leanback, or the grid OSK is D-pad-only); transport keys 179/178/227/228/
-      176/177 + colors 403–406; soft-mic reachability; speed/chapters (no TV hotkey is documented —
-      speed is a D-pad menu).
-- [ ] **Text-entry story, end to end** (new workstream — input-ux §8). Decide and document the
-      supported path: Leanback grid OSK via D-pad (always works), QAM keyboard (never `STEAM+X`),
-      physical/BT keyboard (**reaches the app, but Game Mode forces QWERTY scancodes regardless of
-      the user's layout**), and voice via the soft-mic button. The launcher currently has **no text
-      path at all**: `input.cpp:is_gamepad()` only opens devices advertising `BTN_SOUTH`, so a
-      keyboard is never read, and `devtools.cpp` cannot dispatch arbitrary characters.
-- [ ] **Steam Input keyboard-emission fallback** (input-ux §8.3): `config/steam_input.vdf` is pure
-      xinput passthrough today. Steam Input can bind controller inputs to **arbitrary keyboard keys**
-      (by scancode) even for non-Steam shortcuts — a live fallback if CDP injection ever fails, and
-      the per-user remap layer. Evaluate; do not adopt blindly (scancode≠layout).
-- [ ] **Focus-trap sweep** (Deck-Verified gate, input-ux §9): for every surface, press every
-      direction from every focusable element; assert focus always moves or is deliberately absorbed,
-      and nothing becomes unreachable. This is the most common TV-app defect and we have never
-      tested it.
-- [ ] **Smallest-glyph measurement** (Deck-Verified hard number): smallest rendered character must be
-      ≥ **9 px @1280×800** (12 px recommended). Leanback's secondary metadata text is the risk, and
-      we render from a 720p buffer. Measure on-device from a screenshot.
-- [ ] **Back-at-root semantics** (input-ux §9, handheld inversion): repeated Back on Android TV lands
-      on the OS launcher; in our kiosk it must land in **Steam Game Mode**, never a blank shell or
-      Chromium chrome. Decide deliberately: swallow at the Leanback root, or clean-quit.
-- [ ] **Input latency measurement** (the gate says "≤ PS5" with no method): log the evdev-receipt →
-      CDP-ack delta per key in the launcher, calibrate once against a 120/240fps camera on-Deck.
-- [ ] **Auto-repeat acceleration tuning** on-Deck (Verified bar: fast but not overshooting; the
-      acceleration code exists but has never been exercised on-device).
-- [x] **First-run controls overlay. DONE 2026-07-09** (findings input-ux §17).
-      `launcher/src/onboarding.{hpp,cpp}` + `onboarding_test`. A modal CDP-injected card, drawn once
-      the TV app has loaded (`Navigator::set_on_app_loaded`), dismissed by any *button* (never a
-      stick — it drifts at rest), re-openable via the `show_controls` action.
-      **The rows are derived from the live `app.json`, never hardcoded**: rebind a control and the
-      card says so; a control resolving to no DOM key (`L2`/`R2` today) is omitted rather than
-      advertised as dead; `voice_search` appears only when voice is enabled. A test reads the real
-      shipped config and asserts no row is a dead promise.
-      `start` moved from `player_menu` (a verified no-op) to `show_controls`. Marker is written on
-      *show*, versioned (`first_run_v1`), in `$XDG_STATE_HOME/deckback/`.
-      **⚠ Unverified**: that the card renders over Leanback, and that swallowing evdev events really
-      freezes focus behind it. Both are L2: show card, press D-pad, assert `activeElement` unmoved.
-- [x] **OSD Settings menu + self-update fold. DONE 2026-07-15** (`.internal/osd-menu-plan.md`).
-      In-app, controller-driven Settings menu (`launcher/src/osdmenu.{hpp,cpp}`, `config/scripts/
-      osd.js` + `osd_button.js`), opened from a persistent top-right Settings button via Menu (☰),
-      off playback. Two tabs: **Settings ▸ Keys** (live keymap, reuses `controls_overlay_rows`) and
-      **Updates**. JS owns focus/tab/scroll; `input.cpp` captures the pad modally and forwards
-      commands, reusing the auto-repeat + right-stick machinery. Invariant *capture ⇔ paint* fixes the
-      old update-card input-trap class. **Self-update UI folded in**: `updateprompt.cpp` feeds the
-      Updates tab + button badge (no more pill/card); `update_badge*`/`update_card*` scripts and
-      `handle_update_card` removed; the Flatpak-portal detect/deploy engine is unchanged. Also
-      supersedes the separate configurator app (`configurator-plan.md`).
-      L0: `osdmenu_test` + extended `scripts_test`. **⚠ Unverified on hardware**: the L2 two-bug
-      regression suite `tests/deck/test_osd.py` exists (render, focus/verdicts, body-swap survival,
-      Menu opens/closes, input restored after close) but has **not** run on a Deck. Docs updated
-      (SUPPORT.md, HOW-IT-WORKS.md, CHANGELOG, self-update.md).
+## Phase 4 — Media pipeline & hardware decode   → `config/app.json:cobalt_flags`
 
-**Gate:** every Leanback surface controller-drivable; latency ≤ PS5 app; OSK works.
-*(buttons + hotplug verified on-Deck 2026-07-09; OSK and latency still unmeasured)*
+Done: hardware decode ships. `cobalt_flags` carries `--enable-features=VaapiVideoDecodeLinuxGL` and
+`--use-angle=gl`, verified on the OLED by two checks together: the decoder reports
+`VaapiVideoDecoder` + `kIsPlatformVideoDecoder`, and a composited screenshot passes the green-band
+pixel check (`video_corruption_verdict`). `just power` averages **5.6 W** under hardware VP9
+playback (gate ≤ ~9 W). After any Cobalt bump, re-run the pixel check: the decoder name alone gives
+false passes.
 
-**Open caveat (UPDATED 2026-07-22):** `toggle_captions` (View) **no longer sends `c`.** The old
-Select→`c` binding dispatched a trusted `KeyC` keydown that the page received and ignored —
-confirmed dead on-device (user report): `c` is the *desktop* youtube.com caption hotkey and
-youtube.com/tv (Leanback) honours no such key contract (input-ux.md §8.1). It is now a **launcher
-action** (like the chapter/skip seeks): the input layer evaluates `config/scripts/toggle_captions.js`
-over CDP, driving the HTML5 player's own caption module (`getOption`/`setOption` `tracklist`+`track`),
-and shows a toast with the new state (`captions_toast`). **Implemented + L0-tested; still needs
-on-Deck functional verification** — confirm on a captioned video that the CC actually toggles and the
-toast matches. The exact caption-module API is version-dependent, so `toggle_captions.js` is
-hot-swappable if a Cobalt bump moves it (no rebuild). **Verified on-Deck 2026-07-22 (flatpak, OLED):
-the toggle flips CC state and selects the SteamOS system language (`bind captions … lang 'en'`); the
-green-band-free player-module path is confirmed. Remaining: eyeball the toast + CC on a captioned
-video during normal play.**
+- [ ] Step 1: 1080p60 headroom, and the draw with software decode for comparison (`just power`;
+      hardware decode is 5.6 W). For 720p60, see P12.15.
+- [~] Step 2: AV1 steering (`config/av1_steering.js`, injected by `navigator.cpp`, gated by
+      `quality.steer_av1_unsupported`) makes AV1 read unsupported while VP9/H.264 pass. Still to
+      confirm on-Deck: YouTube serves VP9 and `kVideoDecoderName` is never `Dav1dVideoDecoder`.
+- [ ] Settle the AV1 question. This blocks any decision to allow AV1. Force an AV1 stream and
+      confirm `kVideoDecoderName=VaapiVideoDecoder`. The LCD half needs an LCD unit. SteamOS ships
+      no `vainfo`, so query libva via ctypes (the OLED profile list is in `durable/hardware.md`).
+- [ ] Sweep the QAM settings in `just power`: OLED refresh 90→60→45 Hz, framerate cap on/off, and
+      TDP limit during VP9 playback. These are the only per-app power settings in Game Mode. The
+      results feed the P8 battery section.
+- [ ] Direct-scanout check: confirm gamescope direct-flips our fullscreen 1280×800 Xwayland surface
+      during playback (debug HUD / gamescopectl). If it composites instead, find out why.
+- [ ] Audio-wakeup experiment in `just power`: `--audio-buffer-size=<frames>` + `PULSE_LATENCY_MSEC`.
+      Measure the change in draw and confirm A/V sync holds.
+- [ ] Memory: trial `--process-per-site` (single-origin kiosk). Measure RSS and renderer count over
+      a long browse + play session.
 
-**Captions are now user-configurable (2026-07-22).** The View button's behaviour is edited in-app via
-**OSD ▸ Settings ▸ Captions** (`config_store.cpp` user.json overlay + `caption_settings.cpp`): an
-ordered preferred-language list (add/remove + full-language picker), author/auto source policy,
-remember-last, and the toast — persisted and applied live. The widget model (combo/langlist/picker,
-`apply:cc.*` verdict) is L0-tested and verified on-Deck over CDP; the launcher's Menu→open→persist
-round trip is mechanical (mirrors the verified Updates-button path) but not yet eyeballed on hardware.
+**Gate (not run):** 4 h of continuous battery playback (OLED), no thermal throttling, no A/V desync
+after seek storms.
 
-## Phase 4 — Media pipeline & hardware decode  (8–12 ED)   → `config/app.json` (S0.5 UNGATED)
+## Phase 5 — Audio & microphone
 
-S0.5 answered the two big unknowns: the pipeline is Chromium's (not `SbPlayer`), and VA-API decode
-works. Note the mechanism is **flags in `config/app.json:cobalt_flags`, not a `patches/` quilt change**.
+Done: audio out goes through PipeWire. SteamOS denies mute changes inside the Flatpak, so
+`scripts/install-audio-repair.sh` installs a host-side service that unmutes Deckback's sink input
+(verified on-Deck).
 
-- [✗] Step 3 (attempted, then REVERTED 2026-07-10): adding
-      `--enable-features=VaapiVideoDecodeLinuxGL` + `--use-angle=gl` selected `VaapiVideoDecoder`
-      (`kIsPlatformVideoDecoder=true`) BUT rendered **green-band corruption on every frame** —
-      ANGLE's DMA-buf import of the tiled NV12 VA surface is broken on radeonsi (the exact failure
-      the "zero-copy SETTLED" item below predicted). A 7-variant on-Deck bisection proved the
-      corruption is inseparable from `VaapiVideoDecoder`; every clean config had silently fallen back
-      to software `VpxVideoDecoder`. **Flags removed from `config/app.json`; we ship software decode.**
-      A user reported the green lines — every automated metric (decoder name, `corruptedVideoFrames=0`)
-      false-passed. See `m114.md` §"VA-API decode is VISUALLY CORRUPT" + `durable/hardware.md`.
-      **P4 hardware decode is BLOCKED, not done.** Re-enable requires fixing the ANGLE↔VA-API import
-      at the engine/Mesa layer (or a working gamescope hardware-overlay path), gated on a PIXEL check.
-- [ ] Step 1: VP9 1080p60 headroom + baseline battery draw, sw vs hw (`just power`).
-- [~] Step 2: `MediaCapabilities`/`canPlayType` steering. **DONE in the launcher, patch-free**
-      (`navigator.cpp` injects a CDP `Page.addScriptToEvaluateOnNewDocument` script overriding
-      `MediaSource.isTypeSupported`, `HTMLMediaElement.canPlayType`, and
-      `navigator.mediaCapabilities.decodingInfo` so **AV1 reads unsupported while VP9/H.264 pass
-      through**). Sticky across Leanback's target teardown; gated by `quality.steer_av1_unsupported`.
-      **JS logic verified offline** (node/vm: `av01`/`av1` → unsupported everywhere, `vp9`/`vp09`/`avc1`
-      → supported, `avc1` not mis-caught). This is the "MediaCapabilities patch" CLAUDE.md/common.gn
-      referenced — realized in the launcher instead of `patches/`. *On-Deck: confirm YT now serves VP9,
-      `kVideoDecoderName` no longer `Dav1dVideoDecoder`.*
-- [ ] **Close the AV1 dispute** (blocks any decision to *allow* AV1): force an AV1 stream and confirm
-      `kVideoDecoderName=VaapiVideoDecoder`; repeat the libva profile query on an **LCD** unit.
-      `vainfo` is absent on SteamOS — query libva via ctypes (recipe in `m114.md`).
-- [ ] Step 4: power validation — target ≤ ~8–9 W for 1080p VP9 (vs ~12–15 W sw).
+- [ ] Switching audio output (3.5 mm / Bluetooth) without a restart: not verified.
+- [~] Mic auto-grant: `Browser.grantPermissions` `audioCapture` for the app origin only, gated by
+      `mic_autogrant`. Not verified on-Deck: no prompt, and a live capture stream.
+- [ ] Voice search: not shipped; the voice code was removed because the mic never worked on hardware.
+      It cannot be a keypress here (Cobalt routes voice through a Starboard service this build lacks);
+      a reimplementation clicks Leanback's soft-mic button over CDP (input-ux §13).
+- [ ] V0 — Does Leanback render a soft-mic button under our UA? Probe `typeof window.h5vcc` and the
+      DOM; if gated, try an `h5vcc` shim via `Page.addScriptToEvaluateOnNewDocument` (unverified). No
+      button and no working shim means voice cannot be delivered on this engine; the docs must say so.
+- [ ] V4 — Button choice: Y is now `toggle_gestures`. Using a rear grip needs P12.7 first, because
+      the grips are not on the virtual pad.
+- [ ] V5 — Prove the auto-grant: `getUserMedia` with no prompt, and a live, non-silent track through
+      the Flatpak pulse socket. Check audio levels, not just that no error occurred.
 
-*Platform-optimization tasks from the 2026-07-09 deep-research pass (`durable/platform.md` +
-m114.md §"Platform-optimization research"):*
+**Gate:** voice search works in a normal room on the OLED, with a video playing and with a BT
+headset mic, and audio output can switch without a restart.
 
-- [ ] **Sweep the QAM knobs in the power matrix** (`just power` runs): OLED refresh 90→60→45 Hz,
-      per-game framerate cap on/off, TDP-limit sweep during 1080p VP9 playback. These are the ONLY
-      per-app compositor/power levers available in Game Mode (gamescope's flags are Valve's; the
-      `-r`/`-o` per-app-cap claim was refuted). Winning combo feeds the P8 SUPPORT.md task.
-- [ ] **Direct-scanout check** (on-Deck): confirm gamescope direct-flips our fullscreen 1280×800
-      Xwayland surface during playback (gamescope debug HUD / gamescopectl); if it composites, find
-      what disqualifies us. Keep the window native 800p — never make gamescope scale us.
-- [ ] **Audio-wakeup experiment** inside `just power`: `--audio-buffer-size=<frames>` +
-      `PULSE_LATENCY_MSEC` (PipeWire quantum via the pulse-compat path) — measure the draw delta,
-      confirm A/V sync unharmed.
-- [ ] **Memory: trial `--process-per-site`** (single-origin kiosk; switch verified in M114) —
-      measure RSS / renderer count under a long browse+play session; zram (~half RAM, SteamOS
-      3.6+) is the pressure backstop, not a budget.
-- [x] **Zero-copy question SETTLED — tolerate one copy** (resolves the plan §6 P4 step 3 hedge):
-      M114 has no zero-copy-GL feature at all, and radeonsi's disjoint dma-buf plane export breaks
-      Chromium's zero-copy import on AMD anyway. No work item remains; do not chase it.
+## Phase 6 — Power: sleep, resume, idle: done.
 
-**Gate:** 4 h continuous battery playback (OLED), no thermal throttling, no A/V desync after seek storms.
+Gate passed on the OLED: on every `just soak` resume the app was alive, the position advanced, audio
+returned and the screen stayed lit. Suspend holds a logind delay inhibitor to pause and checkpoint;
+resume waits for the network, then nudges `play()` (or reloads after `resume_reload_after_ms`, which
+ships 0 = off). The logind idle inhibitor is only a signal; the host-side idle-nudge helper keeps the
+screen lit (`durable/keep-awake.md`). `just soak` reports EPP but never fails on it (SteamOS can reset
+it after resume, steamos#2383; writing it needs root).
 
-## Phase 5 — Audio & microphone  (3–5 ED)
+- [ ] Tune `resume_reload_after_ms` on-Deck. This needs logind-driven sleeps (see the P9 `just soak` item).
 
-- [x] Audio out via PipeWire; speaker playback path verified on-Deck. SteamOS denies mute changes
-      from inside the Flatpak (`Access denied`), so `scripts/install-audio-repair.sh` installs a
-      host-side user service scoped to Deckback's sink input. **On-Deck VERIFIED 2026-07-09:** a
-      live muted stream recovered to `Mute: no`. 3.5 mm / BT hot-swap remains unverified.
-- [~] Mic in `getUserMedia` → PipeWire; auto-grant mic for youtube.com origin only (embedder policy).
-      **Auto-grant DONE** (`navigator.cpp` → `DevToolsClient::grant_permissions` =
-      `Browser.grantPermissions` `audioCapture` scoped to the app origin only; sticky across reconnect;
-      gated by `mic_autogrant`). PipeWire routing of the captured stream is runtime/Flatpak (pulse
-      socket already in finish-args). *On-Deck: confirm no mic prompt + a live capture stream.*
-- [ ] Voice search e2e on the OLED mic array + BT headset mic (no LCD unit — decisions.md).
-      **Design + spike ladder: findings input-ux §13.** It is *not* a keypress — see below.
+## Phase 7 — Widevine (best-effort)   → `patches/0001-…-widevine-cdm-registration`, `launcher/src/cdm_fetcher.cpp`
 
-*Voice input (hold-to-talk), designed 2026-07-09 (input-ux §13). Stop at the first spike that fails.*
+Done: `enable_widevine = true` plus patch 0001, a shell-side `AddContentDecryptionModules` override
+(the GN arg alone registers nothing). With no CDM installed, `org.w3.clearkey` resolves and
+`com.widevine.alpha` rejects with `NotSupportedError`; `--widevine-cdm-path` is passed only when a
+CDM is installed. `CdmFetcher` is opt-in: download from `cdm_url`, SHA-256 check against
+`cdm_sha256`, atomic install, re-check at startup. We never bundle or redistribute the CDM, and CI
+never fetches Google's.
 
-- [ ] **V0 — spike before binding anything: does our own UA hide the mic button?** We ship a Cobalt
-      UA, so Leanback may assume the platform supplies voice via `h5vcc`/`SoftMicPlatformService` and
-      either not render a web soft-mic button, or render one whose handler calls a missing API.
-      **Our identity bet (R1) could be the thing that breaks voice.** Probe `typeof window.h5vcc` and
-      query the DOM for a mic control. A patch-free hypothesis if it is gated: shim the service via
-      `Page.addScriptToEvaluateOnNewDocument` (the technique `navigator.cpp` already uses for AV1
-      steering), advertising `micGesture:"HOLD"` — **unverified, the protocol is Cobalt-internal.**
-      If there is no button and no working shim, **voice is not deliverable on this engine; say so
-      rather than ship a dead button.**
-- [x] **V1 — `Input.dispatchMouseEvent` added to `devtools.cpp`. DONE 2026-07-09**
-      (`mouse_press`/`mouse_release`/`mouse_click`; press and release are separable so hold-to-talk can
-      hold the button down).
-- [x] **V2 — hold-to-talk. DONE 2026-07-09.** New `launcher/src/voice.{hpp,cpp}`: a pure,
-      clock-injected `HoldToTalk` state machine (press → pending, tick past `voice_hold_ms` → Start,
-      release → Stop) wired into `input.cpp` via `handle_voice()`, which intercepts the voice control's
-      press/release edges before the press-edge-only button path. The poll loop now wakes at the hold
-      deadline — a held button emits no further evdev events, so otherwise the mic would open on the
-      next unrelated event, or never. A kernel auto-repeat or a duplicate press from Steam's merged
-      second pad does **not** reset the deadline. `voice_click_toggles` covers the tap-to-toggle page.
-- [x] **V3 — duck/pause while capturing. DONE 2026-07-09** (in `VoiceController`, not
-      `PlayerController` — it owns the mic lifetime). `voice_duck` = `none|mute|pause`, default
-      **pause**, applied *before* the mic opens because the first word is the one ASR needs most.
-      Restored on stop, and only when we were the ones who changed it. `input.cpp` also stops voice on
-      exit so the mic is never left open and playback never left ducked. **A voice spike run in a
-      silent room still has not tested the real case** — the gate requires a video playing.
-- [ ] **V4 — button choice.** Default `y` (already nominally `voice_search`, unbound, and where TV
-      apps put search). To put it on a rear grip instead: grips **are not on the virtual pad** and
-      evdev cannot read them (§1). The only route is a Steam Input binding mapping a grip to a
-      standard xinput button — and `steam_input.vdf` maps all four grips onto face buttons today, so
-      a grip is indistinguishable from the face button it duplicates. Free one first (e.g. `START`,
-      whose `player_menu` is dead anyway).
-- [ ] **V5 — prove the P5 auto-grant on hardware**: activating the mic must call `getUserMedia` with
-      **no permission prompt**, and the captured track must be **live and non-silent** through the
-      Flatpak pulse socket. Assert on audio levels, not on the absence of an error.
+- [~] A real CDM has never loaded: no licence exchange, no DRM frame. Loading one is a user-side
+      step; `tests/deck/test_media.py::test_widevine_state` reports the result.
+- [~] Fetcher source: support Google's component-updater endpoint (a CRX/zip, not a raw `.so`) and
+      document it in SUPPORT.md. The direct-URL path is the MVP.
+- [~] Explain the L3 resolution cap on DRM streams to the user. The messages for a missing or
+      rejected CDM are done.
 
-**Gate:** voice search succeeds in a normal room on the **OLED**, *with a video playing* (V3), and
-with a Bluetooth headset mic; audio hot-swap without restart.
+**Gate:** a Widevine test stream and one YouTube rental play, with a human-readable error when no
+CDM is installed.
 
-## Phase 6 — Power: sleep, resume, idle inhibit  (4–6 ED)   → `launcher/`
+## Phase 8 — Packaging & distribution   → `flatpak/`, `scripts/`
 
-- [x] Suspend: logind `PrepareForSleep` delay-inhibitor → pause, checkpoint, flush → release.
-      **DONE.** sd-bus mechanism (`platform.cpp`) + the pause/checkpoint hook now real via the
-      DevTools bridge: `PlayerController::on_suspend` pauses `<video>` and logs its position while the
-      delay inhibitor is held (`launcher/src/player.cpp`, `player_test`).
-- [~] Resume: wait network-online (NM/probe backoff), rebuild PipeWire, nudge player, refresh token.
-      **Nudge + network-online wait + token refresh DONE.** `on_resume` waits on `wait_online()`
-      (netprobe TCP backoff to `resume_probe_*`) before acting, then nudges `play()`. **Token/stream
-      refresh added**: if the Deck slept ≥ `resume_reload_after_ms` (CLOCK_BOOTTIME delta; 0 = off by
-      default), it `Page.reload`s so Leanback re-fetches fresh stream URLs + auth instead of nudging a
-      dead `<video>` (`player_test` covers both the reload and the disabled path). PipeWire rebuild is
-      runtime/hardware (out of launcher scope). *On-Deck: tune the threshold via `just soak`.*
-- [x] Idle-inhibit while playing (ScreenSaver/logind); fallback synthetic activity behind config flag.
-      **DONE.** logind block inhibitor (`set_idle_inhibited`) is now driven by a real play-state
-      source: `PlayerController` polls `document.querySelector('video')` state over DevTools every
-      `devtools_poll_ms`. Synthetic-activity fallback is plumbed behind a config flag (warns; not yet
-      implemented — logind path is primary).
+Done: Flatpak on `org.freedesktop.Platform//25.08`, sandboxed via zypak; `finish-args` include
+`--device=input` (never `--device=all`) and `--share=ipc`, with `--require-version=1.16.0`, and
+`just flatpak`/`flatpak-lint.sh` fail if evdev access is dropped. The `pack` image is
+`debian:13-slim` (`durable/packaging-toolchain.md`). `install.sh` installs, checks evdev access
+(exit 2 if absent), runs `steamos-add-to-steam`, and pulls the runtime from Flathub. SUPPORT.md
+covers controls, layout import, typing (QAM keyboard, never `STEAM+X`; no automatic OSK;
+QWERTY-forced keyboards), DRM opt-in, sign-in, logs, and the glyph and automatic-OSK limits.
 
-- [x] **Measure the post-resume EPP penalty** in `just soak` (verified: SteamOS 3.8.2-beta resets
-      EPP on cores 1–7 from `balance_performance` to `performance` after resume → higher draw/heat,
-      [steamos#2383](https://github.com/valvesoftware/steamos/issues/2383)). **BUILT 2026-07-09; RAN
-      2026-07-10 in the soak — EPP was unchanged across resume on the tested build (T5); the reset is
-      a version-specific hazard, still reported and never gated.** `deckctl.py epp` reads every core
-      before the first suspend and after each resume;
-      `soak.sh` counts the cycles on which it moved and names the transition. Root-only sysfs → **we
-      cannot fix it from the Flatpak**, so it is reported and never gated. Still to do: document the
-      affected builds in SUPPORT.md (P8) and track the issue.
-      *Not done:* `power_now` before-suspend vs after-resume per cycle. EPP is the cause and is read
-      directly; a per-cycle wattage delta would need a settle window inside each of 25 cycles.
+- [ ] Widevine as extra-data in the manifest (legal note in `docs/legal.md`). The opt-in
+      `CdmFetcher` path exists (P7).
+- [ ] Self-hosted runner for Chromium-scale builds with persistent sccache. Free runners stay lint-only.
+- [~] Grid art from the local `just install` path. The one-line `web-install.sh` already writes the
+      shortcut and artwork via `steam_shortcuts.py`.
+- [ ] SUPPORT.md: Steam Input as the per-user remap path. Users rebind a control in Steam's
+      configurator; `keymap` stays the hotfix layer.
+- [ ] SUPPORT.md "Leaving the app": the OSD's Y-hold Exit pauses and shuts down cleanly, STEAM → Exit
+      Game also shuts down cleanly, and holding STEAM + B force-quits.
+- [ ] SUPPORT.md battery/performance section, after the P4 QAM sweep: OLED 60 Hz for video, framerate
+      cap, optional TDP cap; the post-resume EPP reset on affected SteamOS builds; `LD_PRELOAD=""` in
+      launch options if Game Mode stutters where an SSH launch does not (`durable/platform.md`).
 
-**Gate:** 25× suspend/resume mid-playback (`just soak`): alive, position correct, audio back, no dim.
-*(Met 2026-07-10 (OLED): `just soak` — alive + position correct on every resume, and the audio-back
-and no-screen-dim clauses now verified too. P6 passed.)*
+### Self-update   (`durable/self-update.md`)
 
-**Engine bridge (keystone):** `launcher/src/devtools.{hpp,cpp}` — dependency-free CDP client (raw
-sockets + hand-rolled RFC 6455) discovering the page target and running `Runtime.evaluate`. Shared by
-the suspend/resume/idle hooks. `devtools_test` covers the frame codec + a loopback CDP server.
+The portal update path works on-Deck. No item may add a sandbox permission: the portal refuses an
+update that adds one, so it would leave installed users stuck on their current version.
 
-## Phase 7 — Widevine path  (4–6 ED, best-effort)   → `launcher/` CDM fetcher (S0.3 gated)
+Done, verified by L0 tests and CI replay only, never on a Deck:
+- [x] Update traps closed: re-running `install.sh` updates (`--or-update`); a newer commit clears
+      stale verdicts; a deploy with no verdict times out; a rejected `Update()` reports Failed.
+- [x] U1 — Linear history: `publish-repo.sh` mirrors the live head and 2 parents, gates permissions,
+      and generates bsdiff from-parent deltas (0.0.8 → 0.0.9: 4.2 MB instead of 66.7 MB).
+- [x] U2 — Recall runbook (RELEASING.md §"Recall a bad release"): commit the last good tree forward
+      again and set the bad GitHub release back to draft. Users can `flatpak mask` a version.
+- [x] U3 — Publish-time permission gate against the live repo's metadata: exit 2 unless
+      `ALLOW_PERMISSION_ADD=1`.
+- [x] U4 — An update check that installs nothing: compare the published ref with `/.flatpak-info`
+      `app-commit` at launch and on Check. It falls back to the portal, and
+      `DECKBACK_UPDATE_REF_URL` points it at staging.
+- [x] U5 — Deploy progress is shown, and progress restarts the 10-minute timeout.
+- [x] U6 — **Close now** on Done, through the same graceful exit as the Exit hold.
 
-- [~] Re-enable `enable_library_cdms`/`enable_widevine` if stripped; register desktop CDM host.
-      **`enable_widevine = true` added to `args/deck.gn`** (S0.3: path intact, only gated off).
-      `enable_library_cdms` left out until a build says it's required.
-      **Registration gap (2026-07-09 review, static):** the GN arg alone CANNOT make the engine load
-      a CDM — registration is `ContentClient::AddContentDecryptionModules` (empty default), and
-      neither `content/shell` nor `cobalt/shell` overrides it, so the `CdmRegistry` stays empty and
-      `com.widevine.alpha` key-system requests are rejected. **P7 needs a small `patches/` entry**
-      (a shell-side `AddContentDecryptionModules` override pointing at
-      `CdmFetcher::installed_path`) — the first real patch in the series. See m114.md "Widevine
-      registration gap".
-      **DONE 2026-07-09: `patches/0001-…-widevine-cdm-registration`. LINKED + RUN 2026-07-10.**
-      Applies cleanly to a pristine `DEPS.pin` tree; `gn gen` accepts the new
-      `//third_party/widevine/cdm:headers` dep; `shell_content_client.o` compiles under the `deck`
-      preset with `BUILDFLAG(ENABLE_WIDEVINE)` live and the symbol in the object file. The launcher
-      passes `--widevine-cdm-path` only when a CDM is actually installed.
-      Two corrections to the original note, both of which would have produced a patch that compiles
-      and does nothing: the `CdmCapability` **must be concrete** at registration (Linux's
-      `LazyInitializeCapability` hands back `absl::nullopt`, so a lazily-initialised CdmInfo is
-      registered and then rejected, silently), and `enable_library_cdms` is **already true**.
-      **BUILT INTO A REAL ENGINE AND RUN 2026-07-10.** Until then only `shell_content_client.o` had
-      been compiled — `out/deck/content_shell` still predated the patch, and every result reported on
-      2026-07-09/10 (smoke, cert 45/46) came from an *unpatched* binary. The engine was rebuilt and
-      both gates re-run against it: `just smoke deck` passes, `just cert conformance-test deck` is
-      unchanged at 45/46 with only the documented `MediaElementEvents`. So the patch compiles, links,
-      and regresses nothing. Measured over CDP on the patched engine:
-      `requestMediaKeySystemAccess('org.w3.clearkey', …)` **resolves**, and
-      `requestMediaKeySystemAccess('com.widevine.alpha', …)` **rejects with `NotSupportedError`**
-      when no `--widevine-cdm-path` is given — which is precisely what the patch should do with no
-      CDM installed. `--widevine-cdm-path` and `--widevine-cdm-version` are both present in the
-      binary.
-      Not verified: that a real CDM loads, that a licence exchange succeeds, or that any DRM video
-      plays. That needs Google's CDM, which CI must never fetch (docs/legal.md), so it stays a
-      user-side step. `tests/deck/test_media.py::test_widevine_state` is the test that will say so —
-      it is still expected to fail, now for the *right* reason (no CDM installed) rather than the
-      structural one (no registry entry possible).
-- [~] First-run fetcher downloads Google's Linux x64 CDM (verify hash) → profile dir. Never redistributed.
-      **`CdmFetcher` implemented** (`cdm_fetcher.cpp`): detects an installed CDM at Chrome's
-      `WidevineCdm/_platform_specific/linux_x64/libwidevinecdm.so`; **opt-in** download from a
-      user-configured `cdm_url`, **SHA-256-verified** against `cdm_sha256` before install (self-contained
-      `sha256.{hpp,cpp}`, FIPS vectors tested). We never bundle/redistribute Google's CDM. **Verified
-      end-to-end offline** via a `file://` URL (detect-only / wrong-hash-rejected / verified-install /
-      re-detect). *TODO: the Google component-updater endpoint (a CRX/zip, not a raw .so) — the direct-URL
-      path is the MVP; document in SUPPORT.md.*
-- [~] Honest UX: L3 caps DRM'd res; free YT unaffected; graceful error if CDM missing/rejected.
-      **Honest messaging DONE** (actionable log lines when no CDM/url; free-YT-unaffected stated; hash
-      mismatch refuses). L3 resolution-cap UX is Deck/DRM-stream work, still TODO.
+Open:
+- [ ] T1 on-Deck check (staging repo, `DECKBACK_UPDATE_REF_URL`): a newer commit is badged within
+      seconds and Check installs nothing; a permission-adding commit shows the blocked text and
+      re-running `install.sh` installs it; Update now shows progress, Close now exits, relaunch runs it.
+- [x] T2 production check (v0.0.10, 2026-10-21): the signed *release-pages* run published
+      `3147f33` on parent `7869c172` past the permission gate; the OLED Deck on 0.0.9 was offered it
+      by the portal, deployed it from Settings ▸ Updates in 3 s and relaunched into 0.0.10. The
+      update is a 148 KiB delta (a fresh install pulls 75.6 MB).
+- [ ] U6 follow-up: spike the portal's `Spawn` with `LATEST_VERSION`. It may escape gamescope focus.
+- [ ] U7 — Host-side update timer (owner decision): a `systemd --user` timer (`OnCalendar=` +
+      `Persistent=true`) running `flatpak update --user -y --noninteractive`, the only way to keep the
+      runtime and Mesa/VA-API current in Game Mode. Decide scope: Deckback and its runtime, or everything.
+- [ ] U8 — Updatable bundles (blocked): a `--repo-url` bundle installs as a `deckback-origin` remote,
+      which `channel_of_origin` reads as the DEV channel and `web-install.sh` refuses. First tell dev
+      and release origins apart by URL. This helps new installs only.
+- [ ] U9 — Signed `status.json`: a minisign-signed kill switch and incident banner. It shares key
+      handling with signed remote config. First check that OpenSSL 3 is still in the 25.08 runtime.
+- [ ] U10 — `beta` branch (needs U1). Keep `master` as stable: renaming it creates a new ref and
+      forces a reinstall.
+- [ ] U11 — Hosting headroom: GitHub Pages is soft-capped at 100 GB/month (≈1,300 full updates), and
+      U1's deltas buy most of the headroom. Move hosting through `xa.redirect-url` only when needed.
+      On R2, upload `summary` last.
 
-**Gate:** a Widevine test stream + one YT rental play; human-readable error when CDM absent.
+Owner decisions: signing-key custody (backup, subkey/expiry, rotation via `--gpg-import`); whether
+and how wide to run U7; history depth vs Pages' 1 GB; a beta channel; any telemetry or update ping;
+who may trigger a recall; whether auto mode becomes user-reachable; when to move to 26.08 (25.08 is
+supported to ~Aug 2027).
 
-## Phase 8 — Packaging & distribution  (5–7 ED)   → `flatpak/`, `scripts/`   (starts after P1)
+**Gate:** on a clean SteamOS OLED, one command takes a GitHub release to playing in Game Mode in
+under 5 min.
 
-- [x] Flatpak on `org.freedesktop.Platform//25.08`; sandbox via **zypak** (no `--no-sandbox`).
-      **Built and installed for real 2026-07-10.** The `pack` image left Debian 12 for `debian:13-slim`
-      (flatpak 1.16.6 = the Deck's, flatpak-builder 1.4.4, appstreamcli 1.0.5, dbus); it is the one
-      image with no reason to match Cobalt trunk, because flatpak-builder compiles every module inside
-      the SDK sandbox. The metainfo now installs and `appstreamcli compose` produces `share/app-info/`.
-      Runtime moved 24.08 → 25.08: 22.08 and 23.08 already carry EOL markers on Flathub, two branches
-      are supported at a time, and 26.08 lands next month. The 25.08 SDK is GCC 15.2.0 and the C++23
-      launcher is `-Werror` clean under it. Design + measurements:
-      `.internal/findings/durable/packaging-toolchain.md`.
-- [x] Minimal permissions (network, x11+ipc, pulse, dri, `--device=input`, ScreenSaver, login1).
-      **`--device=input` is now baked into `finish-args`** (never `--device=all`), together with
-      `--share=ipc` (Chromium's X11 MIT-SHM path) and `--require-version=1.16.0` (flatpak learned
-      `--device=input` in 1.15.6, so a 1.14 host is refused instead of handed a dead gamepad).
-      Verified by reading the sandbox back out of the committed ostree object *and* out of a real
-      install: `devices=dri;input;`. `just flatpak` refuses to bundle an app that cannot see
-      `/dev/input`, and `scripts/flatpak-lint.sh` fails the build if the manifest ever drops it.
-- [ ] Widevine as extra-data / first-run fetch (legal note in `docs/legal.md`).
-      *(CdmFetcher opt-in path done — see P7; extra-data manifest wiring is the remaining piece.)*
-- [ ] Self-hosted runner for Chromium-scale builds + persistent sccache; free runners = lint only.
-- [~] `just install` → flatpak + `steamos-add-to-steam` + controller-layout steps + grid art.
-      The `flatpak override --device=input ... && info || info "note: not applied"` is **gone**: both
-      branches returned 0, the failing one swallowed flatpak's error, and `just install` reported
-      success while handing the user a dead gamepad and a touchscreen lock that silently did nothing.
-      It now reads the installed permissions and exits 2 if evdev is absent (F1 in miniature).
-      The bundle carries `--runtime-repo=flathub`, so a Deck that has never seen `Platform//25.08`
-      pulls it on install — verified against a fresh flatpak user dir.
-      `install.sh` does install + evdev verification + `steamos-add-to-steam` + prints the
-      controls/layout/DRM steps (refreshed for the new `.vdf` + touch chord). **`docs/SUPPORT.md`
-      now complete** (controls table, layout import, touch lock, DRM opt-in, sign-in, logs). Grid art:
-      the one-line installer (`web-install.sh`) writes the shortcut plus full tile artwork through
-      `steam_shortcuts.py` (CHANGELOG 0.0.2); the local `just install` path still does not.
-- [ ] **Document Steam Input as the user remap path** in SUPPORT.md (input-ux §7): rebinding a
-      physical control to a different xinput button in Steam's configurator remaps Deckback without
-      touching app.json — users can't realistically edit JSON in Game Mode; `keymap` stays the
-      semantic (hotfix) layer, Steam Input is the per-user layer.
-- [ ] **SUPPORT.md text-entry & keyboard section** (input-ux §8.3) — safety-relevant, not cosmetic:
-      open the on-screen keyboard from the **QAM ("…") menu, never `STEAM+X`** (on a non-Steam
-      Chromium app it can raise the desktop OSK and **soft-lock the session**); the keyboard **never
-      auto-appears** when a text field is focused; a physical/BT keyboard works but Game Mode forces
-      **QWERTY scancodes** regardless of the configured layout.
-- [ ] **State the two Deck-Verified requirements we structurally cannot meet** (input-ux §9), in
-      SUPPORT.md/README rather than implying Verified parity: (a) **glyph correctness** — Leanback
-      renders its own generic/remote glyphs server-side and we cannot map them to Deck glyphs;
-      (b) **auto-invoked OSK on text input** — needs Steamworks (we don't link it) or Wayland
-      `text-input-v3` (we run Xwayland).
-- [ ] **SUPPORT.md battery/performance section** (after the P4 QAM sweep lands numbers): recommend
-      OLED refresh 60 Hz for video + framerate cap + optional TDP cap; note the post-resume EPP bug
-      on affected SteamOS builds (P6 measurement); troubleshooting entry: `LD_PRELOAD=""` in the
-      shortcut's launch options if Game Mode develops hitches an SSH launch doesn't show (Steam
-      overlay preload — `durable/platform.md`).
+## Phase T — Test automation & conformance   → `.internal/TEST-PLAN.md`, `tests/deck/`
 
-*Self-update hardening — review 2026-10-20 (`durable/self-update.md` §"★★★ REVIEW 2026-10-20"):*
+Done: T1 (`scripts/cdp.py` library with `MediaState`), T2 (`tests/deck/` pytest harness, `just
+test-deck`, `gate` vs `probe` markers), T3 (uinput pad over SSH), T4 (decoder-identity probe, the P4
+gate), T5 (closed-loop `just soak`/`just power`), T6 (UA and AV1-steering canaries in `just smoke`),
+T7a–f (self-hosted `js_mse_eme` conformance: `just cert` 45/46, the one failure `MediaElementEvents`
+is a property of the suite itself, F11; not YouTube certification; Widevine never in the gate), T10
+(decoder string `VaapiVideoDecoder`; Steam Input wraps a new uinput pad in a second Xbox node, merged
+without duplicates).
 
-The portal path works for the happy case (0.0.7 → 0.0.8 verified on-Deck). What is weak is
-everything around it: there is no recall or rollback, updates are full-size, detection is slow or
-silent, and the runtime goes stale. **No item here may add a sandbox permission** — a permission add
-strands every installed user on their current version.
+- [x] T11 — `just deck-ci` unattended runner (deploy → launch → gate → cert → teardown, combining the
+      stages' exit codes): built, but never run against a Deck.
+- [ ] T8 — Chromium-native media tests against our `content_shell`: `media_unittests`, WPT
+      `media-capabilities/` (`decodingInfo.any.js` covers what AV1 steering overrides) and
+      `encrypted-media/`. Chrobalt no longer has `cobalt/black_box_tests`, and `starboard/nplb`
+      no longer exercises real decode.
+- [ ] T9 — A failing test first for every D-list feature (TEST-PLAN §4): text entry, OSK erase,
+      scan keys, voice, latency, Widevine (`com.widevine.alpha` must reject while no CDM is installed).
+- [ ] OSD L1 focus-model suite: next to `just smoke`, drive `osd.js` on a served page with Leanback's
+      CSP and Trusted Types headers, and check computed style, not just presence. Today only
+      `tests/js/osd_updates_nav.test.js` exists, on a mock DOM.
 
-- [x] **Live traps closed in `1f4e398`** — L0 + CI replay only, **not yet run on a Deck**:
-  - `install.sh` re-run now really updates (`--or-update`). It was the documented recovery for a
-    permission-adding release and was a no-op.
-  - A newer commit clears a stale Empty/Failed/blocked verdict.
-  - A deploy with no verdict times out instead of showing "Updating…" forever; a rejected
-    `Update()` is reported as Failed.
-  - Auto-mode wiring is fixed; a changelog data race is fixed.
-  - Pages instructions now say `--user`; the `.flatpakref` gains `SuggestRemoteName`.
+**Gate:** `just test-deck` green on a clean boot, twice. `just cert` runs unattended with zero
+regressions on `conformance-test` + `msecodec-test`. No rows left in TEST-PLAN §2.C.
 
-  **On-Deck check (T1, staging repo):**
-  - Check → Empty, then publish a newer commit: it is offered.
-  - With a permission-adding staging commit: the tab shows the blocked text, and re-running
-    `install.sh` in Desktop Mode installs it.
-- [x] **U1 — Linear history in the published repo** — *done 2026-10-20, off-device only.*
-      `publish-repo.sh` mirrors the live head + 2 parents, gates permissions, commits forward and
-      generates the from-parent delta itself with bsdiff on large files. That last part was needed:
-      flatpak's default delta for the real 0.0.8 → 0.0.9 was 66.7 MB (the engine binary ships whole
-      above ostree's bsdiff cap); with bsdiff it is 4.2 MB. Verified with a real-bundle client update on
-      a signed local repo and by `tests/harness/test_publish_repo.sh` (27 checks, flatpak 1.18 and
-      Ubuntu's 1.14). **T2 pending:** the first production run (expect `parent 7869c172…`).
-      Original plan (M, release pipeline). Mirror-pull the live repo,
-      then `build-commit-from --timestamp=NOW --gpg-sign` so each release's parent is the commit
-      users actually have, then `build-update-repo --generate-static-deltas --prune
-      --prune-depth=2`. That gives from-parent deltas (MB instead of ~77 MB per update), a rollback
-      target, a fix for the CDN race (old objects survive a deploy), and the base for U2 and U10.
-      The first run must pull with `--depth=0`, because the live parent 404s today *(not so: a
-      `--depth=2` pull against the real repo tolerated the missing parent)*. Verify off-device
-      with two dummy bundles and a local `flatpak --user` remote, then a T2 production run.
-- [x] **U2 — Recall runbook** — *done 2026-10-20* (RELEASING.md §"Recall a bad release"). The recall
-      and the user-side `update --commit` / `mask` are rehearsed in `test_publish_repo.sh`; one finding:
-      the bad GitHub release must go back to **draft**, not pre-release, or the Updates tab's changelog
-      keeps offering it. Original plan (S, RELEASING.md). Re-commit the last good tree forward with a fresh
-      timestamp (`build-commit-from` keeps the old timestamp by default, and the portal refuses
-      downgrades). Document `flatpak mask` as the user-side "hold this version". Needs U1.
-- [x] **U3 — Publish-time permission gate against the LIVE repo** — *done 2026-10-20*: compares the
-      bundle's built `metadata` with the mirrored live head's (`metadata_permissions`, L0-tested in
-      `test_check_permissions.sh`); exit 2 unless `ALLOW_PERMISSION_ADD=1`. Original plan (S). Diff the new commit's
-      `[Context]` against the live summary's `xa.cache` before deploying. `check-permissions.sh`
-      compares against git tags, which misses a bundle built from the wrong tree.
-- [x] **U4 — A check that does not install** — *done 2026-10-20, L0 + TSan only, not on a Deck.*
-      Probe at launch and on Check; only ever adds availability; falls back to the portal when the
-      repo is unreadable; `DECKBACK_UPDATE_REF_URL` for staging. **T1 pending** (self-update.md ★★★★).
-      Original plan (S–M, launcher):
-      - GET `repo/refs/heads/app/<id>/x86_64/master` (65 B) and compare it with `[Instance]
-        app-commit` in `/.flatpak-info`, at launch and on Check for updates; feed the result into
-        `UpdateState`. The portal stays the only installer and the only signature verifier; a
-        forged ref can at worst cause a harmless Empty.
-      - Fixes the 0–30 min detection, the metered-network blind spot, and Check *installing* (which
-        skips notify mode's consent step).
-      - L0 with a fake HTTP server, then T1.
-- [x] **U5 — Show deploy progress** — *done 2026-10-20, L0 only*; progress also restarts the 10-min
-      no-answer timeout. Original plan (S): `on_progress` ignores `n_ops/op/progress`. A runtime bump
-      (hundreds of MB) currently sits behind "this can take a minute".
-- [x] **U6 — "Restart now" on Done** — *done 2026-10-20, L0 only*, as **Close now** (the same
-      graceful exit as the Exit hold; the Library tile relaunches). The `Spawn` spike is still open.
-      Original plan (S): the graceful exit path (`on_exit`) plus "reopen from your
-      Library". Spike the portal's `Spawn` with `LATEST_VERSION` later: it may escape gamescope
-      focus [U].
-- [ ] **U7 — Host-side update timer** (M, installer, owner decision). A `systemd --user` timer
-      (`OnCalendar=` + `Persistent=true`; `network-online.target` does nothing in the user manager)
-      running `flatpak update --user -y --noninteractive`. It is the only thing that keeps the
-      runtime and Mesa/VA-API current in Game Mode, and it accepts permission adds. Decide the scope:
-      Deckback + its runtime only, or everything.
-- [ ] **U8 — Updatable bundles** — *blocked on a naming conflict (2026-10-20):* a bundle installed
-      with `--repo-url` gets a `deckback-origin` remote, which `channel_of_origin`
-      (`scripts/lib/flatpak_channel.sh`) reads as the DEV channel and `web-install.sh` refuses as a
-      foreign origin. Tell dev and release origins apart by their URL (the dev one has none) first.
-      Original plan (S–M): export the Releases bundle with `--repo-url` + `--gpg-keys` so
-      a bundle install joins the update channel. An existing `*-origin` remote cannot be changed in
-      place, so this helps new installs only.
-- [ ] **U9 — Signed `status.json`** (M): a minisign-signed kill-switch and incident banner (blocked
-      commits + a message). It shares key handling with the signed remote-config idea (UA/keymap
-      hotfixes). Check that OpenSSL 3 is still in the 25.08 runtime before choosing the verifier.
-- [ ] **U10 — `beta` branch** (M, needs U1). Keep `master` for stable: renaming it creates a new ref
-      and forces a reinstall.
-- [ ] **U11 — Hosting headroom** (M): Pages is soft-capped at 100 GB/month, ≈1,300 full updates. U1's
-      deltas buy most of the headroom. Move hosting (R2 on a custom domain, or Flathub) through
-      `xa.redirect-url` only when needed; that works only because the repo is signed. R2 uploads are
-      not atomic, so upload `summary` last.
-- **Owner decisions this needs:** signing-key custody (offline backup, subkey/expiry, rotation via
-  `--gpg-import`); whether to run U7 and how wide; history depth vs Pages' 1 GB; a beta channel;
-  any telemetry or update ping (a privacy statement); who may trigger a recall; whether auto mode
-  becomes user-reachable; when to move to 26.08 (25.08 is supported to ~Aug 2027 [I]).
+## Phase 9 — Test & hardening
 
-**Gate:** clean SteamOS (**OLED**): GitHub release → playing in Game Mode in < 5 min, one command.
-LCD is best-effort/untested and cannot gate a release we have no way to validate.
+Done: clang-format pinned at 23.1.3 (the same PyPI wheel locally and in CI); the launcher review
+follow-ups (input test seam, resume hook off the logind thread, logind bus reconnect, CDP re-arm
+gate, OSD Unreachable verdict, atomic CDM install, small fixes), on-Deck status in TEST-PLAN §2.B.
 
-## Phase T — Test automation, conformance & hardware TDD   → `.internal/TEST-PLAN.md`, `tests/deck/`
+- [ ] Run the OLED-only matrix (doc §6 P9): playback, input, voice, power, network, account, DRM,
+      update, docked smoke. There is no LCD unit (decisions.md). The code stays model-agnostic;
+      only our claims narrow.
+- [ ] Recruit an LCD owner for the beta. This is the only route to LCD coverage, and the schedule
+      depends on it. First jobs: dump the touchscreen VID:PID, run `just cert`, and report
+      `kVideoDecoderName` during playback.
+- [ ] OLED touchscreen VID:PID: `touch.cpp` pins `2808:1015` (FTS3528), taken from a blog post about
+      an LCD Deck. The on-Deck device listing in `durable/touch-lock.md` shows `FTS3528:00 2808:1015`,
+      but `durable/hardware.md` still says unknown. Reconcile and close.
+- [ ] Small beta group before Flathub, with a window for fixes.
+- [ ] Measure what removing `Network.enable` saved: run `just power` against v0.0.9 on the same
+      video. The 6.39 W reading on a different video cannot be compared with the 5.6 W baseline.
+- [ ] The pre-sleep checkpoint fails on every real sleep: a power-button sleep mid-video logs
+      `player: suspend — no active video to checkpoint` (the CDP socket is already unusable ~100 ms
+      after `PrepareForSleep(true)`; the Exit path works). The video is never paused; needs a debug log.
+- [ ] `just soak` cannot exercise the launcher's sleep hooks. `rtcwake -m mem` bypasses logind, so
+      no `PrepareForSleep` arrives (TEST-PLAN §1). Triggering a logind suspend over SSH needs polkit
+      auth; until then, test with power-button sleeps by hand.
+- [ ] `test_uinput_button_a_activates` needs a known-state fixture (TEST-PLAN §3). It expects the
+      route to change, so it fails when focus is not on a tile (on the watch page Enter toggles
+      play/pause), and it skips on the account picker.
+- [ ] Desktop Mode without Steam Input reads the Deck's own pad wrong (hid-steam, from kernel source):
+      triggers are on `ABS_HAT2Y`/`ABS_HAT2X`, `ABS_HAT0X/Y` is the left trackpad (read as a D-pad),
+      and the real D-pad is `BTN_DPAD_*`, which the launcher ignores. Game Mode is unaffected; low priority.
 
-The keystone gap: **L0 (unit) and L1 (headless smoke) exist; L2 (on-Deck automated) does not**, so
-every "on-Deck: TODO" elsewhere in this file is blocked on it. The two on-Deck scripts we have are
-not closed-loop — `soak.sh` only checks `pgrep` liveness (it carries a literal
-`TODO(Phase 6): assert playback position advanced`) and `power.sh` asks a human to "play a 1080p VP9
-video now". Read `.internal/TEST-PLAN.md` before starting: it holds the tier definitions, the honest
-tested/untested matrix, the hardware-TDD loop, and the probe snippets.
-
-- [x] **T1 — `scripts/cdp.py` is now an importable library. DONE 2026-07-09.** Exports `CDP` (context
-      manager, `close()`, `wait_for`, `pump`, `screenshot`, `set_user_agent`), `key_spec` (named keys
-      **and** any single printable char, carrying the `text` field that makes `beforeinput`/`textInput`
-      fire), `dispatch_key(name, modifiers)`, **`dispatch_raw(key, code, vk, …)`** so the §8.4 spikes
-      can inject their mandatory negative controls (CEA 461/415), `type_text`, `click`/`mouse`, and
-      **`MediaState`** — the `Media`-domain accumulator implementing the T4 probe. **`CDP.call` now
-      feeds unsolicited events to `MediaState` instead of dropping them**; that drop is precisely why
-      the decoder identity was unobtainable before. The CLI is unchanged for `smoke.sh` but now obeys
-      the HARNESS.md exit taxonomy (`2` assertion / `4` transport / `5` usage), where a transport
-      failure previously escaped as a traceback and exit 1 — indistinguishable from a real regression.
-      No Selenium/Playwright (minimal-deps rule; they can't run in the build image).
-      Pure logic covered by `tests/harness/test_cdp_lib.py` (`just test-harness`). Mutation testing
-      found a hole: every software-decoder case also set `kIsPlatformVideoDecoder=false`, so deleting
-      the `"Vaapi" in name` check left the suite green. A dedicated case now pins it.
-- [x] **T2 — `tests/deck/` pytest harness + `just test-deck [args]`. BUILT 2026-07-09; FIRST RAN
-      2026-07-10, blocked by Leanback's guest-account gate.**
-      23 tests. The 2026-07-10 run reached the OLED unit (after the `DECK_HOST`/`reachable()` fix,
-      harness.md F14) but stalled at Leanback's "watch as guest" account wall, so **almost nothing in
-      TEST-PLAN §2 moves out of "unverified" until this runs green past the account gate** — a
-      `conftest.py` fixture that dismisses the guest gate is the next unlock. Session-scoped
-      `ssh -L 9222:localhost:9222` tunnel (Chrome ≥111 requires `Host: localhost` on `/json`), clean
-      skip when no Deck, `--no-skip` to make a missing Deck an error for the unattended runner,
-      per-test artifacts (screenshot + `journalctl --user` + app log) on failure.
-      `scripts/test-deck.sh` maps pytest's exit codes onto the harness taxonomy: failed test → 2,
-      no Deck/no pytest → 3, unreachable Deck → 4.
-      Markers: `gate` (must pass; a failure is a product defect) vs `probe` (discovery of something
-      §2 lists unverified; a failure is a finding). Nothing is `xfail`ed — an xfail hides the answer
-      the probe exists to produce.
-      *Deferred:* `pytest-rerunfailures` (`only_rerun=["ConnectionError","TimeoutError"]`) — the
-      dependency is not installed anywhere yet, and retrying an `AssertionError` would be worse than
-      not retrying at all.
-- [x] **T3 — Synthetic input lib (`tests/deck/lib/uinput.py`). DONE 2026-07-09.** Raw `struct` +
-      `fcntl.ioctl` against `/dev/uinput`, in a program generated here and piped to the Deck's
-      `python3` over stdin — nothing installed there, nothing left behind. Pure helpers unit-tested
-      at L0 (`tests/harness/test_deck_lib.py`, findings harness §F7), which caught **`struct
-      input_event` being packed at 16 bytes instead of 24** before any hardware existed: with
-      `struct`'s `=` prefix `l` is 4 bytes, and the only on-hardware symptom would have been "the
-      device exists and nothing happens".
-      Gotchas honoured: `EV_SYN` is unrepresentable by construction (not a runtime check that could
-      never fire); every `EV_ABS` axis needs a full 4-tuple `AbsInfo`, validated; `/dev/uinput`
-      failure exits **3 (ENV)** so a missing udev rule is never filed as a product bug; a 2.5 s settle
-      matches `input.cpp`'s 2 s hotplug rescan.
-      `capabilities_program()` answers three separate registered unknowns in one read: does the Steam
-      virtual pad expose `ABS_RX/ABS_RY` (§15), analog `ABS_Z/ABS_RZ` (§12), and `EV_FF/FF_RUMBLE`
-      (§14)?
-- [x] **T4 — Decoder-identity probe via the CDP `Media` domain. BUILT 2026-07-09; RAN 2026-07-10,
-      no verdict yet (account-gate blocked).**
-      `scripts/cdp.py:MediaState` accumulates `Media.playerPropertiesChanged`;
-      `tests/deck/lib/probes.py:hardware_decode_verdict` adjudicates, once, and
-      `tests/deck/test_media.py::test_hardware_decode_is_vaapi` is the P4 gate. Fails on
-      `Dav1dVideoDecoder`/`VpxVideoDecoder`/`FFmpegVideoDecoder`, and on a **missing** value —
-      "the Media domain never reported" is a broken probe, not working hardware.
-      A second copy of the verdict lived in `cdp.py` for a week and had already drifted: it read a
-      missing `kIsPlatformVideoDecoder` as "software decode", which sends the reader to debug VA-API
-      when the real fault is a probe that has not finished reporting. Deleted; one adjudicator.
-      This is also the only honest test of the AV1 dispute — it asserts on the decoder actually used,
-      not on the profiles libva advertises. The 2026-07-10 run reached the OLED unit but Leanback's
-      guest-account gate kept a real video from playing, so it has not yet returned a decoder verdict;
-      that waits on the account-gate fixture (T2).
-- [x] **T5 — Close the loop on `soak.sh` and `power.sh`. `soak` RUN + PASSED on-Deck 2026-07-10;
-      `power` blocked on Deck state.**
-      `just soak` ran for the first time on 2026-07-10 (OLED): 10 suspend/resume cycles
-      (`rtcwake -m mem -s 45`), and on **every** resume the app was alive, the video kept playing,
-      and `currentTime` had advanced — P6's core clause verified. EPP unchanged across resume on this
-      build. Still NOT checked by the gate: audio actually restored, screen did not dim (the two
-      remaining P6 clauses). Prereqs discovered running it: passwordless `sudo rtcwake` (a
-      `zz-`-prefixed sudoers drop-in, because SteamOS's `deck ALL=(ALL) ALL` otherwise wins the
-      last-match), and `reachable()`/`DECK_HOST`-export both had to be fixed first (harness.md F14/F15)
-      — which is the real reason it had "never run" before today. **Update 2026-07-10: both now PASS on
-      OLED.** The audio-restored and no-screen-dim P6 clauses were subsequently verified (P6 met), and
-      `just power` ran off-AC on battery: **5.6 W** average under HW-decode VP9 playback, under the
-      ≤~9 W P4 gate. The P4 gate correctly refuses on AC or with a dark panel (F16).
-      New `scripts/deckctl.py` (workstation-side, opens its own `ssh -L` tunnel) answers three
-      questions with an exit code: is a video actually advancing, what is `currentTime`, which
-      decoder is the engine using, and what is EPP on every core.
-      `just power` now refuses to sample unless a video is playing **and** the decoder is VA-API, and
-      re-checks playback after the window. A 300 s average over a *paused* video passes the 9 W gate
-      effortlessly and describes nothing — F1 one layer up, a measurement of the absence of the thing
-      being measured. A draw measured under `Dav1dVideoDecoder` is a number about software we do not
-      ship.
-      `just soak` now reads `currentTime` before each suspend and requires it to have advanced after
-      the resume. It used to check only that a *process* existed, which a launcher resuming into a
-      frozen black frame passes with full marks. Backwards movement is reported as "the player
-      restarted", not as a stall: both fail, but only one sends you hunting a hang that never happened.
-      EPP is **measured and reported, never gated** — SteamOS resets it on cores 1–7 after resume
-      (steamos#2383) and writing it back needs root, so it is infeasible from the Flatpak. A gate you
-      cannot pass and cannot fix is a gate someone disables, and then it stops reporting too.
-      Paused is ENV (3); stalled is ASSERT (2); a silent Media domain is ENV, not software decode.
-      All three verdicts are L0-tested (`tests/harness/test_deckctl.py`) and mutation-checked.
-      *Still not checked, and the P6 gate still says so:* audio actually restored, screen did not dim.
-- [x] **T6 — Capability probes in `just smoke` (the R1/R2 nightly canary). DONE 2026-07-09.**
-      `--assert-ua` (the override survived the navigation; when it silently does not, every later
-      probe measures the desktop site) and `--assert-av1-steering` (AV1 unsupported through
-      `MediaSource.isTypeSupported`, `canPlayType`, **and** `mediaCapabilities.decodingInfo`, while
-      VP9/H.264 stay supported — the second half is a mandatory negative control).
-      The steering script moved to `config/av1_steering.js` and is now the single source of truth:
-      CMake compiles it into the launcher, and smoke injects the same file, so the canary exercises
-      the script that ships. Before injecting, smoke asserts the **unsteered** engine reports AV1 as
-      supported: on a Cobalt build with no AV1 decoder every steering assertion would otherwise pass
-      while proving nothing — F1 in a different costume.
-      Every predicate must evaluate to exactly `true`. `undefined` from a misspelt property is truthy
-      under no test and equal-to-true under a sloppy one, and neither reading is the truth.
-- [x] **T7 — Self-host the YouTube conformance harness. BUILT 2026-07-09; RUN 2026-07-10.**
-      `just cert conformance-test deck` completes 46/46: **45 PASSED, 1 FAILED**, baseline committed.
-      The failure (`MediaElementEvents`) is a property of `js_mse_eme` against Blink's MSE, proved by
-      instrumentation and by falsification, and documented in finding F11.
-      (The 2026-07-09 wording here claimed "there is no `content_shell` on this machine". That was
-      false when written — the engine was built the same day — and it reached a commit message.
-      Correcting it in place, because a status doc that silently rewrites its own history is worth
-      less than one that shows what it got wrong.)
-      Re-verified 2026-07-09: the public runners are still dead (`ytlr-cert.appspot.com`,
-      `yts.devicecertification.youtube` → sunset stub; `yt-dash-mse-test…/unit-tests/<year>.html` →
-      404) and `github.com/youtube/js_mse_eme` is still live (archived read-only 2026-04-19), pinned
-      at `c1ef8579` in `tests/cert/HARNESS.pin`. The GCS media bucket answered 200.
-      **Passing it is NOT YouTube certification** and must never be described as such (docs/legal.md).
-  - [x] **T7a — Hosting + reverse tunnel. DONE.** `cert.py` serves the pinned harness from
-        `127.0.0.1` only (never the LAN) and exposes it to the Deck with `ssh -R`. The tunnel is
-        load-bearing twice: EME needs a secure context, which `http://localhost` has and a LAN IP
-        does not, so a LAN origin fails every EME test for a reason unrelated to our engine; and the
-        harness POSTs results to `qual-e.appspot.com` when the page URL contains
-        `appspot.com`/`googleapis.com` (`harness/test.js:387`). `PREFLIGHT_EXPR` asserts
-        `isSecureContext` and the absence of both markers *before any test runs*.
-        Verified end-to-end against the live bucket on 2026-07-09: server, `util.js` rewrite, a real
-        6 MB vector, HTTP range requests, cache hit.
-  - [x] **T7b — Mirror + hash-pin the media vectors. DONE.** `harness/util.js` is rewritten at serve
-        time so `MEDIA_PATH`/`CERT_PATH` point at our own origin, and the rewrite **raises** when
-        either constant is absent. That raise is the point: a silent no-op would send all ~244
-        vectors straight back to Google's bucket, unhashed, and the run would still go green.
-        Vectors are fetched on first miss into `.cache/cert-vectors/`, recorded by
-        `--freeze-vectors` into `tests/cert/vectors.sha256`, and verified on every later run. A
-        mismatch exits **3** — "Google changed the bucket" and "our decoder broke" are different
-        sentences, and at 3 a.m. only one is worth waking up for. We fetch and verify; we never
-        redistribute (the `CdmFetcher` posture).
-  - [x] **T7c — `scripts/cert.py`. DONE.** Built on the `cdp.py` client, no new deps.
-        **It scrapes `globalRunner.testList`, never `getTestResults()`.** The harness's own helper
-        buckets tests into `pass`/`fail` and silently drops `UNKNOWN` and `TIMEOUT`, so a suite
-        wedged on test 3 of 400 reports zero failures (`harness/test.js:619`). Hang detection is two
-        independent deadlines: a per-suite wall clock, and a no-progress watchdog that screenshots,
-        names the in-flight test, and aborts. `stoponfailure` stays off — we want the whole result
-        vector. Emits JUnit XML + JSON + screenshot.
-  - [x] **T7d — Expectations baseline. RECORDED 2026-07-10** from `out/deck/content_shell`:
-        `conformance-test` 46/46 completed, **45 PASSED, 1 FAILED**. The one failure,
-        `MediaElementEvents`, is a property of `js_mse_eme` against Blink's MSE and not of our build
-        (finding F11), and it is in the baseline as `FAILED` with that reasoning attached. The other
-        two failures of the first run were *ours*: a `/echo` route the harness needs and upstream
-        never ships, and its 10-second timeout knocking over the next test. Only a **regression**
-        fails the build: a test that was `PASSED` and is not.
-        A newly-passing test prints "baseline update available" and never auto-updates;
-        `--update-baseline` is refused when `$CI` is set, because a baseline that rewrites itself
-        agrees with whatever just happened, and that is not agreement.
-        An `UNKNOWN` **fails the run**, separately from any regression: a suite that stopped after 3
-        of 400 tests has no opinion about the other 397, and silence is not assent.
-        Failed indices are re-run (`command=run:3,17,42`); a test that then passes is recorded
-        **`flaky`**, never `pass` — §0's rule reaching L3, retry transport and never adjudication.
-        `harness_commit` and the vector count go into the result JSON: a baseline whose harness you
-        cannot name is not a baseline.
-  - [x] **T7e — Two tiers. DONE.** `just cert [suite] [preset]` runs headless in the build container
-        (Xvfb + `content_shell`, `--autoplay-policy=no-user-gesture-required`), **no Deck** — MSE and
-        codec correctness are engine behaviour, and that is what keeps the gate cheap enough to
-        survive a busy week. `just cert-deck [suite]` drives a Deck that is already running the app.
-        `playbackperf-*` lives in `TREND_SUITES`: recorded, exit 0 regardless. TDP, refresh rate, and
-        thermals make it nondeterministic on a handheld, and a nondeterministic gate is a gate
-        someone disables. Pair a perf drop with the T4 decoder probe to attribute it — `playbackperf`
-        down *and* `kVideoDecoderName` flipped to `Dav1dVideoDecoder` is a steering bug, not heat.
-  - [x] **T7f — Widevine stays out of the automated gate. DONE by construction.** No Widevine suite
-        appears in `GATE_SUITES` or `TREND_SUITES`, and an L0 test asserts it stays that way. CI must
-        never fetch Google's CDM (docs/legal.md), so the unattended run is ClearKey only; Widevine
-        key systems remain expected-fail until the P7 `AddContentDecryptionModules` patch lands.
-
-- [x] **T11 — Unattended on-Deck runner + regression subset. BUILT 2026-07-10; NEVER MET A DECK.**
-      `just deck-ci` = deploy → launch → `gate` → `cert` → teardown; `--full` adds `probe`, `power`,
-      `soak`; `--dry-run` prints the plan and the exit-code policy and touches nothing. The
-      **regression subset** is `test-deck.sh -m gate --no-skip` plus `cert --deck conformance-test`.
-      Exit codes are **aggregated**, not concatenated: a regression (2) outranks a later SSH drop (4)
-      so a retry cannot bury a defect; only TRANSPORT is retried (never a test result, never ENV); a
-      failed *blocking* stage halts the run instead of emitting a wall of red with one cause; and a
-      run in which **nothing adjudicated exits 3, never 0** — F1 generalised, and the loudest test in
-      `tests/harness/test_deckci.py`. `probe` failures are reported and never fail the build, exactly
-      as `conftest.py` promises. All judgement is in the pure `scripts/lib/deckci.py`; the half that
-      needs hardware makes no decisions (F7's rule, applied to the thing that drives F7's harness).
-      Surfaced and fixed on the way: `argparse` exiting 2 (= "the product is wrong") on a typo,
-      `lib.sh` not exporting `DECK_HOST` so teardown silently no-opped, teardown bypassing `deck_ssh`,
-      and `just smoke` reporting a missing build as TRANSPORT (F12).
-- [ ] **T8 — Chromium-native media tests against the `content_shell` we already build**:
-      `media_unittests`, and Blink/WPT `media-capabilities/` (`decodingInfo.any.js` exercises exactly
-      the surface our AV1 steering overrides) + `encrypted-media/`. Note `cobalt/black_box_tests` is
-      **removed on Chrobalt trunk** (Starboard-only, `25.lts`), and `starboard/nplb` still compiles
-      but no longer exercises real decode (Chromium media pipeline) — don't plan around either.
-- [ ] **T9 — Write the failing test first for every D-list feature** (TEST-PLAN §4): text entry, OSK
-      erase, scan keys, voice, gestures, context layers, error page, first-run overlay, latency,
-      Widevine. The Widevine one is exemplary: `requestMediaKeySystemAccess('com.widevine.alpha')`
-      must fail today (empty `CdmRegistry`) — **that failing test is the spec for the first
-      `patches/` entry.**
-- [ ] **T10 — Register two milestone findings** (`m114.md`): (a) the exact VA-API decoder string this
-      pin emits; (b) whether Steam Input re-wraps a *newly created* uinput pad (double-input risk) —
-      currently unverified and it affects every T3 test.
-
-**Gate:** `just test-deck` green on a clean boot, twice; `just cert` runs **unattended** (exit code,
-no human) with zero regressions against the committed baseline on `conformance-test` +
-`msecodec-test`; the §2 status matrix in TEST-PLAN.md has no rows left in column C.
-
-**Sequencing (cheapest-first, each unblocks the next):** T1 → T2 → **touch-lock grab test** (it
-decides whether the touch-lock feature exists at all) → L2/R2 modifier layer → T4 decoder probe →
-T7a–T7e cert → gesture layer (only if its §11 price is accepted). Do **not** start the gesture layer
-before the grab test passes: it is built entirely on the assumption that grabbing works.
-
-## Phase 9 — Test & hardening  (5–7 ED)
-
-- [ ] Run the **OLED-only** matrix (doc §6 P9): playback, input, voice, power, network, account, DRM,
-      update, docked-smoke. **Locked 2026-07-09: there is no LCD unit and none is planned**
-      (`findings/durable/decisions.md`), so the LCD column is permanently empty. LCD ships as
-      **best-effort/untested**, and code stays model-agnostic — only our claims narrow.
-- [ ] **Recruit an LCD owner for the beta.** This is the only realistic path to LCD coverage and is a
-      **scheduling dependency**, not a nice-to-have. Their first three jobs: dump the touchscreen
-      VID:PID, run `just cert`, and report `kVideoDecoderName` during 1080p playback.
-- [ ] **Dump the OLED touchscreen's real VID:PID/name** and fix `touch.cpp` if it differs. The pinned
-      `2808:1015` (FTS3528) comes from a **blog post about an LCD Deck**, not from our unit — dropping
-      LCD concentrates this risk rather than removing it (`findings/durable/hardware.md`).
-- [ ] Small beta group before Flathub; fix window.
-- [x] **Migrate the pinned clang-format 18 → 21 (tree-wide).** → done as **23.1.3** from PyPI, the same
-      wheel locally and in CI (no apt package); launcher reformatted in its own commit. Our own pin, not forced by GitHub
-      (CI `apt-get install clang-format-18` explicitly; `preflight-parity.md`). Bump it *everywhere*
-      in one change so local and CI can't drift: `.github/workflows/lint.yml` (apt pkg),
-      `scripts/preflight.sh`, `scripts/fmt.sh`, `scripts/lib.sh` (`pinned_tool` refs + the pip
-      fallback `clang-format==18.1.8` → the 21.x point release), and the comments/notes that name 18
-      (`preflight-parity.md`, `CLAUDE.md`). Then **reformat `launcher/` once with 21 as a standalone
-      commit** (v21 differs from v18 — e.g. `struct sigaction sa {}` → `sa{}`), separate from any
-      feature branch so the diff is pure formatting. Verify CI (v21) and `just fmt` agree.
-
-*Launcher review follow-ups (2026-10-20).* The same review fixed 20+ bugs in `c8a4fc7`…`1f4e398`
-(all L0-tested, TSan-clean, CI-replayed; none run on a Deck). These were found but deliberately not
-changed, because each touches an on-Deck-verified path or needs a seam first:
-
-- [x] **Input state-machine test seam.** *(L0, 2026-10-21, `b90650f`: `track_axes`/`AxisState`,
-      `resolve_press`, `GamepadInput::process_event`; the card tracks releases; exit-hold and
-      SYN_DROPPED tests; re-verify on-Deck, TEST-PLAN §2.B.)* Extract `track_axes(code, value)`: the HAT/stick/trigger
-      bookkeeping duplicated between the normal and OSD paths. Then the first-run card can let axis
-      releases through: it currently swallows them, so a D-pad held across the card resolves to a
-      stale direction afterwards. The same seam makes the exit-hold and SYN_DROPPED fixes
-      unit-testable; today `handle_event` is private.
-- [x] **Resume hook on the logind bus thread.** *(L0, 2026-10-21, `2483f8c`: `request_resume`
-      hands it to the poll thread; a suspend during the wait cancels the nudge; `stop()` no longer
-      waits out the probe. Re-run `just soak`.)* `player->on_resume()` → `wait_online()` blocks the
-      platform loop for up to `resume_online_timeout_ms` (8 s) inside `PrepareForSleep(false)`. A
-      quick re-suspend in that window would sleep without the pause/checkpoint [PLAUSIBLE]. Hand the
-      callbacks to the player's worker. P6 soak passed on-Deck, so re-run `just soak` after.
-- [x] **Platform bus has no reconnect.** *(L1, 2026-10-21, `6bbc0e8`: `busloop.{hpp,cpp}` shared
-      with the updater; `platform_test` drops and restores a private dbus-daemon and sees
-      PrepareForSleep again; `just sim reconnect` still green for the updater.)* After a system-bus drop it warns once a second forever, with
-      power integration dead. Give it the updater's reconnect via one shared sd-bus loop helper:
-      wake pipe, nudge, drain, timeout and pump are duplicated ~50 lines between `platform.cpp` and
-      `updater.cpp`.
-- [x] **CDP re-arm race.** *(L0, 2026-10-21, `0cb7b22`: `armed_` gate + arming-thread pass-through,
-      which also removed a self-deadlock when the socket died mid-arm.)* The UA/scripts/grant are re-armed *after* the new session is published,
-      so another thread's `Page.navigate` can beat `setUserAgentOverride` (an extra desktop-redirect
-      cycle). Gate callers until the re-arm finishes.
-- [x] **`Network.enable` cost during playback** [PLAUSIBLE]. *(Dropped 2026-10-21, `0cb7b22`, after
-      checking on the shipped M138 `content_shell` that the override applies without it; `Page.enable`
-      is once per connection. The watt figure is still unmeasured: `just power` on-Deck.)* It is sent only for the UA override, and
-      enables network events for every MSE segment. Measure it against the 9 W gate (`just power`);
-      drop it if `setUserAgentOverride` works without it. `Page.enable` is likewise re-sent before
-      every navigate; once per session suffices.
-- [x] **OSD `exec()` timeout reads as "gone"** *(L0, 2026-10-21, `0cb7b22`: `Kind::Unreachable`.)* and releases capture while the menu is still painted.
-      Return a distinct verdict on `nullopt` and let the reconcile tick decide, as `reconcile_open`
-      already does.
-- [x] **CDM install is not atomic.** *(L0, 2026-10-21, `0cb7b22`: `write_file_atomic`, startup
-      re-hash, a failed re-fetch keeps the old file.)* `cdm_fetcher` keeps a private `write_file` that checks `good()`
-      before close, writes in place, and never re-hashes an existing file. A truncated `.so` reads as
-      installed forever. Use `fileio` + `.part` + rename, and re-verify `cdm_sha256` at startup.
-- [x] Small *(all L0, 2026-10-21)*:
-      - `gestures_action` accepts `"touch_gestures"`, but the lookup only checks two other names: a
-        silently dead binding. → `find_control_for(keymap, predicate)`.
-      - LT+View toggles captions past the LT layer. → `resolve_press`.
-      - Axis ranges assume the Xbox virtual pad; there is no `EVIOCGABS`. → `normalize_axis`.
-      - Tests use fixed `/tmp` names and are flaky under concurrent runs; add a `mkdtemp` helper. →
-        `deckback_test_tmpdir()` in `tests/harness.hpp`.
-      - Two JSON string escapers exist (`util.hpp`/`json.cpp`). → one, which also escapes control
-        characters (the CDP copy did not).
-      - `netprobe` duplicates `connect_tcp`/`mono_ms`. → `connect_tcp` lives in netprobe.
-      - `kOverlayable` and `ConfigStore::apply` should come from one table; `touch_hide_cursor` was
-        exactly that drift. → one `OverlayKey` table.
-- [ ] **Desktop Mode without Steam Input reads the Deck's own pad wrong.** From the kernel source
-      (`drivers/hid/hid-steam.c`, 6.18): hid-steam puts the Deck's triggers on `ABS_HAT2Y`/`ABS_HAT2X`
-      (0..32767), not `ABS_Z`/`ABS_RZ`, so LT/RT do nothing there; `ABS_HAT0X/Y` is the left trackpad
-      (-32767..32767), which `track_axes` reads by sign as a D-pad; and the real D-pad arrives as
-      `BTN_DPAD_*` buttons, which the launcher does not read at all. Game Mode (Steam Input's
-      virtual Xbox pad) is unaffected. Low priority: Desktop Mode is a dev path, and Steam normally
-      runs there too.
-- [ ] **The pre-sleep checkpoint fails on every real sleep** (pre-existing: v0.0.9 on 2026-10-10 and
-      -17, this launcher on 2026-10-21). With a video playing, a power-button sleep logs
-      `player: suspend — no active video to checkpoint` and then, in the same second,
-      `devtools: WebSocket session established`: the `player_pause` evaluate fails within ~100 ms of
-      `PrepareForSleep(true)`, about 2 s after Steam starts its own suspend work, so the CDP socket
-      was already unusable. The same script works from the Exit path (`paused + checkpointed at
-      207.4s`). Impact is small — the resume nudge restarts playback either way — but the video is
-      never paused before sleep. Needs a debug log of why the socket dropped.
-- [ ] **`just soak` cannot exercise the launcher's sleep hooks.** `rtcwake -m mem` bypasses logind,
-      so no `PrepareForSleep` reaches the launcher (TEST-PLAN §1). Automating a logind suspend from
-      SSH needs polkit auth; until then the hooks are checked with power-button sleeps by hand.
-- [ ] **`test_uinput_button_a_activates` depends on what Leanback shows.** It asserts the route
-      changes, so it fails when focus is not on a tile: on the watch page Enter toggles play/pause
-      (2026-10-21, launcher logged `btn 304 -> Enter`). It now skips on the account picker; a
-      known-state fixture (TEST-PLAN §3) is what is missing.
-
-## Phase 10 — Flathub submission & maintenance  (3–4 ED + ongoing)
+## Phase 10 — Flathub submission & maintenance
 
 - [ ] Flathub review (sandbox/zypak, extra-data, trademark).
-- [ ] Track `youtube/cobalt` trunk monthly; keep UA/keymap remotely overridable & signed for hotfixes.
-- [ ] Issue templates, `docs/SUPPORT.md` log-collection script.
+- [ ] Track `youtube/cobalt` trunk monthly (`.internal/MIGRATION.md`). Keep the UA and keymap
+      remotely overridable and signed for hotfixes.
+- [ ] Issue templates (none in `.github/` yet). Log collection already exists (`--collect-logs`, SUPPORT.md).
+
+## Phase 11 — Focus preview (probe first)   → `durable/preview.md`
+
+Two questions: does Leanback's tile preview on focus/hover appear under our Cobalt UA, and does our
+AV1 steering or UA suppress it? No engine blocker is known: muted autoplay is on, and there is no
+cap on concurrent `<video>` elements. Write no preview code until P11.1 identifies the mechanism.
+
+- [ ] P11.1 — Deciding spike (OLED, live `youtube.com/tv`): dismiss the account gate, then run the
+      `preview.md` §1 enumeration probe before focus, on focus, and after ~3 s on the tile, and diff
+      the results. Check that Leanback's own state changes, not a value we set. Classify:
+      (a) animated `<img>`, (b)/(c) muted inline/MSE `<video>`, (d) nothing.
+- [ ] P11.2 — Suppression A/B: re-run with `steer_av1_unsupported:false`, then under another TV UA
+      (`cdp.py --ua`; `m138.md` §Leanback UA).
+- [ ] P11.3 — Focus vs hover: if D-pad focus shows nothing, dispatch a CDP `mouseMoved` at the
+      focused tile's centre and probe again. If the preview needs hover, the launcher needs a
+      focus→`mouseMoved` synthesizer.
+- [ ] P11.4 — Cost, only if a preview `<video>` appears: run the T4 decoder probe on its `playerId`,
+      then measure the `just power` difference.
+- [ ] P11.5 — Record the outcome in `durable/preview.md` §6: already works (document) · our config
+      suppresses it (steering stays default-on, so probably no preview) · hover-gated (build the
+      synthesizer) · nothing (register a page-layer dead end).
+
+**Gate:** P11.1 classified on a clean boot, with the outcome recorded. Run it whenever the OLED is attached.
+
+## Phase 12 — Feature backlog, probe first   → `durable/feature-landscape.md`
+
+No item starts before a probe identifies its mechanism. Rows in the finding's §6 dead-end table are
+not re-investigated. A new `finish-args` permission leaves existing users stuck, because the portal
+refuses a self-update that adds one; price that in first. Everything here is OLED-only.
+
+*P12.0: deciding probes (`just feature-probe <player|pairing|dock>`; a negative answer exits 0,
+"could not observe" exits 3):*
+
+- [ ] P12.0a — TV-code pairing: can our UA reach Leanback's "Link with TV code" screen? Deferred:
+      unanswered, so it proves nothing either way. It takes one human minute on Leanback's Settings
+      screen with `just feature-probe pairing`. Also check whether the Deck shows up in a signed-in
+      phone's device picker with no code (the same account is now enough). The answer decides P12.3.
+- [x] P12.0b — Player API during playback: rates `[0.25 … 2]`, quality ladder
+      `["hd720","large","medium","small","auto"]`, `<video>.playbackRate` holds. The `set*` methods are
+      only proven to exist. Run with media loaded (on the browse screen the getters return `[]`).
+- [x] P12.0c — Dock: with a 1920×1200 panel attached, gamescope's screen stays 1280×800, and the TV
+      shows the app mirrored and upscaled.
+
+*Tier 1:*
+
+- [ ] P12.1 — Audio-only / screen-off: stop the idle nudge, hold the logind sleep-block inhibitor only
+      in this mode (it also blocks a deliberate power-button sleep, `keep-awake.md`), lower quality.
+      Probe that audio continues with the panel blanked, then `just power`. `playAudioOnly` is an A3
+      decision; Leanback's "Continue watching?" prompt ends long sessions.
+- [!] P12.2 — Docked output: not something the app can fix. The external display mode never reaches
+      the nested Xwayland, so no window change of ours finds more pixels. Next: probe whether Game
+      Mode's display settings change gamescope's screen size. If they do not, register it as upstream.
+- [ ] P12.3 — Phone as remote/keyboard: if P12.0a passes, the deliverable is a SUPPORT.md section,
+      the cheapest answer to R9.
+- [x] P12.4 — Touch gestures (`touch_gestures`, default off; `durable/touch-gestures.md`): a page
+      router on real `wl_touch` at gamescope touch mode 4, every gesture finger-verified. `touchmode.cpp`
+      re-asserts `STEAM_TOUCH_CLICK_MODE` every tick while focused, never reading first (Steam resets it).
+- [x] P12.4a — Multitouch is delivered: `multiFinger` reached 5 in 48 sequences. Yet
+      `navigator.maxTouchPoints` reads 0, so nothing can feature-detect touch, which is why the
+      feature is behind a config switch.
+- [ ] P12.4b — Pinch / two-finger gestures. First probe how many touch points arrive (raise the
+      router's abandon threshold and read `maxTouches`), and whether coordinates stay sane with two
+      fingers down. Pinch-to-fill is post-1.0 (input-ux §7).
+- [ ] P12.4c — No test tier checks that touch input actually arrives. The L2 test checks that
+      `STEAM_TOUCH_CLICK_MODE` is 4, which stays true even while touch is broken. A real check needs
+      a finger or a synthetic XI2 touch device, read through the router's `stats().sequences`.
+
+*Tier 2:*
+
+- [ ] P12.5 — Playback speed, from `getAvailablePlaybackRates()`. Open questions: does the rate
+      survive a video change, and does `setPlaybackRate` actually work? One report says speeds of
+      1.25× and up force 480p, and that picking a quality resets the speed. Re-check quality after
+      each change, and offer a remembered default. Needs a free control (P12.7).
+- [ ] P12.6 — Sleep timer / "stop after this video": an OSD tab, a pause, and releasing the inhibitor;
+      optionally `login1.Suspend`.
+- [ ] P12.7 — Free the rear grips: `steam_input.vdf` maps L4/L5/R4/R5 onto face buttons, so
+      `input.cpp` cannot tell them apart. Repoint two of them to distinct xinput buttons. This
+      unblocks P12.5, P12.1 and V4.
+- [ ] P12.8 — Trackpad → bursts of arrow keys, through the same router as P12.4 (Leanback has no
+      pointer scrolling).
+- [ ] P12.9 — Battery-aware quality cap: `quality.max_height`/`render.*` are parsed but unused
+      (`config.cpp` `kIgnoredPrefixes`); the page side exists (`setPlaybackQuality[Range]`), and `hd720`
+      may be a limit we impose (P12.15). Confirm `/sys/class/power_supply` is readable in the sandbox.
+- [ ] P12.10 — Panel refresh matching (OLED): find out whether a gamescope atom for refresh rate or
+      FPS cap exists and works for a non-Steam app (we already write `STEAM_TOUCH_CLICK_MODE`).
+      Target: 90 → 60 Hz for 60 fps content.
+- [ ] P12.11 — Stats tab in the OSD: decoder and `kIsPlatformVideoDecoder`, resolution, dropped
+      frames, watts (`MediaState` already has these).
+- [ ] P12.12 — Haptics when a seek or chapter jump lands (`haptic.cpp` exists; off by default).
+
+*Tier 3: first check that something would use it:*
+
+- [ ] P12.13 — MPRIS. It needs a new `--own-name` permission, unless the host-side helper owns the
+      name and drives the app over loopback CDP. Two Decky plugins would use it; there is no
+      evidence the QAM reads MPRIS.
+- [ ] P12.14 — Loudness compression (Web Audio on the media element). Check the decoder identity
+      again afterwards.
+
+*Research candidates (feature-landscape §9):*
+
+- [ ] P12.15 — 720p60: stock Chromium says yes to Cobalt's extra MIME params (`framerate`, `width`,
+      `eotf`), so Leanback assumes no HFR; 720p may be the missing `getVideoContainerSizeOverride`. Probe
+      `isTypeSupported('video/webm; codecs="vp9"; framerate=9999')`; fix with a page script, re-run `just power`.
+- [ ] P12.16 — Long-press A → Leanback's context menu (Enter held ~500 ms). Probe: `rawKeyDown Enter`,
+      hold 600 ms, then `keyUp` on a tile. Our auto-repeat on the press edge must not cancel
+      Leanback's timer.
+- [ ] P12.17 — Resume after a crash: a watchdog restart lands on Home. Probe whether
+      `#/watch?v=<id>&t=120` starts at `currentTime ≈ 120`.
+- [ ] P12.18 — `window.h5vcc` shim: first `runtime.initialDeepLink`/`onDeepLink` (hand a second launch
+      to the running app), later `dial.DialServer` (friendly name without "YouTube"). Probe first:
+      inject `h5vcc={}` and re-run the P11/P12 probes (Leanback may then assume Cobalt services).
+- [ ] P12.19 — Pause when headphones are unplugged. The jack reports through evdev
+      `SW_HEADPHONE_INSERT`. Bluetooth needs PipeWire events, BlueZ (a permission) or the host
+      helper. Probe with `evtest`.
+- [ ] P12.20 — SABR/attestation canary. Other Leanback clients report playback dying at ~45–60 s
+      for some accounts, caused on the server. Add a signed-in playback check longer than 90 s, plus
+      a toast and a SUPPORT.md entry.
+- [ ] P12.21 — Steam tiles for channels and playlists via `#/browse?c=UC…` / `#/watch?list=…`.
+      Verify that both routes land.
+- [ ] P12.22 — Remaining time / "ends at", as a page script or a P12.11 row.
+
+*Policy-blocked:* SponsorBlock / DeArrow are out because of locked decision A3 (Flathub and
+takedown risk), not because they are hard.
+
+**Gate:** P12.0a–c classified in `feature-landscape.md`. 0b and 0c are done; 0a needs a human on
+Leanback's Settings screen. Every Tier 1/2 item that starts must trace back to a passing probe.
 
 ---
 
-## Phase 11 — Focus preview  (1 ED spike, then fork)   (findings `durable/preview.md`)
+## Dependency order
 
-Investigate the TV focus/hover video preview (moving focus onto a tile plays a short muted inline
-preview or animated thumbnail). **Unlike PiP (`durable/pip.md`), there is NO engine blocker** —
-muted autoplay is enabled, there is no per-page concurrent-`<video>` cap, and a preview is ordinary
-in-page content needing no window backend (all tree-verified, m114.md "Focus/hover preview"). The
-feature is Leanback's own; the only questions are whether it exists **under our Cobalt UA** and
-whether **our own AV1 steering / UA is suppressing it** — both unknowable on a workstation. So this
-phase is **probe-first**, in the exact shape of the touch-lock grab test: **one on-Deck spike decides
-whether the feature exists at all before any code is written.** No `patches/` entry is implied in any
-outcome.
+P0 → P1 → P2 → P3 → P9 → P10. P4–P7 depend on P1 and feed P9. P8 starts after P1. Phase T gates P9.
 
-- [ ] **P11.1 — The deciding spike (OLED Deck + live `youtube.com/tv`, cannot be closed on a
-      workstation).** Run the `durable/preview.md` §1 enumeration probe (a `Runtime.evaluate` that
-      dumps `<video>` elements, focused-tile `<img>` srcs, `videoCount`, `h5vcc`, UA, and focused-tile
-      `data-*`) **three times** — pre-focus, on-focus, after ~3 s dwell — and **diff them**. Dismiss
-      the account gate first (`ArrowDown`,`Enter`; m114.md). Assert on **Leanback's** state changing
-      (a `<video>`/`<img>` that appears or swaps), never on a value we chose (TEST-PLAN §0). Classify
-      the mechanism: (a) animated `<img>`, (b)/(c) muted inline/MSE/DASH `<video>`, or (d) nothing.
-- [ ] **P11.2 — Suppression A/B (patch-free).** Re-run P11.1 with `config/app.json
-      steer_av1_unsupported:false`, and again with a different TV UA (m114.md PS4/Tizen strings via
-      `cdp.py --ua`). A preview that appears only with steering off ⇒ **AV1 steering suppresses it**;
-      only under another UA ⇒ **our Cobalt UA suppresses it** (voice-search shape, input-ux §13.2).
-- [ ] **P11.3 — Focus vs hover.** If P11.1 shows nothing on D-pad focus, dispatch a synthetic
-      `Input.dispatchMouseEvent {type:"mouseMoved"}` at the focused tile's `getBoundingClientRect()`
-      centre (CDP coords are CSS-viewport px, no letterbox transform) and re-probe. Preview only after
-      hover ⇒ **hover-gated, we have no hover by default** — a launcher focus→`mouseMoved` synthesizer
-      would be needed (real code, no patch).
-- [ ] **P11.4 — Cost (only if P11.1 finds a preview `<video>`).** Chain the T4 `Media`-domain probe
-      (TEST-PLAN §5) on the preview `playerId`: assert `kVideoDecoderName` / `kIsPlatformVideoDecoder`.
-      `Dav1dVideoDecoder` = AV1 in software (worst case + steering bypassed); `VaapiVideoDecoder` = hw.
-      Then `just power` delta (OLED-only; the P4 gate is still not closed-loop, TEST-PLAN §E) — a
-      grid-browse preview is usually a **single** decode (no main video), so the concurrent-decode
-      unknown may never be exercised.
-- [ ] **P11.5 — Register the fork in `durable/preview.md`.** Per the §6 outcome table: *already works*
-      (document; watch for our single-`<video>` play-state model breaking on a 2nd element) · *config
-      suppresses it* (config decision, patch-free — but steering stays default-on for LCD-safety, so
-      likely *accept no preview*) · *hover-gated* (launcher synthesizer) · *nothing* (candidate (d):
-      a **page**-layer dead end, not an engine one — register like the voice/PiP dead ends and stop).
+## Open questions
 
-**Gate:** P11.1 captured on a clean boot with a definitive (a/b/c/d) classification, and the §6
-outcome recorded in `durable/preview.md`. **Do not write any preview code before P11.1 classifies the
-mechanism** — like the gesture layer waiting on the grab test, everything here rests on an assumption
-only the live app can confirm.
-
-**Sequencing:** independent of P2–P10; needs only a working on-Deck Leanback (have it, S0.4) and the
-L2 CDP harness (Phase PT). Cheapest possible spike; run it opportunistically whenever the OLED Deck
-is attached.
-
----
-
-## Phase 12 — Feature backlog, probe-first   (findings `durable/feature-landscape.md`)
-
-A ranked survey of what is worth adding *for this device*, derived from the mechanisms already proven
-(page scripts, the `.html5-video-player` API, InnerTube `/next`, evdev, gamescope X atoms, host-side
-helpers, the OSD shell) rather than from a wish list. **Nothing here is started before its probe
-classifies the mechanism** — the discipline that killed `c`-for-captions and chapter-via-`/player`.
-Items that match a row in the finding's §6 dead-end table are not re-investigated.
-
-**Cross-cutting cost, applies to every item:** a new `finish-args` permission strands existing users
-(flatpak-portal refuses a self-update asking for a permission the installed build lacks —
-`self-update.md`). Price it before designing, not after.
-
-*P12.0 — the three probes that decide most of the rest (one Deck session, no code):*
-
-All three are `just feature-probe <player|pairing|dock>` (`scripts/feature-probe.py`). A negative
-answer exits 0 — it is a finding; only "could not observe" is an error (3). Results: §8 of
-`durable/feature-landscape.md`.
-
-- [ ] **P12.0a — TV-code pairing. DEFERRED by decision 2026-07-31 — not answered, not a dead end.**
-      Is Leanback's own "Link with TV code" pairing screen reachable **under our Cobalt UA**? Would
-      decide P12.3 outright. Attempted the same day and abandoned mid-probe: the captures landed on
-      the player and then the browse feed, and the probe refuses to conclude from either — it printed
-      a confident dead-end verdict off both before that was fixed (feature-landscape §8.3). **The
-      absence of an answer here is a scheduling choice, not evidence about pairing**; do not cite it
-      as one. The probe is built and ready (`just feature-probe pairing`), so re-asking costs one
-      human minute on Leanback's Settings screen. `IS_MDX_INITIALIZED` is present in the TV app
-      config under our UA — suggestive, decides nothing.
-- [x] **P12.0b — player method dump.** ✅ **PASSED on-Deck 2026-07-31 (OLED), during real playback.**
-      Rate: `getAvailablePlaybackRates() -> [0.25 … 2]`, `getPlaybackRate`, `setPlaybackRate`, and
-      `<video>.playbackRate` **held** at 1.25 through 3 s of playback. Quality:
-      `getAvailableQualityLevels() -> ["hd720","large","medium","small","auto"]`, labels
-      `720p…240p`, `getPlaybackQuality()/getMaxPlaybackQuality() -> "hd720"`, `setPlaybackQuality`,
-      `setPlaybackQualityRange`. **Unblocks P12.5, the quality half of P12.1, and the page side of
-      P12.9.** The `set*` methods were proven only to EXIST (no-arg call throws) — call them with
-      real arguments before designing on them. Must be run with media loaded: on the browse screen
-      every quality getter answers `[]`, which is indistinguishable from "no API".
-- [x] **P12.0c — dock observation.** ✅ **RUN on-Deck 2026-07-31 (OLED), USB-C to a 1920x1200 panel.**
-      `DP-1` connected/enabled advertising 1920x1200, and **gamescope's screen stayed 1280x800**;
-      our page stayed 1279x799; `:1` offers no mode above 1280x800. The TV shows the app **mirrored
-      and upscaled** (confirmed by eye). **This kills both designs P12.2 was choosing between** —
-      see the rewritten P12.2 below.
-
-*Tier 1 — Deck-shaped, highest value:*
-
-- [ ] **P12.1 — Audio-only / screen-off listening.** Stop the host-side idle nudge so the panel
-      blanks, hold the logind **sleep**-block inhibitor so Steam does not auto-suspend, and drop
-      video quality if P12.0b says we can. **Known trade-off to design around, not discover:** the
-      sleep-block also blocks a deliberate power-button sleep (why it shipped and was retired in one
-      session, `keep-awake.md`) — scope it to the mode and release on exit. **Probe first:** does
-      Chromium keep decoding/feeding audio with the panel blanked under gamescope (assert
-      `currentTime` advances via `deckctl.py`, and that audio is audible)? **Then measure** the watt
-      delta with `just power` — it is closed-loop now, so this is a number, not a hope.
-- [!] **P12.2 — Docked output ("a real TV box"). NOT AN APP-SIDE ITEM — reclassified by P12.0c.**
-      Both candidate designs are dead: there is nothing to resize into at runtime, and a relaunch
-      finds the same screen. Docked, gamescope's own screen stays at the internal 1280x800 while the
-      attached panel advertises 1920x1200, so **the external mode never reaches the nested
-      Xwayland** and no window-management change of ours can find more pixels
-      (feature-landscape §8.2). Docked output is *not broken* — the TV shows the app, mirrored and
-      upscaled — it is 800p on a 1200p panel. What remains is a session/compositor question (how
-      gamescope is started, how SteamOS switches outputs when docked), the same wall as
-      `platform.md`'s QAM finding: user-facing settings, not flags we can pass. **Before any further
-      work here, probe whether Game Mode's own display settings change gamescope's screen size at
-      all** — if they do not, this is upstream and should be registered as such, not built around.
-      The §2.2 "highest value per engineering day" ranking rested on us controlling output size and
-      no longer holds.
-- [ ] **P12.3 — Phone as remote/keyboard (likely zero code).** If P12.0a passes, search, sign-in and
-      queueing move to the phone and the deliverable is a `docs/SUPPORT.md` section — the cheapest
-      available answer to R9 (no auto-OSK under Xwayland, `STEAM+X` soft-lock, QWERTY-forced BT
-      keyboards; input-ux §8.3).
-- [x] **P12.4-OPEN — CLOSED 2026-07-31. Touch delivered nothing because OUR guard skipped a
-      same-value write, not because of the engine.** `touchmode.cpp` wrote
-      `STEAM_TOUCH_CLICK_MODE` only when the value was wrong; gamescope re-points touch on the
-      `PropertyNotify`, so a launch that inherited the right value from a previous run signalled
-      nothing and never got touch routed to its window. Every diagnostic read healthy throughout —
-      mode 4, router installed, listeners attached — which is why three successive theories (cold
-      boot, cursor script, `gold`/ThinLTO engine) were all wrong. **Proven live:** on one running
-      process, rewriting the atom with *the same value* took the router from `sequences: 0` to
-      `sequences: 6`. **The engine preset is exonerated and v0.0.9 is publishable.** A second path
-      into the same bug — the one users actually hit — is **changing screen brightness**: the atom
-      is a per-display mirror of a GLOBAL mode, and Steam sets 1 on `:0` every time a game takes
-      focus (measured: `GAMESCOPE_FOCUSED_APP` = 769 → mode 4, = our appid → mode 1). We are
-      contesting the atom, not initialising it. A rising-edge write was tried and **rejected by
-      measurement** — our window never loses X focus on `:1` when the QAM opens, so no observable
-      variable moves. Fix is therefore a **heartbeat**: assert every tick while focused, never read
-      first. Verified on-Deck: 750 ms writes landing mid-swipe disrupted nothing (59 sequences) and
-      the QAM stayed touch-usable. Pure `should_write_mode()` with L0 coverage in
-      `touchmode_test.cpp`, including a `static_assert` that blocks re-adding the value check.
-      Full detail: `durable/touch-gestures.md` §7.0.2.
-- [ ] **P12.4c — no tier asserts that touch ARRIVES.** The gap this bug walked through. The L2 test
-      checks `STEAM_TOUCH_CLICK_MODE` is eventually 4, which stayed true for the entire failure, so
-      it would have passed throughout. Asserting the *state we intend* instead of the *effect we
-      need* passes hardest exactly when the mechanism between them is broken. A real check needs a
-      finger or a synthetic XI2 touch device; the router's `stats().sequences` is the read-out.
-- [x] **P12.4 — Touch gesture layer. BUILT AND TUNED ON HARDWARE 2026-07-31 (OLED)** — branch
-      `feat/touch-gesture-router`, findings `durable/touch-gestures.md`. Page-layer router on real
-      `wl_touch` (gamescope mode 4), launcher polls its queue and dispatches trusted keys. Every
-      gesture exercised by a real finger: swipe, tap (activate/pause), double-tap (seek), hold (2x),
-      and the Y/R4 toggle with its toast. **Two designs a finger rejected** — proportional scrolling
-      is categorically wrong on a discrete-focus UI, and no `stepPx` can fix it (the value that stops
-      a long swipe double-stepping is the value that makes a short one do nothing); `maxSteps=1` is
-      the rule instead (touch-gestures.md §5.1). Ships **off by default** (one unit). Left-edge-swipe
-      Back is the one gesture still unexercised.
-- [x] **P12.4a — MULTITOUCH IS DELIVERED (2026-07-31).** The router's `multiFinger` counter — built
-      as a self-probe — climbed to 5 in 48 sequences during ordinary use, i.e. Blink reported >1
-      simultaneous point, on a device whose `navigator.maxTouchPoints` reads **0**. This **retires
-      input-ux §3's "don't rely on multitouch"**, which came from Valve's Deck FAQ and not from
-      measurement. Unknown and needed before any pinch design: HOW MANY points arrive (the router
-      abandons on the second finger, so it has never counted past 2) and whether coordinates stay
-      sane with two down. Short probe: raise the abandon threshold, read `maxTouches`.
-- [ ] **P12.4b — Pinch / two-finger gestures.** UNBLOCKED by P12.4a. Do the `maxTouches` probe first.
-      `input-ux` §7 lists pinch-to-fill for the 16:10 panel as post-1.0.
-      **`navigator.maxTouchPoints` reads 0 on a panel where touch demonstrably works**, so nothing
-      can feature-detect this: any gate on `maxTouchPoints` or `'ontouchstart' in window` would
-      disable touch exactly where it works. That is why the feature is config-gated, and it is the
-      check a future gesture layer would naturally have written.
-
-*Tier 2 — cheap, on proven mechanisms (each still gated on its own probe where noted):*
-
-- [ ] **P12.5 — Playback speed. UNBLOCKED by P12.0b** (on-Deck 2026-07-31). Two independent levers,
-      both measured: `<video>.playbackRate` **held** at 1.25 through real playback, and the player
-      exposes `setPlaybackRate` + `getAvailablePlaybackRates() -> [0.25 … 2]` — use that list rather
-      than inventing steps. Still open: whether the rate survives a video CHANGE (only one video was
-      sampled), and `setPlaybackRate` was proven to exist, not to work. Needs a free control — P12.7.
-- [ ] **P12.6 — Sleep timer / "stop after this video."** OSD tab + player pause + inhibitor release,
-      optionally `login1.Suspend`. Handheld-only failure mode; every part already wired.
-- [ ] **P12.7 — Free the rear grips.** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face
-      buttons, so four physical controls are invisible to `input.cpp` by construction (grips are not
-      on the virtual pad, input-ux §1). Repoint two to distinct xinput buttons; unblocks P12.5/P12.1.
-- [ ] **P12.8 — Trackpad → arrow bursts.** Same router as P12.4: Leanback has no pointer scroll, so
-      relative motion must become arrows.
-- [ ] **P12.9 — Battery-aware quality cap.** `quality.max_height` and `render.*` sit in `config.cpp`'s
-      `kIgnoredPrefixes` — declared in `app.json`, consumed by nothing. Wire a real cap and lower it
-      under a battery threshold. **Page side unblocked by P12.0b:** the ladder is real —
-      `["hd720","large","medium","small","auto"]` with `setPlaybackQuality`/`setPlaybackQualityRange`,
-      and `getMaxPlaybackQuality() -> "hd720"` already matches our 1280x800 surface, so the cap is a
-      *lowering* mechanism only. Still confirm `/sys/class/power_supply` is readable from inside the
-      sandbox before designing the trigger.
-- [ ] **P12.10 — Panel refresh matching (OLED).** `platform.md` says the QAM knobs are user-facing
-      settings, not flags we pass — but `touchmode.cpp` proves we can *write gamescope atoms*.
-      Whether a refresh/FPS-cap atom exists and honours a non-Steam client is a **probe, not a known
-      no**. 90 → 60 Hz during 60 fps content is free watts if it lands.
-- [ ] **P12.11 — Stats tab in the OSD.** Decoder name + `kIsPlatformVideoDecoder`, resolution,
-      dropped frames, watts — `scripts/cdp.py:MediaState` already accumulates it. "Am I actually on
-      hardware decode" is a *user* question here: its silent false-pass is what shipped green-band
-      corruption on m114.
-- [ ] **P12.12 — Haptics on seek/chapter confirm.** `haptic.cpp` exists; plan §P3 already sanctions
-      it, off by default.
-
-*Tier 3 — value uncertain, probe the consumer first:*
-
-- [ ] **P12.13 — MPRIS** (plan §10.4). Costs a new `--own-name` (see the cross-cutting note), and
-      Game Mode has no media widget — the only real consumer is BT headset transport buttons via
-      `mpris-proxy`, not running by default on SteamOS. **Probe for a consumer before building the
-      producer.**
-- [ ] **P12.14 — Loudness compression** for the Deck's quiet speakers (Web Audio graph on the media
-      element). Re-assert decoder identity afterwards: a feature that silently drops us to software
-      decode is a regression wearing a feature's clothes.
-
-*Research delta 2026-10-20 (`durable/feature-landscape.md` §9) — new candidates, each probe-first:*
-
-- [ ] **P12.15 — 60 fps unlock (and the 720p question).** Two separate ceilings, not one:
-      - 30 fps: Leanback probes `isTypeSupported` with Cobalt's extra MIME parameters
-        (`framerate`, `width`, `eotf`). Stock Chromium ignores them and answers "supported", so
-        Leanback assumes no HFR.
-      - 720p: plausibly the missing `getVideoContainerSizeOverride`.
-
-      **720p60 is the valuable half**; 1080p on an 800p panel costs battery for nothing. The fix is
-      a page script in the AV1-steering class: reject absurd values. **Probe:**
-      `MediaSource.isTypeSupported('video/webm; codecs="vp9"; framerate=9999')` → `true` means we
-      are affected. Then confirm a known 60 fps video offers no `720p60`. After the fix, re-run
-      `just power` and the decoder-identity check.
-- [ ] **P12.16 — Long-press A → Leanback's context menu** (Watch later / Not interested — unreachable
-      today). Leanback's long-press is Enter held ~500 ms. Ours fires on the press edge and sends
-      keyDown+keyUp together. **Probe:** `rawKeyDown Enter`, hold 600 ms, `keyUp` on a tile — does
-      the menu open? The press-edge auto-repeat must not cancel Leanback's timer.
-- [ ] **P12.17 — Resume after a crash.** A watchdog restart lands on Home and the place is lost. The
-      suspend checkpoint is only logged, and the deep link emits only `v=`. **Probe:** does
-      `#/watch?v=<id>&t=120` land at `currentTime ≈ 120`?
-- [ ] **P12.18 — `window.h5vcc` shim** (M).
-      - First `runtime.initialDeepLink`/`onDeepLink`: hand a second launch to the running app
-        without a reload.
-      - Later `dial.DialServer` (L): a LAN cast target "Steam Deck (Deckback)". The friendly name
-        must not contain "YouTube"; the DIAL app id `YouTube` is protocol, not branding.
-
-      **Probe first:** inject `h5vcc={}` and re-run P11/P12 probes. Leanback may assume Cobalt
-      platform services once `h5vcc` exists (input-ux §13.2). SSDP must work under
-      `--share=network` (no new permission [I]).
-- [ ] **P12.19 — Pause on headphone unplug.** Jack: evdev `SW_HEADPHONE_INSERT` (`--device=input` is
-      already granted). Bluetooth: needs PipeWire events, BlueZ (a permission — see the
-      cross-cutting note), or the host helper. **Probe:** `evtest` on the jack device.
-- [ ] **P12.20 — SABR/attestation canary + an honest error.** Since Jun–Sep 2026, sibling Leanback
-      clients report playback dying at ~45–60 s for some accounts. It is server-side, per-account,
-      and reproduces in a plain browser. Guests sometimes get "Sign in to prove you're not a bot".
-      Our smoke canary only loads the UI as a guest and never plays past ~60 s, so it misses both.
-      Add a signed-in, >90 s playback leg, and a toast + SUPPORT.md entry so users do not blame us.
-- [ ] **P12.21 — Channel/playlist Steam tiles** (S–M): one-tap favourites via
-      `#/browse?c=UC…` / `#/watch?list=…` deep links in the Steam library. Verify that both routes
-      land.
-- [ ] **P12.22 — Remaining time / "ends at"** (S): page script, or a row in the P12.11 stats tab.
-
-*New evidence for items above (2026-10-20):*
-- **P12.0a/P12.3:** YouTube dropped the shared-Wi-Fi requirement for phone↔TV control; the same
-  account suffices (secondary source). Add one case to the pairing probe: does the Deck appear in a
-  signed-in phone's device picker with no code?
-- **P12.1:** a native audio-only path exists (`playerConfig.audioConfig.playAudioOnly`, zero video
-  decode), but it rewrites the player response. That makes it an **A3 decision**, not an
-  engineering one; dropping to `small` quality stays within policy. Leanback's "Continue
-  watching?" prompt will end long screen-off sessions; defeating it is also A3, so treat it as a
-  known limit.
-- **P12.5:** one report says speed ≥ 1.25× forces 480p and re-picking quality resets speed. Re-check
-  quality after each rate change, and offer a remembered default speed.
-- **P12.6 / P12.9:** demand signals exist: a sleep timer in a sibling Decky plugin, and a
-  remembered max quality requested in a sibling client's tracker. **P12.9's premise is
-  contradicted:** `hd720` may be a ceiling we impose, not our surface (see P12.15).
-- **P12.13:** two Decky plugins consume MPRIS (~76k and ~38k downloads), so a consumer exists. The
-  new-`--own-name` cost could be avoided by letting the host-side helper own the MPRIS name and
-  drive the app over loopback CDP [I]. No evidence that SteamOS 3.7/3.8's QAM reads MPRIS [U].
-
-*Policy-blocked, not tech-blocked:*
-
-- **SponsorBlock / DeArrow** — small now (hot-swappable scripts + verified `seekTo` + InnerTube
-  precedent), out by locked decision **A3** (Flathub acceptance / takedown risk), not by difficulty.
-  Opt-in and default-off barely changes that. Re-taking it is a *risk* decision (plan §10.6); the
-  finding is not an argument for taking it.
-
-**Gate:** P12.0a–c captured on a clean boot with definitive classifications recorded in
-`durable/feature-landscape.md`, and every started Tier-1/2 item traceable to a probe that passed.
-**2026-07-31: 0b and 0c are in (§8), 0a is not** — the gate is not met until a human captures
-Leanback's own Settings screen.
-
-**Sequencing:** P12.0 is independent of everything and needs only an attached OLED Deck plus the L2
-CDP harness — run it opportunistically alongside P11.1. No item below Tier 1 starts before the probe
-that names its mechanism.
-
-**Everything here is OLED-only, one unit, one session.** Nothing in §8 has been seen on an LCD Deck,
-and P12.0c in particular was one dock and one 1920x1200 panel — a different dock or a TV that
-negotiates differently is not covered by that reading.
-
----
-
-## Dependency graph (doc §7)
-
-```
-P0 ─► P1 ─► P2 ─► P3 ─► P9 ─► P10
-        ├─► P4 (S0.5 gated) ─┤
-        ├─► P5 ──────────────┤
-        ├─► P6 ──────────────┤
-        └─► P7 (S0.3 gated) ─┘
-P8 starts after P1, hardens through P9
-PT (test automation) starts after P1 and gates P9 — it unblocks every "on-Deck: TODO"
-   in P2–P7, so pulling it earlier pays for itself.
-```
-
-## Open questions blocking later phases (doc §16)
-
-- [x] Name → **Deckback** (`io.github.properrr.deckback`)
-- [ ] A1: sw decode OK for M1, VA-API before public release? (assumed yes)
-- [ ] Build infra: workstation-as-CI-runner vs. rented large runner?
-- [ ] Beta channel: GitHub-only vs. later Flathub `beta` branch?
-- [ ] Deck access: IP + SSH creds, which unit first (LCD/OLED)?
+- [ ] Build infra: the workstation as CI runner, or a rented large runner (P8 self-hosted runner)?
+- [ ] Beta channel: GitHub only, or later a Flathub `beta` branch (U10)?

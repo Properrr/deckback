@@ -1,32 +1,37 @@
-# `scripts/sim/` — containerized test sim (groundwork)
+# `scripts/sim/` — containerized test sim
 
 Design + rationale: [`.internal/findings/durable/test-sim.md`](../../.internal/findings/durable/test-sim.md).
 
-A container can faithfully run the **GPU-independent** layers of Deckback's on-device tests
-(self-update / Flatpak-portal / D-Bus reconnect, `flatpak` mechanics, and — later — overlay render on
-software Vulkan + evdev input). It **cannot** run the gates that actually gate a release — VA-API
-hardware decode, the green-band pixel verdict, power, suspend/resume, real Deck-APU behavior — and the
-sim is built to be **incapable of reporting those as PASS** (they skip loud, exit code `6`, never
-green). That guardrail is the whole reason a software sim isn't the m114 false-pass trap.
+A container faithfully runs the **GPU-independent** layers of Deckback's on-device tests. It
+**cannot** run the gates that actually gate a release — VA-API hardware decode, the green-band pixel
+verdict, power, suspend/resume, real Deck-APU behavior — and the sim is built to be **incapable of
+reporting those as PASS**: they are refused with exit code `6` (UNSUPPORTED-IN-SIM), never green.
+`tests/harness/test_sim_guardrail.sh` pins that rule.
 
-## Status
+## Run it
 
-Design + **Phase-1 feasibility proven** (2026-07-15). Not yet the full `just sim` harness.
+```sh
+just sim [suite]    # suite: all (default) | launcher | shortcut | portal | reconnect   (needs Docker)
+```
 
-- `portal-probe.sh` — reproducible proof that `flatpak-portal` + the permission store run and enforce
-  their caller contract inside a plain Arch container (no GPU, no SteamOS image). Run it:
+| Suite | What it proves |
+|---|---|
+| `launcher` | the launcher builds and its L0 tests pass on the SteamOS userspace (the Deck's gcc/glibc), not just Debian |
+| `shortcut` | the installer's Steam-tile writing (`steam_shortcuts.py add` + `art`) produces a correct `shortcuts.vdf` entry and grid art |
+| `portal` | `flatpak-portal` + the permission store activate and enforce their caller contract |
+| `reconnect` | the launcher's real D-Bus reconnect logic, via `deckback-launcher --selftest-watch <secs>` inside a bwrap Flatpak instance: portal restart, bus drop, bus recovery |
 
-  ```sh
-  scripts/sim/portal-probe.sh
-  ```
+## Files
 
-## Next (Phase 1 — `sim-portal`)
+- `run.sh` — host side: refuses hardware gates (exit 6), builds the image from
+  `docker/steamos.Dockerfile`, runs a suite against the read-only bind-mounted source.
+- `incontainer.sh` — container side; do not run it on the host.
+- `capture-deck-baseline.sh` — reads the real Deck's userspace (OS, glibc/gcc, pacman repos) into
+  `docker/steamos-baseline.env`, which the image pins to. **Re-run it after every SteamOS update.**
+- `portal-probe.sh` — standalone check that `flatpak-portal` answers inside a plain container.
 
-1. `docker/steamos.Dockerfile` — a REAL SteamOS 3.8.1x rootfs (Valve's holo/jupiter repos, pinned
-   to the Deck's own gcc/glibc) + flatpak/ostree/dbus. Was archlinux:latest, which drifts ahead of
-   SteamOS and quietly tested a toolchain nobody ships (durable/test-sim.md ★ CORRECTION).
-2. A tiny flatpak app wrapping `deckback-launcher` so the portal accepts it as a flatpak instance.
-3. A staging `archive-z2` repo helper (publish commit A → B) for the self-update round-trip.
-4. `deckback-launcher --selftest-watch <secs>` — run the real updater loop bounded, so a scripted
-   `restart flatpak-portal` (reconnect case B) / bus drop (case A) is observable and assertable.
-5. `just sim portal` + the `6 = UNSUPPORTED-IN-SIM` exit code + an L0 test pinning the guardrail.
+## Not yet covered
+
+- The full self-update **deploy** round-trip (a staging-repo commit through `Update()` to Done —
+  needs an ostree repo fixture).
+- Overlay render on software Vulkan + uinput input (`sim-gamescope`).

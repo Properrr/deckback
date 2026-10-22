@@ -10,8 +10,7 @@ Written to be usable two ways, and the constraints of both are stated where they
 
 Companions: `.internal/TASKS.md` (what to build) · `.internal/TEST-PLAN.md` (what is actually proven)
 · `.internal/steamdeck-cobalt-youtube-plan.md` (why) · `.internal/MIGRATION.md` (the Cobalt bump).
-
-Status date: 2026-07-10. Pin: `DEPS.pin = a9181df8` (m114).
+The engine pin is `DEPS.pin`.
 
 ---
 
@@ -22,17 +21,16 @@ runner call the scripts directly, so anything expressed only in the `justfile` d
 as automation is concerned.
 
 Every script sources `scripts/lib.sh`, which sets `set -euo pipefail`, `cd`s to the repo root, loads
-`.env` + `.steamdeck_auth`, and defines the exit-code taxonomy and the Deck-access helpers. Two
-exceptions run *on the Deck* and deliberately do not source it: `scripts/audio-repair.sh` and
-`scripts/install-audio-repair.sh`.
+`.env` + `.steamdeck_auth`, and defines the exit-code taxonomy and the Deck-access helpers. The
+scripts that run *on the Deck* deliberately do not source it: `scripts/audio-repair.sh`,
+`scripts/install-audio-repair.sh`, `scripts/install-idle-nudge.sh` and `scripts/uninstall.sh`.
 
 ### 0.1 `just preflight` — the one gate before code leaves your machine
 
 **`scripts/preflight.sh [shell|launcher|gn|all]`** is the single definition of the pre-push /
 pre-release checks. `.githooks/pre-push`, every job in `.github/workflows/lint.yml`, and
-`scripts/release-prep.sh` all call it, so **local and CI cannot drift** — the whole point (a hook
-that mirrored only *part* of CI once let three red commits through in a row;
-`.internal/findings/durable/preflight-parity.md`). It runs anywhere: no Chromium tree, no Deck, no
+`scripts/release-prep.sh` all call it, so **local and CI cannot drift**
+(`.internal/findings/durable/preflight-parity.md`). It runs anywhere: no Chromium tree, no Deck, no
 Docker.
 
 | target | mirrors CI job | checks |
@@ -45,10 +43,10 @@ Docker.
 Exit `2` = a check failed (the tree is wrong); `3` = a required tool/lib is missing. **Run
 `just hooks` once per clone** so the pre-push hook enforces it. **Local tool requirements:**
 clang-format (pinned **23.1.3**, `CLANG_FORMAT_VERSION` in `scripts/lib.sh`) always comes from a
-cached PyPI venv, locally and in CI; `shellcheck` is bootstrapped there when absent; the launcher build needs `cmake ninja g++
-clang++` and `libsystemd-dev libcurl4-openssl-dev libpulse-dev libxcb1-dev`; the harness suite needs
-Python 3 + Pillow (`python3-pil`). And **`just release` refuses to build unless the tagged commit is
-green in CI** (`FORCE=1` overrides).
+cached PyPI venv, locally and in CI; `shellcheck` is bootstrapped there when absent; the launcher
+build needs `cmake ninja g++ clang++` and `libsystemd-dev libcurl4-openssl-dev libpulse-dev
+libxcb1-dev`; the harness suite needs Python 3 + Pillow (`python3-pil`). And **`just release`
+refuses to build unless the tagged commit is green in CI** (`FORCE=1` overrides).
 
 ---
 
@@ -71,11 +69,8 @@ Helpers: `die_assert`, `die_env`, `die_transport`, `die_usage`, and bare `die` (
 `deck_or_skip` exits **0** with a printed reason when no Deck is attached, so a Deck-less CI run does
 not fail — but it can never skip silently.
 
-> **The failure mode this taxonomy exists to prevent.** `just power` once printed
-> `mean 0.00 W over 300 samples` and exited **0** when the battery sysfs node was missing, because
-> `awk` coerces `""` to `0`. The P4 gate is *"≤ 9 W"* — so a run that measured **nothing** scored a
-> perfect pass. Regression-tested now in `tests/harness/test_power_adjudicate.sh`.
-> **A check that cannot fail is not a check.**
+**A check that cannot fail is not a check.** A measurement that read nothing must exit `3`, never
+score a pass (`tests/harness/test_power_adjudicate.sh` pins this for `just power`).
 
 ---
 
@@ -86,9 +81,9 @@ This is the harness's least obvious property. Three different machines are invol
 | Context | What runs there | Recipes |
 |---|---|---|
 | **Workstation (host)** | `just` itself, the launcher build (CMake), all SSH orchestration | everything below unless noted |
-| **Container** (Docker/Podman, Debian 12) | anything touching the Chromium/Cobalt tree — `gclient`, `gn`, `autoninja`, `flatpak-builder` | `bootstrap` `sync` `gen` `build` `compdb` `smoke` `flatpak` `release` |
-| **The Deck** (over SSH) | the app, and the two Deck-local installers | `deploy` `run` `remote-run` `logs` `debug` `power` `soak` |
-| **The Deck (typed there by hand)** | `install.sh`, `install-audio-repair.sh` — they need a local `.flatpak` and a local systemd user session | `install` `audio-repair` |
+| **Container** (Docker/Podman, Debian 12; `pack` is Debian 13) | anything touching the Chromium/Cobalt tree — `gclient`, `gn`, `autoninja`, headless engine runs, `flatpak-builder` | `bootstrap` `sync` `gen` `build` `compdb` `smoke` `cert` `touch-bisect` `flatpak-lint` `flatpak` `release` |
+| **The Deck** (over SSH) | the app; workstation recipes drive it over SSH and a CDP tunnel | `deploy` `run` `remote-run` `logs` `debug` `power` `soak` `test-deck` `cert-deck` `deck-ci` `deck-install-dev` `deck-use-repo` `deck-channel` `portal-poll` `touch-probe` `feature-probe` |
+| **The Deck (typed there by hand)** | the Deck-local installers — they need a local `.flatpak` and a local systemd user session | `install` `audio-repair` `idle-nudge` `uninstall` |
 
 **Builds never run on the Deck.** The Deck is a deploy/test target only.
 
@@ -119,6 +114,7 @@ The separation is enforced, not conventional:
 
 `H` = needs a human · `D` = can destroy state · `M` = machine-readable output.
 "Deck" means an SSH-reachable Steam Deck; "tree" means the Cobalt checkout; "ctr" means Docker.
+An empty exits cell means the recipe's codes are not pinned down here — read its script.
 
 | Recipe | Does | Needs | H | D | M | Non-zero exits |
 |---|---|---|---|---|---|---|
@@ -127,6 +123,8 @@ The separation is enforced, not conventional:
 | `just gen <preset>` | `gn gen out/<preset>` from `args/common.gn` + `args/<preset>.gn` | tree, ctr | | | | 1,3,5 |
 | `just build [preset]` | `autoninja content_shell` + the launcher | tree, ctr | | | | 1,3 |
 | `just launcher [build\|test]` | build/test **only** the launcher | *nothing* | | | ~ | 1,5 |
+| `just hooks` | enable the repo's git hooks (pre-push runs `just preflight`); **required once per clone** | *nothing* | | | | — |
+| `just preflight [target]` | the pre-push / pre-release gate (§0.1) | *nothing* | | | | 2,3 |
 | `just test-harness` | L0 tests of the harness's own shell/awk/python logic | *nothing* | | | ~ | 1 |
 | `just sim [launcher\|shortcut\|portal\|reconnect\|all]` | containerized **GPU-independent** sim: launcher build on Arch, installer Steam-tile writing, Flatpak-portal self-update foundation, and the **D-Bus reconnect drive** (`reconnect`: real `--selftest-watch` loop under a bwrap flatpak-instance — case A bus drop + case B portal restart); **refuses** hardware gates (vaapi/power/soak/…) with exit **6**, never fakes a pass | Docker (`--security-opt seccomp=unconfined`) | | | | 0,2,3,5,6 |
 | `just test-deck [args]` | **L2**: pytest drives the Deck over SSH + a CDP tunnel (+uinput) | Deck **running the app**, `pytest` on the workstation | | ~ (uinput taps/presses) | ✓ `artifacts/` on failure | 2,3,4 |
@@ -144,6 +142,9 @@ The separation is enforced, not conventional:
 | `just portal-poll [set N\|restore\|status]` | shrink/restore the Deck's Flatpak-portal update poll (~30 min → N s) so a self-update round-trip fires fast; `set` then relaunch (a portal restart orphans a running app's monitor) | Deck | ✓ read by eye | ✓ portal drop-in (reversible via `restore`) | | 0,3,4,5 |
 | `just power [secs]` | assert playback + VA-API, sample draw → CSV, adjudicate vs the ≤9 W gate | Deck **on battery**, video playing | ✓ open a video | | ✓ CSV | 2,3,4,5 |
 | `just soak [n]` | *n* × suspend/resume; app alive **and** `currentTime` advanced; reports EPP. `rtcwake` bypasses logind, so the launcher's sleep hooks never run (TEST-PLAN §1) | Deck, video playing | ✓ open a video | ✓ suspends HW | | 2,3,4,5 |
+| `just touch-probe [args]` | does gamescope touch mode 4 (passthrough) deliver real touch events to Blink, or only pointer emulation? | Deck running the app with `disable_touch:false` | ✓ taps the panel | | | 1,2,3,4,5 |
+| `just touch-bisect [presets]` | each engine preset × {router, router+hide_cursor}: real touch via CDP `Input.dispatchTouchEvent` under Xvfb. Skips gamescope/XI2, so only a **failure** is conclusive | tree, ctr, built presets | | | | 2,3,5 |
+| `just feature-probe player\|pairing\|dock` | classify a mechanism before building on it: the TVHTML5 player's rate/quality API, whether "Link with TV code" is reachable under our UA, or what gamescope does to our surface when docked (`--save` undocked, `--against` docked). A negative answer exits 0; 3 = could not observe | Deck running the app; `player` needs a video **playing** | ✓ `pairing` needs Leanback Settings open; `dock` needs a dock | | | 1,2,3,4,5 |
 | `just cert [suite] [preset]` | self-hosted `js_mse_eme` headless; fail only on a **regression** | `out/<preset>`, ctr, network | | | ✓ JUnit+JSON | 2,3,4 |
 | `just cert-deck [suite]` | same suites against a Deck already running the app | Deck, app up | | | ✓ JUnit+JSON | 2,3,4 |
 | `just deck-ci [--full] [--dry-run]` | **unattended**: deploy → launch → gate → cert → teardown; aggregates exit codes | **Deck**, ctr | ✗ (`--dry-run` is safe) | ✓ kills the app on the Deck | ✓ TRANSPORT only | 0,1,2,3,4,5 |
@@ -151,13 +152,19 @@ The separation is enforced, not conventional:
 | `just flatpak [preset]` | lint, stage `out/<preset>` → `.flatpak` bundle; **asserts the packaged sandbox grants dri+input** | `out/<preset>`, ctr | | ✓ wipes `build-dir` | | 1,2,3 |
 | `just install` | install bundle, **verify** evdev was granted, add to Steam | **run on the Deck** | ✓ prints steps | | | 1,2,3 |
 | `just audio-repair` | install the host-side mute-recovery user service | **run on the Deck** | | | | 1 |
+| `just idle-nudge` | install the host-side idle-nudge user service (keeps the screen on while a video plays) | **run on the Deck** (Desktop Mode) | | | | 1 |
+| `just uninstall [--purge]` | remove Deckback and every host-side trace; keeps app data (the sign-in) unless `--purge` | **run on the Deck** (Desktop Mode) | | ✓ removes the install | | 2 |
+| `just release-prep <version>` | release branch: bump `VERSION`, roll the CHANGELOG, add the AppStream `<release>`; does not build, tag or push (`RELEASING.md`) | clean tree | | ✓ commits on a new branch | | 2,5 |
 | `just release <tag>` | gold+ThinLTO build → bundle → checksums → draft GH release | tree, ctr, `gh` | ✓ publishes draft | | ✓ SHA256SUMS | 1,5 |
+| `just publish-repo [bundle] [site]` | build the hostable OSTree repo from the bundle + stage the GitHub-Pages site; continues the **live** repo's history (network) unless `DECKBACK_REPO_FRESH=1` | `.flatpak`, network | | | | 2,3 |
+| `just flathub-prep <tag>` | assemble a Flathub-PR-ready manifest set (extra-data engine tarball + checksums + pinned commit; `flathub/SUBMISSION.md`) | a staged engine (`just flatpak` first) | | | | 2,3,5 |
 | `just patch-new <name>` | export `cobalt/` HEAD into `patches/` | tree | | | | 1,5 |
 | `just patch-refresh` | re-export **all** patches from `cobalt/` history | tree | | ✓ `rm patches/*.patch` | | 1,5 |
 
-**`just smoke` doubles as the R1/R2 canary.** Run nightly against production `youtube.com/tv`: a
-server-side Leanback change that breaks the TV UA should page us the night it happens. It gates on
-three things, and each was chosen because its failure is otherwise *silent*:
+**`just smoke` doubles as the R1/R2 canary.** It loads production `youtube.com/tv`, so a
+server-side Leanback change that breaks the TV UA fails it (a nightly scheduled run is planned; no
+CI job runs it today). It gates on three things, and each was chosen because its failure is
+otherwise *silent*:
 
 1. the TV UA lands on Leanback (`ytlr-app`, no `app=desktop`, no cast screen);
 2. `--assert-ua` — the UA override **survived** that navigation. When the sticky override is lost,
@@ -167,11 +174,10 @@ three things, and each was chosen because its failure is otherwise *silent*:
    still report supported**. Without that second half, steering that broke in the direction of
    "everything unsupported" would pass an AV1-only check while YouTube served nothing.
 
-Smoke injects `config/av1_steering.js` — the very file CMake compiles into the launcher — so it
-tests the script that ships, not a copy of it. Before injecting, it asserts the *unsteered* engine
+Smoke injects `config/scripts/av1_steering.js` — the very file CMake compiles into the launcher — so
+it tests the script that ships, not a copy of it. Before injecting, it asserts the *unsteered* engine
 says AV1 **is** supported (`--baseline`). On a Cobalt build with no AV1 decoder at all, every
-steering assertion would otherwise pass while proving nothing: `just power` scoring `mean 0.00 W …
-PASS` from a battery with no telemetry, in a different costume.
+steering assertion would otherwise pass while proving nothing.
 
 ---
 
@@ -187,13 +193,12 @@ just flatpak deck     # stage out/deck -> io.github.properrr.deckback.flatpak
 ```
 
 `just release <tag>` is the tagged variant: it builds `out/release` (gold + ThinLTO) and calls
-`flatpak.sh release`. **Passing the preset is load-bearing** — `flatpak.sh` defaults to `deck`, and
-until this was fixed `just release` silently bundled whatever stale binary sat in `out/deck` while
-reporting success.
+`flatpak.sh release`. **Passing the preset is load-bearing** — `flatpak.sh` defaults to `deck`, so
+without it a release would bundle whatever binary sits in `out/deck`.
 
 ### B. Bundle → running on the Deck
 
-Three paths that share no state. Pick deliberately.
+Paths that share no state. Pick deliberately.
 
 | Path | Command | Runs | Use when |
 |---|---|---|---|
@@ -203,7 +208,7 @@ Three paths that share no state. Pick deliberately.
 | **Game Mode, dev overwrite** | `just flatpak` → `just deck-install-dev` *(from the workstation)* | the sandboxed Flatpak, replaced in place | iterating on the *installed* app without re-typing `just install` on the Deck |
 
 > `just deploy` does **not** pass `--delete` — it preserves a user-fetched Widevine CDM under
-> `~/cobalt-yt/`. (The `justfile` comment claimed `--delete` for a while; it was wrong.)
+> `~/cobalt-yt/`.
 >
 > **`just deploy` alone leaves Game Mode stale.** The Steam shortcut runs the *installed Flatpak*,
 > not the rsynced bundle. To test a change in Game Mode you must rebuild and reinstall the bundle.
@@ -216,14 +221,14 @@ id never changes, so the shortcut keeps launching whatever is installed under it
 recipes drive that from the workstation over SSH:
 
 - `just deck-install-dev [bundle]` — ship the local `.flatpak` and **overwrite** the install with
-  it. It does *not* use `flatpak install --reinstall`: that fails with *"GPG verification enabled,
-  but no signatures found"* when the installed app came from the gpg-verified published repo and the
-  bundle is unsigned. Instead it `uninstall`s **without `--delete-data`** (so `~/.var/app/<id>` —
-  the YouTube sign-in — survives) and installs the bundle fresh, then **proves** the data survived
-  by measuring the data dir before and after (a shrink to zero is `die_assert`, not a shrug).
+  it. It does not use `flatpak install --reinstall` (that fails GPG verification when the installed
+  app came from the signed published repo and the bundle is unsigned). Instead it `uninstall`s
+  **without `--delete-data`** (so `~/.var/app/<id>` — the YouTube sign-in — survives) and installs
+  the bundle fresh, then **proves** the data survived by measuring the data dir before and after (a
+  shrink to zero is `die_assert`, not a shrug).
 - `just deck-use-repo` — add the `deckback` remote from `flatpak/deckback.flatpakrepo` and switch
   the install to it, so `flatpak update` pulls official releases. Probes the repo **from the Deck**
-  first; if the GitHub-Pages repo is not published yet it exits `3` with instructions
+  first; if the GitHub-Pages repo is not reachable it exits `3` with instructions
   (`just publish-repo`, or set `DECKBACK_REPO_URL` to a reachable/staging repo). Keeps user data the
   same way.
 - `just deck-channel` — report the current origin, channel, version, commit, data size, and grant,
@@ -241,20 +246,18 @@ Being explicit, because a missing recipe is indistinguishable from a broken one 
 | Missing | Planned as | Blocks |
 |---|---|---|
 | `just gdb` | plan §15 — remote gdbserver | on-Deck debugging |
-| audio-restored / no-dim checks | the last two clauses of the P6 gate | `just soak` proves two of four |
-| a recorded cert baseline | T7d — recorded 2026-07-10 (`conformance-test.json`, 45/46) | L3 adjudication (other suites still exit 3 until recorded) |
+| automated audio-restored / no-dim checks in `just soak` | the last two clauses of the P6 gate (verified by hand on OLED) | `just soak` automates two of four |
+| a logind-path suspend in `just soak` | — (`rtcwake` bypasses logind; an SSH session cannot request a logind suspend without interactive polkit auth) | automated coverage of the launcher's sleep hooks |
+| recorded cert baselines beyond `conformance-test` | `tests/cert/expectations/<suite>.json` per suite | L3 adjudication for the other suites (they exit 3 until recorded) |
+| an L2 known-state fixture | a `tests/deck/conftest.py` fixture | state-independent L2 runs: Leanback's account gate / "Who's watching" picker and whatever page the last test left change what a key press does |
 
-**`just test-deck` exists as of 2026-07-09** (T2/T3) and **ran against a Deck for the first time on
-2026-07-10** — but that run was blocked by Leanback's "watch as guest" account gate, so it did not
-verify the §2 rows (before the fix it also could not even reach the Deck; harness.md F14). Read that
-before quoting L2 as coverage: a run that stalls at the account wall proves little more than a
-skipping one, until a `conftest.py` fixture dismisses the gate. What *is* proven is its pure
-machinery — `tests/deck/lib/`
-(uinput struct/ioctl encoding, the power parsers, the decoder verdict, the SSH error taxonomy) is
-unit-tested at L0 by `tests/harness/test_deck_lib.py`, which CI runs on every push. That L0 file
-already caught two real bugs before any hardware existed: a 16-byte `struct input_event` (with
-struct's `=` prefix, `l` is 4 bytes, not 8) and a power parser that would have read an empty sysfs
-node as `0.0 W`.
+### `just test-deck` — the L2 suite
+
+`tests/deck/` runs against a Deck that is already running the app (OLED unit). The "Who's watching"
+account picker is detected and skips as an environment gap rather than failing. Its pure machinery —
+`tests/deck/lib/` (uinput struct/ioctl encoding, the power parsers, the decoder and pixel verdicts,
+the SSH error taxonomy) — is unit-tested at L0 by `tests/harness/test_deck_lib.py` and
+`test_video_corruption.py`, which CI runs on every push. Current on-Deck results are in TEST-PLAN §2.
 
 Markers, and what a failure means:
 
@@ -269,15 +272,14 @@ Markers, and what a failure means:
 is wrong), a missing Deck or missing pytest is `3`, an unreachable configured Deck is `4`. It never
 reports a skipped-everything run as success.
 
-Present but **L0-only**: `just launcher test` (12 binaries) and `just test-harness`
-(`power_adjudicate`, the `cdp` library, `tests/deck/lib/`, `deckctl`). Both run anywhere in about a
-second and are the whole loop for launcher/config/scripts changes.
+Present but **L0-only**: `just launcher test` (ctest: 26 C++ cases in four grouped binaries, plus
+four node JS tests when `node` is present) and `just test-harness` (`tests/harness/`: adjudication
+logic, the `cdp` library, `tests/deck/lib/`, `deckctl`, the publish/channel/packaging checks). Both
+run anywhere in seconds and are the whole loop for launcher/config/scripts changes.
 
-### `scripts/deckctl.py` — the eye `power` and `soak` were missing (T5, 2026-07-09)
+### `scripts/deckctl.py` — the eye `power` and `soak` need
 
-`just power` sampled the battery without knowing whether a video was playing, and `just soak` checked
-that a *process* survived resume, which is one of the four clauses of the P6 gate. `deckctl.py` runs
-on the workstation, opens its own `ssh -L` tunnel, and answers with an exit code:
+`deckctl.py` runs on the workstation, opens its own `ssh -L` tunnel, and answers with an exit code:
 
 | Command | Question | Exit |
 |---|---|---|
@@ -296,14 +298,14 @@ EPP is **measured and reported, never gated.** SteamOS resets it on cores 1–7 
 (steamos#2383) and writing it back needs root, so it is infeasible from the Flatpak. A gate you
 cannot pass and cannot fix is a gate someone disables, and then it stops reporting too.
 
-### `just cert` — L3 conformance (T7). Built 2026-07-09; first ran 2026-07-10 (45/46).
+### `just cert` — L3 conformance
 
 Serves the pinned `js_mse_eme` (`tests/cert/HARNESS.pin`) from `127.0.0.1` and drives it over CDP.
-The `conformance-test` suite ran for real on 2026-07-10: **45 PASSED, 1 FAILED** (the failure,
-`MediaElementEvents`, is a harness property, not our engine — finding F11), and
-`tests/cert/expectations/conformance-test.json` records that baseline. The **other** suites still have
-no baseline, so `cert.py` exits 3 for them with instructions rather than passing a run it has no
-opinion about. Four things it will not do:
+The `conformance-test` baseline is **45 PASSED, 1 FAILED** (the failure, `MediaElementEvents`, is a
+harness property, not our engine — finding F11), recorded in
+`tests/cert/expectations/conformance-test.json`. The other suites have no baseline, so `cert.py`
+exits 3 for them with instructions rather than passing a run it has no opinion about. Four things it
+will not do:
 
 - **It never trusts `getTestResults()`.** The harness's own helper buckets tests into `pass`/`fail`
   and silently drops `UNKNOWN` and `TIMEOUT`. A suite wedged on test 3 of 400 reports zero failures.
@@ -321,28 +323,34 @@ opinion about. Four things it will not do:
   nondeterministic on a handheld. Recorded as a trend; pair a drop with the decoder probe to
   attribute it. And it never touches Widevine: CI must not fetch Google's CDM.
 
+`cert --deck` opens its own page target (`/json/new`) so the launcher's Navigator, which re-navigates
+its page back to `youtube.com/tv`, cannot pull the suite away (finding F15).
+
 Passing `js_mse_eme` is **not** YouTube certification and confers no status (`docs/legal.md`).
 
-`scripts/cdp.py` **is now a library as well as a CLI** (T1, 2026-07-09). Importable surface:
-`CDP` (context manager; `call` / `evaluate` / `wait_for` / `pump` / `screenshot` / `set_user_agent`),
-`key_spec` (named keys **and** any single printable char, with the `text` field that makes
-`beforeinput`/`textInput` fire), `dispatch_key(name, modifiers)`, `dispatch_raw(...)` for the spikes'
-**negative controls**, `type_text`, `click` / `mouse`, and `MediaState` — the CDP `Media`-domain
-accumulator that feeds the P4 gate. `CDP.call` now feeds unsolicited events to `MediaState` instead
-of discarding them; that discard is why decoder identity was previously unobtainable.
+### `scripts/cdp.py` — library and CLI
+
+Importable surface: `CDP` (context manager; `call` / `evaluate` / `wait_for` / `pump` / `screenshot`
+/ `set_user_agent`), `key_spec` (named keys **and** any single printable char, with the `text` field
+that makes `beforeinput`/`textInput` fire), `dispatch_key(name, modifiers)`, `dispatch_raw(...)` for
+the spikes' **negative controls**, `type_text`, `click` / `mouse`, and `MediaState` — the CDP
+`Media`-domain accumulator that feeds the P4 gate. `CDP.call` feeds unsolicited events to
+`MediaState` rather than discarding them, which is what makes decoder identity observable.
 
 `MediaState` **accumulates and does not adjudicate.** The P4 verdict is spelled once, in
 `tests/deck/lib/probes.py:hardware_decode_verdict(name, is_platform)`: pass iff
 `kIsPlatformVideoDecoder` is true *and* the name contains `Vaapi` (substring — an older path
 stringifies as `VaapiVideoDecodeAccelerator`). A **missing** value is a failure, not a pass: it means
-the Media domain never reported, and a broken probe must never look like working hardware. Never
-scrape `chrome://media-internals` — it is an unstable WebUI over the same MediaLog stream.
+the Media domain never reported, and a broken probe must never look like working hardware. The
+decoder name alone is not enough: hardware decode also needs a clean pixel verdict
+(`video_corruption_verdict`). Never scrape `chrome://media-internals` — it is an unstable WebUI over
+the same MediaLog stream.
 
-The CLI obeys the §1 taxonomy (`2` assertion, `4` transport) and grows three flags for the gate
-above: `--add-script FILE` (`Page.addScriptToEvaluateOnNewDocument`, before `--navigate`),
-`--baseline EXPR` (must hold *before* injection — a negative control), and `--assert EXPR`. Every
-predicate must evaluate to exactly `true`; truthiness is not enough, because `undefined` from a
-misspelt property reads as a clean answer under `==` and is not one.
+The CLI obeys the §1 taxonomy (`2` assertion, `4` transport) and has three flags for the smoke gate:
+`--add-script FILE` (`Page.addScriptToEvaluateOnNewDocument`, before `--navigate`), `--baseline EXPR`
+(must hold *before* injection — a negative control), and `--assert EXPR`. Every predicate must
+evaluate to exactly `true`; truthiness is not enough, because `undefined` from a misspelt property
+reads as a clean answer under `==` and is not one.
 
 Pure parts are covered by `tests/harness/test_cdp_lib.py`. Do not add Selenium/Playwright: they
 violate the minimal-deps rule and cannot run in the build image.
@@ -355,12 +363,12 @@ violate the minimal-deps rule and cannot run in the build image.
 2. Source `lib.sh`. Use `die_assert` / `die_env` / `die_transport` / `die_usage` — never bare `exit 1`
    for something you can classify.
 3. Reach the Deck **only** through `deck_ssh` / `deck_rsync`. Raw `ssh` ignores `STEAMDECK_PORT` and
-   the `sshpass` path. (`power.sh` and `soak.sh` used to get this wrong.)
+   the `sshpass` path.
 4. **Verify what you claim.** A launch recipe polls until the process *and* its CDP endpoint answer;
    a measurement recipe validates every sample and voids the run rather than averaging over garbage.
-   Fire-and-forget plus `exit 0` is a lie. (`remote-run.sh` used to be one.)
+   Fire-and-forget plus `exit 0` is a lie.
 5. Never mask a failure with `|| true` / `|| info "skipped"` unless the skip condition was tested
-   *separately first*. (`fmt.sh` used to report container crashes as "no checkout yet".)
+   *separately first*.
 6. If a human is required, say so in the recipe comment **and** in §3's `H` column.
 7. Add L0 coverage to `tests/harness/` for any adjudication logic — anything that decides pass/fail.
    Then break the implementation and confirm the test fails. A test that has never failed has never

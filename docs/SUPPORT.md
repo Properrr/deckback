@@ -15,8 +15,10 @@ Deckback is controller-first (a 10-foot / "Leanback" TV layout). The default map
 | **B** | Back |
 | **X** | Play / pause |
 | **L1 / R1** | Scrub back / forward in the player (see note) |
+| **L2 / R2** | Previous / next chapter (a fixed 10 s jump on videos without chapters) |
 | **View (⧉)** | Toggle captions |
 | **Menu (☰)** | Open the **Settings** menu (see below) |
+| **Y** (or the **R4** grip) | Turn [touch gestures](#touch-gestures-opt-in) on / off, when enabled |
 
 The first time Deckback starts, it shows this controls table on screen as a one-time card. Press any
 button to dismiss it. The card is generated from your `app.json`, so if you rebind a control it will
@@ -27,10 +29,13 @@ again on the next launch.) After that, the same list lives in the **Settings** m
 ## Settings menu
 
 A small **Settings** button sits in the top-right corner (except while a video is playing). Press
-**Menu (☰)** to open the on-screen menu. It has these tabs:
+**Menu (☰)** to open the on-screen menu, during playback too. It has these tabs:
 
 - **Settings ▸ Keys** — the controller hot-keys currently in use, read live from your `app.json` (so
-  it always matches your real mapping). More settings arrive here over time.
+  it always matches your real mapping).
+- **Settings ▸ Captions** — your preferred caption languages in order, whether to prefer authored
+  or automatic captions, and whether to remember the last choice. Changes apply immediately and
+  persist across launches.
 - **Updates** — the configured update policy and its current status. In notify mode, a new release
   shows what's new and the actions to take; the screen does not claim your version is current before
   the portal has reported an update state.
@@ -42,17 +47,16 @@ back or close, and **L1 / R1** to switch tabs. When an update is available a sma
 on the Settings button; on the **Updates** tab, **A** on *Update now* installs it (it applies the
 next time you open Deckback, so *Close now* appears once it is installed) and **Y** ignores that
 version. Nothing installs on its own in the
-default `notify` mode — see [Updates](#updates).
+default `notify` mode — see [Updates](#updates). To quit Deckback, **hold Y** for 0.6 s anywhere in the
+menu (a tap still means *ignore*); it returns you to the Steam library.
 
 > **Note on seeking.** L1/R1 send the player's arrow keys, which *scrub* the progress bar — the same
 > model the console YouTube apps use. They are **not** a fixed ±10 second jump. YouTube's TV
 > interface publishes no keyboard shortcut for a fixed-interval seek, and Deckback will not guess at
-> one. (Earlier versions of this page described L1/R1 as "seek 10s". That was wrong.)
+> one. For a fixed jump, use **L2 / R2** on a video without chapters.
 
-**Y** (voice search) is deliberately unbound: voice search is not a keyboard key at all — the TV
-interface reaches it through a platform service this build does not have, so the supported path is to
-move focus onto the on-screen microphone button and press **A**. It is listed as unmapped in the
-startup log. (**Menu (☰)** opens the Settings menu; **L2 / R2** jump to the previous/next chapter.)
+**Voice search is not available.** The TV interface reaches it through a platform service this
+engine build does not have, so no button maps to it.
 
 The mapping lives in `app.json` (`keymap`) and is hot-swappable — a server-side Leanback change can
 be worked around by editing config, without reinstalling. Each button maps to a semantic action or a
@@ -170,11 +174,8 @@ detect support and simply do the right thing. Turning it on where touch is not d
 no events arrive and the panel stays inert. Multi-finger gestures (pinch) are not implemented — any
 touch with a second finger is ignored on purpose.
 
-> An earlier version tried to *lock* the panel with an exclusive `EVIOCGRAB` grab, toggled by an
-> L3+R3 chord. That approach is **dead**: on SteamOS the compositor — not the app — reads the
-> touchscreen, so the grab does nothing. That code has been removed. If your `app.json` still has
-> the old `touch_lock_*` settings they are simply ignored; `disable_touch` above is the supported
-> mechanism.
+Old `touch_lock_*` settings in an `app.json` are ignored; `disable_touch` and `touch_gestures` are
+the only touch settings.
 
 ## When it can't connect
 
@@ -226,8 +227,7 @@ Two further limitations, neither of which Deckback can fix:
 - **A USB or Bluetooth keyboard works**, but Game Mode interprets it as **QWERTY** regardless of the
   layout you configured in SteamOS.
 
-Voice search is reached by focusing the on-screen microphone button and pressing **A** — not by a
-button on the controller. See the note under [Controls](#controls).
+Voice search is not available — see the note under [Controls](#controls).
 
 ## Sign-in
 
@@ -346,9 +346,8 @@ anyway** — each watches for the app to disappear and removes its own service +
 
 - DRM'd content (rentals, some originals) is resolution-capped by design (L3 software CDM). Free
   YouTube content is unaffected.
-- **Video is hardware-decoded (VA-API, VP9)**, verified clean on the Steam Deck OLED. (Earlier builds
-  fell back to software because an older engine corrupted the hardware path; the current engine fixes
-  it. Not yet verified on the LCD — see the OLED-only note below.)
+- **Video is hardware-decoded (VA-API, VP9)**, verified clean on the Steam Deck OLED. Not yet
+  verified on the LCD — see the OLED-only note below.
 - AV1 is steered off in favour of VP9/H.264: hardware AV1 decode on the Deck is unproven.
 - The app depends on Google continuing to serve the TV interface to this client; server-side
   changes can break it until a config hotfix ships.
@@ -359,7 +358,7 @@ anyway** — each watches for the app to disappear and removes its own service +
 - L1/R1 scrub the progress bar rather than seeking a fixed number of seconds. YouTube's TV interface
   publishes no fixed-interval seek key, and Deckback does not guess at one.
 - **Steam Deck LCD is untested.** Deckback is developed and verified on a Steam Deck **OLED**. The
-  LCD model uses the same code path and should work, but nobody on the project owns one, so it has
-  never been run there. Battery figures, refresh-rate advice, and resume timing in this document were
+  LCD model uses the same code path and should work, but nobody on the project owns one, so apart
+  from one self-update check it has never been run there. Battery figures, refresh-rate advice, and resume timing in this document were
   measured on the OLED and do **not** carry over. If you run Deckback on an LCD, please open an issue
   with your results — that is currently the only way this gap gets closed.

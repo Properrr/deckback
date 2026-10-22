@@ -13,7 +13,7 @@ sources: []
 > Everything here is presumed STALE until re-verified against `cobalt_pin`.
 
 ## Metadata
-- **Chromium milestone:** (e.g. M114)
+- **Chromium milestone:** (e.g. M138)
 - **`DEPS.pin` commit:** PLACEHOLDER
 - **Pinned on:** YYYY-MM-DD
 - **Status:** bring-up | stable | superseded-by-<mNNN>

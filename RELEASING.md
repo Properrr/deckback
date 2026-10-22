@@ -33,7 +33,7 @@ the GitHub Release body verbatim).
 
 > **The release notes are a product surface — the in-app updater shows them.** In `notify` mode
 > (the default), Deckback fetches the GitHub Releases of `properrr/deckback` and displays the notes
-> for every version newer than the running one in its "Update available" card
+> for every version newer than the running one on the Settings menu's **Updates** tab
 > (`launcher/src/updateprompt.cpp`, findings `durable/self-update.md`). The contract the updater
 > relies on, all of it already produced by these scripts — keep it intact:
 >
@@ -88,9 +88,9 @@ What `scripts/publish-repo.sh` does there, and why:
 
 - **Mirrors the live repo** (head + 2 previous releases) and commits the new bundle **on top of the
   live head**. Each release's parent is the commit users actually run, so their update is the
-  from-parent **static delta**: the real 0.0.8 → 0.0.9 update measured **4.2 MB instead of 77 MB**
-  (the engine binary is bsdiffed rather than shipped whole). The previous releases stay
-  downloadable, so a client mid-update during a deploy still finds its objects.
+  from-parent **static delta** (the engine binary is bsdiffed rather than shipped whole: 0.0.8 →
+  0.0.9 measured 4.2 MB instead of 77 MB). The previous releases stay downloadable, so a client
+  mid-update during a deploy still finds its objects.
 - **Refuses a bundle that adds a sandbox permission** compared with the live head (exit 2). The
   portal would refuse that update for every installed user. `scripts/check-permissions.sh` makes the
   same check against tagged manifests at release-prep time; this one compares the commits that

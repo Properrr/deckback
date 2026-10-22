@@ -24,7 +24,7 @@ version-specific, move it into a milestone file — that's the signal the taxono
 ```yaml
 ---
 scope: durable | milestone
-milestone: m114            # milestone scope only — matches milestones/<id>.md
+milestone: m138            # milestone scope only — matches milestones/<id>.md
 cobalt_pin: <short-sha>    # milestone scope only — the DEPS.pin it was verified against
 verified: unverified | YYYY-MM-DD
 status: open | confirmed | rejected     # for spike-like claims
@@ -40,20 +40,30 @@ sources: []                # URLs / repo paths backing the finding
     README.md                 # this file
     durable/                  # survives Cobalt bumps
       architecture.md         # layer model + the CDP-driven launcher bridge
+      build-slimming.md       # which Chromium features are OFF in args/common.gn, and which must stay ON
+      dbus-reconnect.md       # session-bus reconnect for the self-updater
       decisions.md            # locked decisions (toolchains, no-LCD, AV1-off…)
-      hardware.md             # Deck APU / AV1 dispute / VA-API-decode-is-corrupt
+      feature-landscape.md    # what is worth building for the Deck, ranked from measured levers
+      hardware.md             # Deck APU / AV1 dispute / VA-API decode + the pixel gate
       harness.md              # F1–F16 automation-honesty log (checks that lied)
       input-ux.md             # controller/UX/text-entry research
+      keep-awake.md           # keeping the Deck awake during playback (host-side helper)
+      one-line-install.md     # one-line install for a new Deck (design)
       packaging-toolchain.md  # CURRENT packaging facts (25.08, device=input)
-      packaging.md            # SUPERSEDED by packaging-toolchain.md (architecture only)
+      packaging.md            # packaging architecture (toolchain: packaging-toolchain.md)
+      page-scripts.md         # the registry of scripts the launcher injects into youtube.com/tv
       pip.md                  # picture-in-picture dead-end
       platform.md             # SteamOS/gamescope levers (EPP, QAM, zram)
+      preflight-parity.md     # local pre-push and CI run the same gate
       preview.md              # focus/hover preview + probe
+      self-update.md          # self-update via the Flatpak portal
       strategy.md             # risk posture
-      touch-lock.md           # the EVIOCGRAB lock is DEAD; disable_touch resolves it
+      test-sim.md             # containerized SteamOS/gamescope test sim
+      touch-gestures.md       # opt-in touch gestures (touch_gestures)
+      touch-lock.md           # why an EVIOCGRAB lock cannot work; disable_touch makes touch inert
     milestones/
       TEMPLATE.md             # copy to <mNNN>.md on each bump
-      m114.md                 # active pin — Phase 0 spike answers live here
+      m138.md                 # active pin (cobalt-27)
   MIGRATION.md                # the yearly-bump playbook
   TEST-PLAN.md                # test tiers + the honest tested/untested matrix
 ```

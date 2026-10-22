@@ -40,8 +40,9 @@ fails if the metainfo advertises a screenshot whose file is missing.
 
 ## Cutting a release
 
-1. Add a `<release>` entry (version + date + notes) to the top of the `<releases>` list in the
-   metainfo. Keep it in sync with the tag `just release <tag>` will create.
+1. `just release-prep <X.Y.Z>` adds the `<release>` entry (version, date, changelog link) to the top
+   of the metainfo's `<releases>` list, matching the tag `just release <tag>` builds (see
+   [`RELEASING.md`](../../RELEASING.md)).
 2. If the icon or any `branding/*.svg` changed, rerun `render-assets.sh` and commit the updated PNGs.
 3. Run `just flatpak-lint` — it validates the metainfo (`appstreamcli`), the desktop file, the
    sandbox arguments, and that every advertised screenshot exists. No engine needed.

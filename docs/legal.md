@@ -29,17 +29,17 @@ Working notes, not legal advice. Review before Flathub submission (doc §12, ris
   CDM. It never auto-downloads. A user may opt in by setting `cdm_url` (a source they trust) +
   `cdm_sha256` in `app.json`; the launcher then downloads it, **verifies the SHA-256**, and installs it
   into the user's profile dir. This is deliberately more conservative than auto-fetching.
-- **For Flathub** (Phase 8/10): wire the standard Chromium **extra-data** pattern (Flathub fetches the
-  component at install/first-run from Google's endpoint, hash-pinned in the manifest) rather than
-  shipping a URL in config. Decided in Phase 8.
+- **For Flathub** (open, Phase 8/10): wire the standard Chromium **extra-data** pattern (Flathub
+  fetches the component at install/first-run from Google's endpoint, hash-pinned in the manifest)
+  rather than shipping a URL in config.
 - L3 software CDM → DRM'd content plays but is resolution-capped by YouTube policy. Documented as
   best-effort; free YouTube is the product.
 
 ## Codecs
 
 - `proprietary_codecs=true` / `ffmpeg_branding="Chrome"` ship H.264/AAC/HEVC — fine for GitHub
-  releases. For Flathub, align with how Flathub's own Chromium handles codecs (runtime
-  ffmpeg-full / openh264 extension) — decided in Phase 8.
+  releases. For Flathub (open, Phase 8): align with how Flathub's own Chromium handles codecs
+  (runtime ffmpeg-full / openh264 extension).
 
 ## Conformance tests ≠ certification
 

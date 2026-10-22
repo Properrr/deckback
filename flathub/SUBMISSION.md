@@ -1,7 +1,7 @@
 # Submitting Deckback to Flathub
 
 This directory holds everything needed to **attempt** a Flathub submission, plus an honest account of
-the one thing that makes it hard. Read the "Reality check" first — it changes the plan.
+the one thing that makes it hard. Read the reality check first.
 
 ## ⚠️ Reality check — the prebuilt-engine problem
 
@@ -18,11 +18,10 @@ CI. So the standard "build from source" route is not open to us. There are three
 |---|---|---|
 | **A · Build engine from source on Flathub** | Compile Cobalt in Flathub CI | ❌ Infeasible (resource/time limits) |
 | **B · `extra-data` engine** | Flathub builds only the launcher/zypak from source; the engine is downloaded **at install time** from a Deckback GitHub release, pinned by `sha256`. `flathub/io.github.properrr.deckback.yaml` is written this way. | ⚠️ Possible, but reviewers may reject a self-built FOSS engine delivered as `extra-data` (that mechanism is meant for *non-redistributable* blobs). Needs a maintainer conversation up front. |
-| **C · Self-hosted Flatpak repo** | Publish the ostree repo `just flatpak` already produces, plus a `.flatpakref`. Users add the remote once and then get **automatic background updates** — no Flathub review, no source-build rule. | ✅ Works today. **Recommended** near-term. |
+| **C · Self-hosted Flatpak repo** | The self-hosted ostree repo on GitHub Pages, plus a `.flatpakrepo`/`.flatpakref` ([`RELEASING.md`](../RELEASING.md)). Users add the remote once and then get updates in-app or via `flatpak update` — no Flathub review, no source-build rule. | ✅ What ships today. |
 
-**Recommendation:** ship via **Path C** now (it answers "how do users get updates?" immediately), and
-open a Path B conversation with Flathub in parallel. Do not open a Flathub PR expecting a clean pass —
-raise the `extra-data` engine question in a
+**Plan:** Deckback ships via **Path C**; Path B is the Flathub route. Do not open a Flathub PR
+expecting a clean pass — raise the `extra-data` engine question in a
 [Matrix/Discourse](https://discourse.flathub.org/) thread first.
 
 ## What's in this directory
@@ -38,9 +37,10 @@ raise the `extra-data` engine question in a
 1. **Tag a release** so the engine tarball and the source commit are immutable URLs:
    ```sh
    just release v0.0.1        # builds out/release, the .flatpak bundle, AND a
-                              #   cobalt-prebuilt-<pin>.tar.zst engine tarball (see scripts/release.sh)
+                              #   cobalt-prebuilt-<pin>.tar.gz engine tarball (see scripts/release.sh)
    ```
-   Upload `cobalt-prebuilt-<pin>.tar.zst` as a GitHub **release asset**.
+   `just release` attaches `cobalt-prebuilt-<pin>.tar.gz` to the draft GitHub Release; publish it so
+   the asset URL is live.
 2. **Fill the manifest** with the real checksums + commit:
    ```sh
    just flathub-prep v0.0.1   # computes sha256 + size of the engine tarball, pins the source commit,
@@ -69,8 +69,7 @@ Flathub's [submission guide](https://docs.flathub.org/docs/for-app-authors/submi
 
 `io.github.properrr.deckback` is under the `io.github.*` namespace, so ownership is proven by the
 existence of <https://github.com/properrr/deckback>. If asked to verify, place the token at
-`https://properrr.github.io/deckback/.well-known/org.flathub.VerifiedApps.txt` (needs GitHub Pages on
-the repo).
+`https://properrr.github.io/deckback/.well-known/org.flathub.VerifiedApps.txt`.
 
 ## Pre-submission checklist
 

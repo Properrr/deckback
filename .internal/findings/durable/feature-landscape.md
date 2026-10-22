@@ -1,27 +1,19 @@
 ---
 scope: durable
 title: Feature landscape — what is worth adding for the Steam Deck, and what it would cost
-created: 2026-07-28
-updated: 2026-10-20 — §9 adds a desk-research delta (no device): new candidates P12.15–P12.22,
-         new evidence for planned items, and two places where §2/§8 are contradicted.
-         2026-07-31 — P12.0b and P12.0c RUN on hardware (OLED); see §8. P12.0a still unrun.
-status: research, partly measured — §8 records what the Deck actually answered; everything else is
-        still a named probe, not a result
-method: read the plan, TASKS.md, the registered findings, and the launcher/config surface at ea08f9a;
-        §8 is `just feature-probe {player,dock}` against a docked OLED unit, 2026-07-31
+status: research, partly measured — §8 records what the Deck answered (OLED, `just feature-probe`);
+        everything else is a named probe, not a result
 sources:
   - .internal/steamdeck-cobalt-youtube-plan.md (§6 phases, §10 stretch backlog, §8 risk register)
-  - .internal/findings/durable/{pip,preview,input-ux,platform,keep-awake,page-scripts,touch-lock,self-update}.md
+  - .internal/findings/durable/{pip,preview,input-ux,platform,keep-awake,page-scripts,touch-lock,touch-gestures,self-update}.md
   - launcher/src/{touchmode,config,haptic}.cpp, config/app.json, config/scripts/, flatpak/io.github.properrr.deckback.yml
 ---
 
 # Feature landscape
 
-A ranked survey of features Deckback could add, written from the mechanisms this project has already
-proven rather than from a wish list. **Written before any of it was run on a Deck; §8 records what
-the hardware later said, and it contradicts parts of what follows — §8 wins.** Every item states the lever it
-would use, what is genuinely unknown, and the probe that decides it — so no item can be started on a
-guess (the no-guessing policy that killed `c`-for-captions and chapter-via-`/player`).
+A ranked survey of features Deckback could add, built from mechanisms this project has already
+proven. Every item states the lever it would use, what is genuinely unknown, and the probe that
+decides it — no item is started on a guess. Tasks: TASKS P12.
 
 Read `durable/pip.md` first if the idea sounds like "a second video". Read `input-ux.md` §8 first if
 it sounds like "bind a key".
@@ -31,12 +23,13 @@ it sounds like "bind a key".
 | Lever | Proven by | Cost to reuse |
 |---|---|---|
 | CDP page scripts through `ScriptLibrary` (`config/scripts/*.js`) | AV1 steering, skip, chapter seek, captions, toast, OSD | ~free, hot-swappable, no rebuild (`page-scripts.md`) |
-| The TVHTML5 player object on **`.html5-video-player`** | `seekTo`/`seekBy`/`getCurrentTime`/`getPlayerState`, caption `getOption`/`setOption` (input-ux §18) | free — but each *new* method needs a method probe before it is bound |
-| InnerTube `/youtubei/v1/next` with the page's own TVHTML5 context | chapters via `macroMarkersListEntity`, on-Deck 2026-07-13 | free; R1-fragile, mitigated by script hot-swap |
+| The TVHTML5 player object on **`.html5-video-player`** | `seekTo`/`seekBy`/`getCurrentTime`/`getPlayerState`, caption `getOption`/`setOption` (input-ux §18), rate + quality API (§8.1) | free — but each *new* method needs a method probe before it is bound |
+| InnerTube `/youtubei/v1/next` with the page's own TVHTML5 context | chapters via `macroMarkersListEntity` | free; R1-fragile, mitigated by script hot-swap |
 | evdev read in the launcher → keys/actions/layers | gamepad, analog triggers, right-stick ramp | small C++, all pure logic is L0-testable |
-| **X-atom writes to gamescope** | `touchmode.cpp` holds `STEAM_TOUCH_CLICK_MODE` at hover while focused | small C++, probe-gated per atom |
+| Page-layer touch router at gamescope touch mode 4 | touch gestures (`touch-gestures.md`) | a capture-phase script + launcher poll → trusted keys |
+| **X-atom writes to gamescope** | `touchmode.cpp` holds `STEAM_TOUCH_CLICK_MODE` while focused | small C++, probe-gated per atom |
 | Host-side helper service *outside* the sandbox | `idle-nudge`, `audio-repair` | medium: installer + self-uninstall surface |
-| The OSD menu shell (checkbox/combobox widgets built, unused) | `osdmenu.cpp` + `config/scripts/osd.js` | a new tab ≈ a model builder + its L0 test |
+| The OSD menu shell | `osdmenu.cpp` + `config/scripts/osd.js` | a new tab ≈ a model builder + its L0 test |
 
 ### 1.1 The cross-cutting cost nobody guesses: new Flatpak permissions
 
@@ -44,154 +37,140 @@ it sounds like "bind a key".
 build lacks, so adding one line to `finish-args` strands every existing user on their current version
 until they reinstall by hand (`self-update.md` §"permission adds break self-update";
 `scripts/check-permissions.sh` gates it in `just preflight`). A feature needing a new `--own-name` or
-`--talk-name` therefore costs a migration, not a line of YAML. Price that in **before** designing.
+`--talk-name` costs a migration, not a line of YAML. Price that in **before** designing.
 
 ## 2. Tier 1 — genuinely Deck-shaped, highest value
 
-### 2.1 Audio-only / screen-off listening
+### 2.1 Audio-only / screen-off listening (P12.1)
 
-The biggest handheld-specific win and the one nothing in the repo covers. Every part already exists,
-used in reverse: stop the host-side idle nudge so the panel blanks, hold the logind **sleep**-block
-inhibitor so Steam does not auto-suspend, and (if the player exposes it) drop to the lowest video
-quality so decode work collapses.
+The biggest handheld-specific win. Every part exists, used in reverse: stop the host-side idle nudge
+so the panel blanks, hold the logind **sleep**-block inhibitor so Steam does not auto-suspend, and
+drop to the lowest video quality so decode work collapses (the player exposes a quality API, §8.1).
 
-- **Known:** the nudge is what keeps the screen alive, and it is gated on our own play-state
-  inhibitor (`keep-awake.md`); the sleep-block inhibitor demonstrably stops auto-suspend.
-- **Known trade-off:** that same sleep-block also blocks a *deliberate* power-button sleep — the
-  reason it was shipped and retired in one session on 2026-07-11. Scoping it to the mode and
-  releasing on exit is the design question, not an afterthought.
+- **Known:** the nudge is what keeps the screen alive, gated on our play-state inhibitor
+  (`keep-awake.md`); the sleep-block inhibitor stops auto-suspend.
+- **Known trade-off:** the sleep-block also blocks a *deliberate* power-button sleep. Scope it to the
+  mode and release on exit.
+- **Policy:** a native audio-only player flag exists, but using it rewrites the player response — an
+  owner decision under A3, not an engineering gap.
 - **Unknown (probe):** does Chromium keep decoding and feeding audio with the panel blanked under
-  gamescope? Play, blank, then assert `currentTime` still advances (the `deckctl.py` advance check
-  already exists) and audio is audible.
-- **Unknown (measure):** the actual watt delta. `just power` is closed-loop now, so this is a real
-  number, not a hope.
+  gamescope? Play, blank, assert `currentTime` advances (`deckctl.py`) and audio is audible.
+- **Unknown (measure):** the watt delta, with the closed-loop `just power`.
 
-### 2.2 Docked = a real TV box
+### 2.2 Docked = a real TV box (P12.2 — not an app-side item)
 
-We built a *TV interface* for the one handheld that docks to TVs, and docked is currently
-"smoke only, must not crash" (plan §6 P9) with 4K docked a stretch goal (§10.2). Today the surface is
-pinned `1280x800` by `--content-shell-host-window-size` in `cobalt_flags`, so a docked 1080p/4K TV
-gets a gamescope upscale of an 800p buffer.
+Docked, the external mode never reaches the app (§8.2): gamescope's screen stays 1280×800 and the TV
+shows the app mirrored and upscaled. There is nothing to resize into at runtime and a relaunch finds
+the same screen, so this is a session/compositor question (how gamescope is started, how SteamOS
+switches outputs) — the same wall as `platform.md`'s QAM finding. Docked output is not broken; it is
+800p on a larger panel.
 
-- **Unknown (probe):** what gamescope actually does to our surface when an external display is
-  attached — mode, scaling, whether we are still direct-scanned-out.
-- **Unknown (probe):** can the shell be resized at runtime (`Browser.setWindowBounds` may not be
-  implemented in content_shell), or does this mean a watchdog-driven relaunch at the new mode? The
-  restart machinery exists either way.
-- Highest "this is why I would install it" value per engineering day, and it is the only idea here
-  that changes what the product *is* rather than how it behaves.
+- **Next probe:** do Game Mode's own display settings change gamescope's screen size at all? If not,
+  register it as upstream.
+- SteamOS 3.8 claims "better scaling on TVs" [V secondary]: re-probe §8.2 on 3.8.x and record the
+  SteamOS build next to the reading; do not reopen P12.2 on that alone.
 
-### 2.3 Phone as remote and keyboard — probably zero code
+### 2.3 Phone as remote and keyboard — probably zero code (P12.3)
 
-Text entry is the worst structural hole in the product: no auto-OSK under Xwayland, `STEAM+X` can
-soft-lock the session, BT keyboards are forced to QWERTY scancodes (input-ux §8.3, risk R9).
-YouTube's own TV app ships a manual **"Link with TV code"** pairing that runs over its lounge
-service — cloud-side, needing no LAN/DIAL server from us.
+Text entry is the worst structural hole: no auto-OSK under Xwayland, `STEAM+X` can soft-lock the
+session, BT keyboards are forced to QWERTY scancodes (input-ux §8.3, risk R9). YouTube's TV app ships
+a manual **"Link with TV code"** pairing over its lounge service — cloud-side, no LAN/DIAL server
+from us.
 
-- **Unknown (probe, decisive):** is that pairing screen reachable in Leanback's settings **under our
-  Cobalt UA**? If yes, search, sign-in and queueing all move to the phone and the deliverable is a
-  `docs/SUPPORT.md` section, not code.
-- Same probe shape as `preview.md` §1: our own UA is the most likely thing suppressing a feature that
-  would otherwise work (the voice-search lesson, input-ux §13.2).
-- If it is *not* reachable, register it as a page-layer dead end and stop — do not build a remote.
+- **Unknown (probe, decisive — P12.0a, deferred):** is that pairing screen reachable in Leanback's
+  settings **under our Cobalt UA**? The probe is built (`just feature-probe pairing`, rules in §8.3);
+  it needs a human to put Leanback on its Settings screen. No answer yet — do not cite its absence as
+  evidence either way.
+- If yes, search, sign-in and queueing move to the phone and the deliverable is a
+  `docs/SUPPORT.md` section. If no, register a page-layer dead end and stop — do not build a remote.
+- Same probe shape as `preview.md` §1: our own UA is the most likely thing suppressing a feature
+  (input-ux §13.2). `IS_MDX_INITIALIZED` is present in the TV app's config under our UA — suggestive
+  (MDX is the lounge subsystem pairing rides on), decides nothing.
 
-### 2.4 Touch gesture layer — ✅ BUILT AND SHIPPED (2026-07-31)
+### 2.4 Touch gesture layer — ✅ shipped, default off (P12.4)
 
-> **Done. See `durable/touch-gestures.md`.** Mode 4 delivers real `wl_touch` to Blink, so the router
-> is a page-layer capture listener needing no privileges — `input-ux §11`'s exclusive-grab price
-> never applied. Swipe / tap / double-tap-to-seek (accumulating) / hold-for-slow-or-fast /
-> left-edge-swipe Back, with an on-screen indicator and a Y-or-R4 toggle. Ships **off** by default:
-> one OLED unit, and `navigator.maxTouchPoints` reads 0 even where touch works, so nothing can
-> feature-detect it. **Multitouch is delivered too** (§8.4), which unblocks pinch once a probe says
-> how many points arrive.
-
-The original entry, kept because its reasoning is why the work was attempted: flick → arrow bursts,
-left-edge swipe → Escape, double-tap → seek. Beats the Switch YouTube app's most-criticised gap (no
-touch scrolling at all) and closes input-ux §3/§7. The price dropped since input-ux §11 was written —
-that section's "gestures force a permanent exclusive grab" argument rested on `EVIOCGRAB` working,
-and `touch-lock.md` proved on hardware that it does not even apply.
+See `durable/touch-gestures.md`. At gamescope touch mode 4, real `wl_touch` reaches Blink, so the
+router is a page-layer capture listener needing no privileges. Swipe / tap / accumulating
+double-tap seek / hold-for-0.5×-or-2× / left-edge-swipe Back, an on-screen indicator, and a Y (= R4
+grip) toggle. Ships **off**: one OLED unit, and `navigator.maxTouchPoints` reads 0 even where touch
+works (§8.4). Multitouch is delivered; pinch (P12.4b) waits on a probe of how many points arrive.
 
 ## 3. Tier 2 — cheap, entirely on proven mechanisms
 
-- **Playback speed.** `<video>.playbackRate` is certain; whether the TVHTML5 player exposes a rate
-  API (and whether it overrides ours on each video) needs the same method dump that found `seekBy`.
-  Bind to a freed rear grip or an LT layer; mobile's hold-for-2× is the reference model.
-- **Sleep timer / "stop after this video."** An OSD tab, a player pause, an inhibitor release, and
-  optionally `login1.Suspend`. Falling asleep watching in bed is a handheld-only failure mode, and
-  every part of it is already wired.
-- **Free the rear grips.** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face buttons, so four
-  physical controls are invisible to `input.cpp` by construction (they are not on the virtual pad —
-  input-ux §1). Repointing two of them to distinct xinput buttons is a `.vdf` + keymap edit and
-  unblocks speed / audio-only / captions bindings.
-- **Trackpad → arrow bursts.** Same router as the gesture layer: Leanback has no pointer scroll, so
-  relative motion must become arrow keys. No other YouTube client has trackpads to spend.
-- **Battery-aware quality cap.** `quality.max_height` and `render.*` are currently in `config.cpp`'s
-  `kIgnoredPrefixes` — declared in `app.json`, consumed by nothing. Wiring a real cap (and lowering
-  it under a battery threshold) makes the config honest and adds a Deck-specific behaviour. Confirm
-  first that `/sys/class/power_supply` is readable from inside the sandbox.
-- **Panel refresh matching (OLED).** `platform.md` records that the QAM perf knobs are user-facing
-  settings, not gamescope flags we can pass — but `touchmode.cpp` proves we can *write gamescope
-  atoms*. Whether a refresh/FPS-cap atom exists and honours a non-Steam client is a probe, not a
-  known no. 90 → 60 Hz during 60 fps content is free watts if it lands.
-- **Stats tab in the OSD.** Decoder name + `kIsPlatformVideoDecoder`, resolution, dropped frames,
-  watts. The Media-domain accumulator already collects it (`scripts/cdp.py:MediaState`), and on a
-  battery device "am I actually on hardware decode" is a *user* question — the exact question whose
-  silent false-pass shipped green-band corruption on m114.
-- **Haptics on seek/chapter confirm.** `haptic.cpp` exists, the Deck's rumble is good, the plan
-  already sanctions it (§P3, off by default).
+- **Playback speed (P12.5).** Two independent levers exist (§8.1): `<video>.playbackRate` held at
+  1.25 through real playback, and the player's rate API advertises `[0.25 … 2]`. The touch hold
+  gesture already uses rates; a controller binding (freed rear grip or an LT layer) is still open.
+- **Sleep timer / "stop after this video" (P12.6).** An OSD tab, a player pause, an inhibitor
+  release, optionally `login1.Suspend`. Every part is already wired.
+- **Free the rear grips (P12.7).** `config/steam_input.vdf` duplicates L4/L5/R4/R5 onto face buttons
+  (R4 → Y), so the launcher cannot tell a grip from its face button (input-ux §1). Repointing them to
+  distinct xinput buttons is a `.vdf` + keymap edit and unblocks speed / audio-only / captions
+  bindings.
+- **Trackpad → arrow bursts (P12.8).** Same model as the gesture router: Leanback has no pointer
+  scroll, so relative motion must become arrow keys.
+- **Battery-aware quality cap (P12.9).** `quality.max_height` and `render.*` sit in `config.cpp`'s
+  `kIgnoredPrefixes` — declared in `app.json`, consumed by nothing. The page-side ladder exists
+  (§8.1). Confirm first that `/sys/class/power_supply` is readable from inside the sandbox.
+- **Panel refresh matching, OLED (P12.10).** The QAM perf knobs are user-facing settings
+  (`platform.md`), but `touchmode.cpp` proves we can *write gamescope atoms*. Whether a refresh/FPS
+  atom exists and honours a non-Steam client is a probe. 90 → 60 Hz during 60 fps content is free
+  watts if it lands.
+- **Stats tab in the OSD (P12.11).** Decoder name + `kIsPlatformVideoDecoder`, resolution, dropped
+  frames, watts. The Media-domain accumulator already collects it (`scripts/cdp.py:MediaState`).
+  "Am I on hardware decode" is a *user* question on a battery device — and decoder name alone is not
+  the answer (`hardware.md`).
+- **Haptics on seek/chapter confirm (P12.12).** `haptic.cpp` exists; plan §P3 sanctions it, off by
+  default.
 
 ## 4. Tier 3 — plausible, value uncertain
 
-- **MPRIS** (plan §10.4). Costs a new `--own-name` (see §1.1), and Game Mode has no media widget: the
-  only real consumer is BT headset transport buttons via `mpris-proxy`, which is not running by
-  default on SteamOS. **Probe for a consumer before building the producer.**
-- **Loudness compression for the Deck's quiet speakers** via a Web Audio graph on the media element.
-  Attractive for late-night handheld viewing; real risk of perturbing the MSE/VA-API path. If tried,
-  re-assert decoder identity afterwards — a feature that silently drops us to software decode is a
-  regression wearing a feature's clothes.
+- **MPRIS (P12.13, plan §10.4).** Costs a new `--own-name` (§1.1), and Game Mode has no media widget.
+  Consumers: BT headset transport buttons via `mpris-proxy` (not running by default on SteamOS), and
+  two Decky plugins (MusicControl ~76k, Music Control ~38k downloads, store API 2026-10-20) [V].
+  Probe for a consumer before building the producer.
+- **Loudness compression (P12.14)** for the Deck's quiet speakers via a Web Audio graph on the media
+  element. Real risk of perturbing the MSE/VA-API path; if tried, re-assert decoder identity
+  afterwards.
 
 ## 5. Policy-blocked, not tech-blocked
 
-**SponsorBlock / DeArrow.** Technically now small: hot-swappable scripts, a verified `seekTo`, and an
+**SponsorBlock / DeArrow.** Technically small: hot-swappable scripts, a verified `seekTo`, and an
 InnerTube fetch precedent. It stays out because of locked decision **A3** (Flathub acceptance and
-takedown risk), not because it is hard. Making it opt-in and default-off barely changes that
-calculus. If it is ever revisited, it is a *risk* decision to re-take deliberately (plan §10.6), and
-this finding is not an argument for taking it.
+takedown risk). Opt-in/default-off barely changes that. Revisiting it is a *risk* decision to re-take
+deliberately (plan §10.6); this finding is not an argument for it.
 
 ## 6. Do not re-propose — registered dead ends
 
 | Idea | Why it is dead | Where |
 |---|---|---|
 | Picture-in-Picture | shell returns `kNotSupported`, no `VideoOverlayWindow` in the shell, gamescope hosts no second top-level, Leanback yields no second stream | `pip.md` |
-| Voice search as a keypress | Cobalt routes voice through a Starboard service this Chromium build does not have | input-ux §8.2, TASKS P5 |
+| Voice search as a keypress | Cobalt routes voice through a Starboard service this Chromium build does not have | input-ux §8.2 |
 | Touchscreen `EVIOCGRAB` lock | the seat user cannot open the panel node; the grab does not starve gamescope | `touch-lock.md` |
 | Chapters from `/player` or a spoofed WEB context | TVHTML5 `/player` carries no overlays; a WEB context returns UNPLAYABLE for every id | input-ux §18 |
 | Any in-sandbox idle inhibitor | logind/ScreenSaver/portal/libei all ignored by gamescope's idle timer | `keep-awake.md` |
+| App-side docked resolution | the external mode never reaches the nested Xwayland | §8.2 |
 
 A feature request that matches a row here gets the row, not a re-investigation.
 
-## 7. Cheapest next step — three probes, one Deck session, no code
+## 7. Probes (`just feature-probe <player|pairing|dock>`)
 
-1. **TV-code pairing** reachable under our UA? → decides §2.3 outright.
-2. **`.html5-video-player` method dump** for rate/quality APIs → decides playback speed and the
-   audio-only quality drop, using the one-liner shape that already found `seekBy`.
-3. **Dock a Deck** and read back what gamescope does to our surface → decides §2.2's shape.
+| Probe | Decides | Status |
+|---|---|---|
+| P12.0a TV-code pairing reachable under our UA | §2.3 | **not run** (deferred) |
+| P12.0b `.html5-video-player` method dump | playback speed, the audio-only quality drop, P12.9's page side | run — §8.1 |
+| P12.0c dock a Deck, read gamescope's surface | §2.2 | run — §8.2 |
 
-Each is a `Runtime.evaluate` or an observation, none needs a build, and all three are the same
-probe-first discipline as the touch-lock grab test and the P11 preview spike: *classify the mechanism
-before writing any code that assumes one.*
+Each is a `Runtime.evaluate` or an observation; none needs a build. A negative answer exits 0 (it is
+a finding); only "could not observe" is an error (3). *Classify the mechanism before writing code
+that assumes one.*
 
-## 8. What the Deck actually answered (2026-07-31, OLED, `just feature-probe`)
-
-Two of §7's three probes were run on hardware. **P12.0a was not** — every attempt captured the player
-or the browse feed, and the probe refuses to answer from either (see §8.3).
+## 8. What the Deck answered (2026-07-31, OLED, `just feature-probe`)
 
 ### 8.1 P12.0b — the player exposes BOTH rate and quality  ✅ decisive
 
-Measured during real playback (`#/watch`, 1280x720 decoded, `duration` 4649s). The same dump taken on
-the browse screen is worthless and looks identical to a negative — every quality getter answers `[]`
-or `"unknown"` because nothing is loaded — so the probe now refuses to conclude unless media is
-loaded (`video_is_loaded()`, pinned by an L0 test).
+Measured during real playback (`#/watch`, 1280x720 decoded). On the browse screen every quality
+getter answers `[]` or `"unknown"` — indistinguishable from "no API" — so the probe refuses to
+conclude unless media is loaded (`video_is_loaded()`, L0-tested).
 
 | Call | Answer |
 |---|---|
@@ -205,16 +184,13 @@ loaded (`video_is_loaded()`, pinned by an L0 test).
 | `setPlaybackQuality`, `setPlaybackQualityRange` | exist (throw with no args) |
 | `<video>.playbackRate = 1.25` | **HELD** through 3 s of real playback |
 
-**Unblocks P12.5** (two independent levers: the element alone, or the player API), **the quality-drop
-half of P12.1**, and **the page-side half of P12.9** — the ladder to walk down is real and tops out
-at `hd720`, which matches our 1280x800 surface.
+Unblocks P12.5, the quality-drop half of P12.1, and the page-side half of P12.9. The `set*` methods
+are proven only to **exist** — call them with real arguments before designing on them. The `hd720`
+top is not proof that a cap can only lower quality: see §9.3.
 
-Not established: that the `set*` methods actually *work*. They were only proven to **exist** (a
-no-arg call throws, which is the signal). Call them with real arguments before designing on them.
+### 8.2 P12.0c — the external mode never reaches us  ✅ decisive
 
-### 8.2 P12.0c — the external mode never reaches us  ✅ decisive, and it kills the assumed design
-
-Docked over USB-C to a 1920x1200 panel, with the app in the foreground:
+Docked over USB-C to a 1920x1200 panel, app in the foreground:
 
 ```
 DP-1                connected, enabled, advertises 1920x1200
@@ -224,57 +200,38 @@ our page            1279x799  ->  1279x799     (unchanged)
 TV physically shows the app, mirrored and upscaled  (confirmed by eye)
 ```
 
-**Both options §2.2 proposed are dead.** There is no runtime resize (`Browser.setWindowBounds` has
-nothing larger to resize into) and no relaunch-at-the-new-mode (a restart finds the same 1280x800
-screen). The external mode never reaches the nested Xwayland at all, so **P12.2 is a session /
-compositor question — how gamescope is started and how SteamOS switches outputs when docked — and not
-an app-side change.** That is the same wall as `platform.md`'s QAM finding: those are user-facing
-settings, not flags we can pass.
+No runtime resize (`Browser.setWindowBounds` has nothing larger to resize into) and no
+relaunch-at-the-new-mode (a restart finds the same screen). P12.2 is a session/compositor question,
+not an app-side change (§2.2).
 
-Docked output is therefore **not broken today** — the TV shows the app — it is merely 800p upscaled
-to a 1200p panel. Re-rank P12.2 accordingly: the "highest value per engineering day" claim in §2.2
-rested on us being able to change the output size, and we cannot.
+### 8.3 How the pairing probe decides
 
-### 8.3 What three failed attempts at P12.0a taught the harness
+"No text" and "no pairing" are the same zero, and screen length is not a test (aria-labels inflate a
+player screen; the browse feed is long but is not settings). So a **negative requires ≥2
+settings-screen markers** (`Linked devices`, `Restricted Mode`, `Privacy`, `Sign out`, …) on the
+captured screen; the positive is never gated, because seeing the phrase is seeing it. Real captures
+of the watch screen, the watch screen with aria-labels, and the browse feed are L0 fixtures in
+`tests/harness/test_feature_probe.py`.
 
-The pairing probe printed a confident **"NO PAIRING ENTRY — register a page-layer dead end"** twice
-against screens that could never have shown one, and each fix exposed the next:
-
-1. the **watch screen** (28 chars of innerText) — "no text" and "no pairing" are the same zero;
-2. the same screen once **aria-labels** were collected, whose 32 icon labels pushed it past any
-   length threshold — so *length* is not the test;
-3. the **browse feed** (1513 chars at `#/`) — substantive, not the player, and still not where a
-   pairing row lives.
-
-A negative now requires ≥2 settings-screen markers (`Linked devices`, `Restricted Mode`, `Privacy`,
-`Sign out`, …) on the captured screen; the positive is never gated, because seeing the phrase is
-seeing it. All three real captures are L0 fixtures in `tests/harness/test_feature_probe.py`.
-
-One real signal, not a verdict: `IS_MDX_INITIALIZED` and `client-screen-nonce-store` are present in
-the TV app's config under our Cobalt UA. MDX is the lounge subsystem TV-code pairing rides on, so the
-build knows about pairing — which says nothing about whether a *user* can reach the screen.
-
-### 8.4 P12.4 — RESOLVED the same day: touch works, and the capability query lies
+### 8.4 P12.4 — touch works, and the capability query lies
 
 `navigator.maxTouchPoints == 0`, `'ontouchstart' in window == false`, `(pointer: coarse) == false` —
-Chromium found no Direct-mode XI2 touch device. **And touch is delivered anyway.** At mode 4, 9 taps
-produced 9 `touchstart` + 9 `touchend` with per-finger ids and page-space coordinates, and the
-gesture layer built on that has been driven by a finger through every gesture
-(`durable/touch-gestures.md`). Multitouch too: 5 multi-finger sequences in 48.
+Chromium finds no Direct-mode XI2 touch device. **Touch is delivered anyway.** At mode 4, 9 taps
+produced 9 `touchstart` + 9 `touchend` with per-finger ids and page-space coordinates; every gesture
+has been driven by a finger (`durable/touch-gestures.md`). Multitouch too: 5 multi-finger sequences
+in 48.
 
-**The lesson generalises past touch.** Every natural feature-detection here — `maxTouchPoints`,
-`'ontouchstart' in window`, `pointer: coarse` — returns the wrong answer on a device where the
-feature works. Anything gated on them would disable itself exactly where it should run, which is why
-the gesture layer is config-gated rather than detected.
+**This generalises past touch:** every natural feature-detection here returns the wrong answer on a
+device where the feature works. Anything gated on them would disable itself exactly where it should
+run, which is why the gesture layer is config-gated rather than detected.
 
-## 9. Research delta 2026-10-20 (desk research, no device)
+## 9. Desk research (no device)
 
 Sources: a sibling Leanback client's source and all 279 of its issues
 (github.com/shy1132/VacuumTube, "VT#n" below), the SmartTube and DeckTube READMEs, the Decky store
-API, SteamOS 3.8 coverage, and the fork research preserved on branch `backup/jul08-refactor`. Tags:
-**[V]** checked in a primary source; **[I]** inference; **[U]** unverified. Engine-source facts were
-checked in the local checkout at the **m114** pin `a9181df`, not M138: re-verify after a sync.
-Tasks: TASKS P12.15–P12.22.
+API, SteamOS 3.8 coverage, and the fork research on branch `backup/jul08-refactor`. Tags: **[V]**
+checked in a primary source; **[I]** inference; **[U]** unverified. Engine-source facts were checked
+at the **m114** pin `a9181df`, not M138: re-verify after a sync. Tasks: TASKS P12.15–P12.22.
 
 ### 9.1 New candidates (not shipped, planned, or rejected before)
 
@@ -289,49 +246,40 @@ Tasks: TASKS P12.15–P12.22.
 | P12.21 | Channel/playlist Steam tiles | VT#80, VT#112 | deep-link grammar / route drift |
 | P12.22 | Remaining time / "ends at" | VT#254 (merged) | page script / `idomkey` drift |
 
-Unranked: dock state via gamescope's read-only `GAMESCOPE_DISPLAY_IS_EXTERNAL` atom. After §8.2 it
-is only useful as a *trigger* (dock/AC drives P12.9; turning touch off when docked). Value low.
+Unranked: dock state via gamescope's read-only `GAMESCOPE_DISPLAY_IS_EXTERNAL` atom — useful only as a
+*trigger* (dock/AC drives P12.9; turning touch off when docked). Value low.
 
 ### 9.2 Facts worth keeping
 
 - **Leanback maps console gamepad codes itself** [V VT `controller-support.js`, untrusted DOM
   events]. The codes are `0x8000 + button` (Starboard `kSbKeyGamepad*`), plus `MediaPlayPause`
   `0xB3` and `Subtitle` `0x1CC`; all three exist in `starboard/key.h` [V m114 tree]. Whether a CDP
-  `windowsVirtualKeyCode` of 32768+ surfaces as `event.keyCode` is [U]. If it does, the pending
-  bindings for seek, captions and play/pause can send native codes instead of hand-built behaviour
-  (input-ux §8.1).
+  `windowsVirtualKeyCode` of 32768+ surfaces as `event.keyCode` is [U]. If it does, pending bindings
+  can send native codes instead of hand-built behaviour (input-ux §8.1).
 - **Chrobalt's `h5vcc` has no `dial` module** [V m114 tree], and our build exposes no `h5vcc` at all
   (`preview.md`).
 - **A UA override without `userAgentMetadata` turns off the Sec-CH-UA client hints** [V m114 tree,
-  `client_hints.cc`]. So our requests do not present a second, desktop identity, the mismatch class
-  behind VT#258. What `navigator.userAgentData` returns is [U].
+  `client_hints.cc`], so our requests do not present a second, desktop identity (the mismatch class
+  behind VT#258). What `navigator.userAgentData` returns is [U].
 - Leanback's max quality follows `h5vcc.system.getVideoContainerSizeOverride`; VT had to stop a
   1280×800 screen rounding down to 720p (VT#209) [V].
 - The cast label is the feature switch `mdx_device_label` [V VT `cast-label.js`].
 - AI "super resolution" formats are tagged in `adaptiveFormats[].xtags` [V VT source]. Filtering them
   is response tampering (A3); keep this as a bitrate/battery fact only.
 
-### 9.3 Where §2 and §8 are contradicted
+### 9.3 Caveats on §2 and §8
 
-- **§8.1 / P12.9 "hd720 matches our surface, so a cap can only lower quality"** is too strong. There
-  are two independent ceilings: 720p plausibly from the missing container-size override, and 30 fps
-  from Chromium ignoring Cobalt's extra MIME parameters. P12.0b's labels (no `720p60`) are
-  suggestive only, since we do not know whether that video had a 60 fps rendition. P12.15 decides.
-- **§4 / P12.13 "the only MPRIS consumer is `mpris-proxy`"**: two Decky plugins consume MPRIS
-  (MusicControl ~76k, Music Control ~38k downloads, store API 2026-10-20) [V].
-- **§2.1 audio-only "drop to the lowest quality"**: a native audio-only player flag exists, but using
-  it rewrites the player response. That is an owner decision under A3, not an engineering gap.
-- **R1/R2 drift to watch:** attestation enforcement is reaching sibling clients, guests are being
-  asked to sign in "to prove you're not a bot" (VT#158/#233), and the late-2025 TV watch-screen
-  redesign is DOM drift risk for the `idomkey`/overlay scripts. The smoke canary (guest, UI-only)
-  catches none of these: P12.20.
+- **The `hd720` ceiling has two possible causes**: 720p plausibly from the missing container-size
+  override (§9.2), and 30 fps from Chromium ignoring Cobalt's extra MIME parameters. §8.1's labels
+  (no `720p60`) are suggestive only — that video may have had no 60 fps rendition. P12.15 decides.
+- **R1/R2 drift to watch:** attestation enforcement is reaching sibling clients, guests are asked to
+  sign in "to prove you're not a bot" (VT#158/#233), and the late-2025 TV watch-screen redesign is DOM
+  drift risk for the `idomkey`/overlay scripts. The smoke canary (guest, UI-only) catches none of
+  these: P12.20.
 - **SteamOS 3.8** adds preliminary LCD hibernation, wake from a Steam Controller, and "better scaling
-  on TVs" [V secondary]. Re-probe §8.2 on 3.8.x (record the SteamOS build next to the reading), but
-  do not reopen P12.2 on that alone. `PrepareForSleep` should cover hibernate [I].
+  on TVs" [V secondary]. `PrepareForSleep` should cover hibernate [I].
 
 ### 9.4 Still not recommended
 
-As §5/§6, plus the fork's list, which this pass agrees with: Discord RPC, offline downloads,
-PO-token/attestation spoofing, and a Chromecast (`CrKey`) UA (lands in cast-receiver idle, m114
-S0.2).
-
+As §5/§6, plus: Discord RPC, offline downloads, PO-token/attestation spoofing, and a Chromecast
+(`CrKey`) UA (lands in cast-receiver idle, m114 S0.2).
