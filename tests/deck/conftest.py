@@ -138,8 +138,13 @@ def _dump_artifacts(item):
         if d is not None:
             _, out, _ = d.run("journalctl --user -n 400 --no-pager 2>/dev/null", check=False)
             (Path(str(base) + ".journal.txt")).write_text(out)
+            # The Flatpak's XDG_STATE_HOME is under ~/.var/app; the host path holds only a stale log
+            # from the pre-Flatpak raw-binary runs, which every dump used to attach instead.
             _, log, _ = d.run(
-                "tail -n 400 ~/.local/state/deckback/logs/deckback.log 2>/dev/null", check=False
+                "tail -n 400 ~/.var/app/io.github.properrr.deckback/.local/state/deckback/logs/"
+                "deckback.log 2>/dev/null || tail -n 400 ~/.local/state/deckback/logs/deckback.log "
+                "2>/dev/null",
+                check=False,
             )
             if log:
                 (Path(str(base) + ".applog.txt")).write_text(log)
