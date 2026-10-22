@@ -88,7 +88,7 @@ do_dev() {
 
   info "installing the dev bundle ..."
   local install_err
-  install_err="$(deck_ssh "$DECK_HOST" "flatpak install --user -y ~/$base 2>&1" || true)"
+  install_err="$(deck_ssh "$DECK_HOST" "flatpak install --user -y ~/$base 2>&1; rm -f ~/$base" || true)"
   is_installed ||
     die_assert "flatpak install of the dev bundle failed:
 $(printf '%s' "$install_err" | tail -5)"
