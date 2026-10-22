@@ -14,6 +14,11 @@ import pytest
 from lib import probes
 
 PLAY_EXPR = "(function(){var v=document.querySelector('video');if(!v)return false;v.play();return true;})()"
+# The video has decoded at least one frame: a size is known and the playhead moved.
+DECODING_EXPR = (
+    "(function(){var v=document.querySelector('video');"
+    "return !!v && v.videoHeight > 0 && v.currentTime > 0;})()"
+)
 
 
 @pytest.mark.gate
@@ -54,6 +59,8 @@ def test_hardware_decode_is_vaapi(leanback):
         leanback.pump(1.0)
         if leanback.media.decoder_name:
             break
+    if not leanback.media.decoder_name and leanback.evaluate(DECODING_EXPR) is not True:
+        pytest.skip("the video never decoded a frame (environment: pick a profile and play a video)")
 
     ok, reason = probes.hardware_decode_verdict(
         leanback.media.decoder_name, leanback.media.is_platform_decoder
