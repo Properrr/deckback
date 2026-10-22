@@ -42,7 +42,7 @@ fi
 
 # The evdev features (gamepad, FF_RUMBLE haptics, touchscreen) all fail silently without it.
 grep -qE '^\s*-\s*--device=input\b' "$manifest" ||
-  die_assert "finish-args lacks --device=input — gamepad and touch lock would be silent no-ops"
+  die_assert "finish-args lacks --device=input — the gamepad and haptics would be silent no-ops"
 
 # --device=input is only understood from flatpak 1.16.0 (it landed in 1.15.6). Without
 # --require-version, a 1.14 host installs the app and hands the user a dead gamepad.

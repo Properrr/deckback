@@ -10,7 +10,7 @@ app=io.github.properrr.deckback
 host_fp="$(flatpak --version 2>/dev/null | awk '{print $NF}')"
 if [ -n "$host_fp" ] && [ "$(printf '%s\n%s\n' 1.16.0 "$host_fp" | sort -V | head -1)" != "1.16.0" ]; then
   die_env "this host has flatpak ${host_fp}; Deckback needs >= 1.16.0 (that is where --device=input
-  landed, and the gamepad and touchscreen lock both depend on it). SteamOS 3.5+ ships 1.16.x."
+  landed, and the gamepad depends on it). SteamOS 3.5+ ships 1.16.x."
 fi
 
 info "Installing $bundle ..."
@@ -21,7 +21,7 @@ flatpak install --user -y "$bundle"
 perms="$(flatpak info --show-permissions "$app" 2>/dev/null || true)"
 [ -n "$perms" ] || die_env "installed $app but cannot read its permissions — is the install broken?"
 if flatpak_grants_input "$perms"; then
-  info "evdev access granted (gamepad, haptics, touchscreen lock)"
+  info "evdev access granted (gamepad, haptics)"
 else
   die_assert "installed $app has no 'input' device permission. The gamepad and the touchscreen
   lock will silently do nothing. Rebuild the bundle with 'just flatpak' from a tree whose manifest
@@ -48,8 +48,8 @@ Next steps:
   1. In Game Mode, open the Deckback shortcut's controller settings.
   2. Import the "Deckback" layout (config/steam_input.vdf) or apply the community layout by that
      name, so the standard controls reach the in-app input layer and the rear grips/trackpad map.
-  3. Controls: A=select, B=back, X=play/pause, LB/RB=seek -/+10s, View=captions. Press both
-     stick-clicks (L3+R3) to lock/unlock the touchscreen at runtime.
+  3. Controls: A=select, B=back, X=play/pause, L1/R1=scrub, L2/R2=previous/next chapter,
+     View=captions, Menu=settings (hold Y there to exit).
   4. DRM (rentals/some originals) is OFF by default; free YouTube needs nothing. To enable it, set
      cdm_url + cdm_sha256 in app.json (see docs/SUPPORT.md). The CDM is never bundled with Deckback.
 EOF

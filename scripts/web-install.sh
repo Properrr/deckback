@@ -27,7 +27,7 @@ command -v python3 >/dev/null 2>&1 || die "python3 not found (SteamOS ships it �
 host_fp="$(flatpak --version 2>/dev/null | awk '{print $NF}')"
 if [ -n "$host_fp" ] && [ "$(printf '%s\n%s\n' 1.16.0 "$host_fp" | sort -V | head -1)" != "1.16.0" ]; then
   die "this host has flatpak ${host_fp}; Deckback needs >= 1.16.0 (where --device=input landed, which
-     the gamepad and touch lock depend on). Update SteamOS (3.5+ ships flatpak 1.16.x) and retry."
+     the gamepad depends on). Update SteamOS (3.5+ ships flatpak 1.16.x) and retry."
 fi
 
 # --- 1. Repo + install --user (what lets the app self-update via the portal). ------------------------
@@ -47,7 +47,7 @@ say "Installing or updating Deckback (first run also pulls the Freedesktop runti
 # in-app self-update cannot accept.
 flatpak install --user -y --or-update deckback "$APP"
 
-# --- 2. Confirm evdev access. Without 'input', the gamepad + touch lock fail silently. -------------
+# --- 2. Confirm evdev access. Without 'input', the gamepad fails silently. -------------
 # Mirrors scripts/lib.sh:flatpak_grants_input — only the devices= line counts; 'all' is a superset.
 perms="$(flatpak info --show-permissions "$APP" 2>/dev/null || true)"
 case "$(printf '%s\n' "$perms" | sed -n 's/^devices=//p')" in
@@ -94,6 +94,6 @@ cat >&2 <<'EOF'
 
 Next steps in Game Mode:
   1. Open Deckback's controller settings and apply the "Deckback" layout.
-  2. Controls: A=select · B=back · X=play/pause · LB/RB=seek ±10s · View=captions · L3+R3=touch lock.
+  2. Controls: A=select · B=back · X=play/pause · L1/R1=scrub · L2/R2=previous/next chapter · View=captions · Menu=settings (hold Y there to exit).
   3. DRM (rentals/some originals) is OFF by default; free YouTube needs nothing (docs/SUPPORT.md).
 EOF
