@@ -73,6 +73,7 @@ class GamepadInput {
   // direction) untouched.
   void discover_new_devices();
   void close_devices();
+  void close_device(size_t i);  // close one pad, keeping the others open
   void handle_event(int type, int code, int value);
   void drop_held_state();  // forget held controls whose release may never arrive
   void set_direction(

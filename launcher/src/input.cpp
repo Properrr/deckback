@@ -220,6 +220,14 @@ void GamepadInput::discover_new_devices() {
   closedir(d);
 }
 
+void GamepadInput::close_device(size_t i) {
+  info(std::format("input: gamepad {} removed", paths_[i]));
+  if (fds_[i] >= 0) close(fds_[i]);
+  fds_.erase(fds_.begin() + static_cast<long>(i));
+  paths_.erase(paths_.begin() + static_cast<long>(i));
+  ranges_.erase(ranges_.begin() + static_cast<long>(i));
+}
+
 void GamepadInput::rescan_devices() {
   close_devices();
   discover_new_devices();  // paths_ is empty, so this opens everything afresh
@@ -545,14 +553,14 @@ void GamepadInput::loop() {
     else
       poll(pfds.data(), pfds.size(), static_cast<int>(timeout));  // EINTR/errors: just loop again
 
-    bool lost = false;
+    std::vector<size_t> gone;
     for (size_t i = 0; i < pfds.size(); ++i) {
       if (!(pfds[i].revents & (POLLIN | POLLERR | POLLHUP))) continue;
       input_event evs[32];
       ssize_t r = read(pfds[i].fd, evs, sizeof(evs));
       if (r <= 0) {
         if (r < 0 && (errno == EAGAIN || errno == EINTR)) continue;
-        lost = true;  // device went away
+        gone.push_back(i);  // device went away
         continue;
       }
       const size_t count = static_cast<size_t>(r) / sizeof(input_event);
@@ -608,14 +616,19 @@ void GamepadInput::loop() {
       }
     }
 
-    if (lost || (fds_.empty() && mono_ms() - last_scan >= 2000)) {
+    if (!gone.empty()) {
+      // Close only the pads that went away; the others keep their fds and queued events.
+      for (auto it = gone.rbegin(); it != gone.rend(); ++it) close_device(*it);
+      // Steam re-creates its virtual pad under a new node (e.g. across resume): pick it up now.
+      discover_new_devices();
+      if (fds_.empty()) info("input: no gamepad device found yet (will retry)");
+      last_scan = mono_ms();
+      drop_held_state();  // the lost pad's release events will never come; state is shared
+      haptic_.detach();   // re-attach rumble on the next pulse
+      haptic_tried_ = false;
+    } else if (fds_.empty() && mono_ms() - last_scan >= 2000) {
       rescan_devices();
       last_scan = mono_ms();
-      drop_held_state();  // with the pad gone, no release event is coming
-      // Steam re-creates its virtual pad under a new node (e.g. across resume): re-attach rumble on
-      // the next pulse.
-      haptic_.detach();
-      haptic_tried_ = false;
     } else if (mono_ms() - last_scan >= kHotplugScanMs) {
       // Hotplug while another pad is open. Non-destructive: held keys survive.
       discover_new_devices();
