@@ -320,7 +320,7 @@ class PortalUpdater final : public Updater {
         return 1;
       }
       if (deploy_terminal_) break;
-      struct pollfd pf {};
+      struct pollfd pf{};
       pf.fd = sd_bus_get_fd(bus_);
       pf.events = static_cast<short>(sd_bus_get_events(bus_));
       poll(&pf, 1, kDeployPollMs);

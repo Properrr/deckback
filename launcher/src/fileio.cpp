@@ -65,12 +65,12 @@ bool write_file_atomic(const std::string& path, std::string_view bytes) {
 }
 
 bool file_exists(const std::string& path) {
-  struct stat st {};
+  struct stat st{};
   return ::stat(path.c_str(), &st) == 0 && S_ISREG(st.st_mode);
 }
 
 std::optional<long> file_age_ms(const std::string& path) {
-  struct stat st {};
+  struct stat st{};
   if (::stat(path.c_str(), &st) != 0) return std::nullopt;
   timespec now{};
   if (::clock_gettime(CLOCK_REALTIME, &now) != 0) return std::nullopt;

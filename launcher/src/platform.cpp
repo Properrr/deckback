@@ -113,9 +113,7 @@ class SdBusPlatform final : public Platform {
         std::format("selftest: sleep(delay) inhibitor {}", sleep_fd_ >= 0 ? "acquired" : "FAILED"));
     set_idle_inhibited(true);
     // Give the event-loop thread a moment to reconcile the idle inhibitor, then list ours.
-    struct timespec ts {
-      0, 200'000'000
-    };
+    struct timespec ts{0, 200'000'000};
     nanosleep(&ts, nullptr);
     info("selftest: current Deckback logind inhibitors —");
     int rc = std::system(

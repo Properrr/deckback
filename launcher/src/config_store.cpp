@@ -40,13 +40,13 @@ const OverlayKey kOverlayable[] = {
 };
 
 // A value of the wrong JSON type leaves the field at its app.json value.
-void assign(Config& c, bool Config::*m, const json::Value& v) {
+void assign(Config& c, bool Config::* m, const json::Value& v) {
   if (auto b = v.as_bool()) c.*m = *b;
 }
-void assign(Config& c, std::string Config::*m, const json::Value& v) {
+void assign(Config& c, std::string Config::* m, const json::Value& v) {
   if (const std::string* s = v.as_string()) c.*m = *s;
 }
-void assign(Config& c, std::vector<std::string> Config::*m, const json::Value& v) {
+void assign(Config& c, std::vector<std::string> Config::* m, const json::Value& v) {
   const std::vector<json::Value>* a = v.as_array();
   if (!a) return;
   std::vector<std::string> out;

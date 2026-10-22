@@ -25,7 +25,7 @@ namespace {
 template <typename T>
 struct Field {
   std::string_view path;
-  T Config::*member;
+  T Config::* member;
 };
 
 // Ranges are enforced, not assumed. There was no validation at all before, so `devtools_poll_ms: 0`
@@ -71,7 +71,7 @@ constexpr Field<bool> kBoolFields[] = {
 
 struct IntField {
   std::string_view path;
-  int Config::*member;
+  int Config::* member;
   Range range;
 };
 
@@ -106,7 +106,7 @@ constexpr IntField kIntFields[] = {
 
 struct LongField {
   std::string_view path;
-  long Config::*member;
+  long Config::* member;
   Range range;
 };
 
@@ -116,7 +116,7 @@ constexpr LongField kLongFields[] = {
 
 struct RealField {
   std::string_view path;
-  double Config::*member;
+  double Config::* member;
   double min, max;
 };
 

@@ -318,7 +318,7 @@ int main(int argc, char** argv) {
     warn("startup: user_agent unset — Leanback will not serve the TV app until S0.2 seeds it");
   }
 
-  struct sigaction sa {};
+  struct sigaction sa{};
   sa.sa_handler = on_signal;
   sigaction(SIGINT, &sa, nullptr);
   sigaction(SIGTERM, &sa, nullptr);

@@ -38,7 +38,7 @@ int run_selftest_watch(int secs) {
   info("selftest-watch: running the updater loop for up to " + std::to_string(secs) +
        "s (portal reconnect drive; Ctrl-C / SIGTERM to stop early)");
   g_watch_stop = 0;
-  struct sigaction sa {};
+  struct sigaction sa{};
   sa.sa_handler = &watch_on_signal;
   sigaction(SIGINT, &sa, nullptr);
   sigaction(SIGTERM, &sa, nullptr);
@@ -46,9 +46,7 @@ int run_selftest_watch(int secs) {
   up->start();
   const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(secs);
   while (std::chrono::steady_clock::now() < deadline && g_watch_stop == 0) {
-    struct timespec ts {
-      0, 200L * 1000L * 1000L
-    };
+    struct timespec ts{0, 200L * 1000L * 1000L};
     nanosleep(&ts, nullptr);  // EINTR on a signal → the g_watch_stop check ends the loop at once
   }
   info(std::string("selftest-watch: stopping (") + (g_watch_stop ? "signalled" : "window elapsed") +

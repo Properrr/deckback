@@ -207,7 +207,7 @@ void OsdMenuController::reconcile_open() {
       ScriptLibrary::instance().render("osd", ScriptParams().set("op", std::string_view("state")));
   if (js.empty()) return;
   const std::optional<std::string> st = client_.eval_string(js);
-  if (!st) return;  // engine unreachable: a transport blip, not a lost menu — retry later
+  if (!st) return;            // engine unreachable: a transport blip, not a lost menu — retry later
   if (*st != "gone") return;  // a live state string, or 'detached' (keep-alive re-appends): ours
   // The page was reloaded out from under the captured menu (JS context wiped, so no keep-alive can
   // bring it back). Release capture so input is never trapped behind an absent menu. The paint is
