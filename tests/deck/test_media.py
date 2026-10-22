@@ -42,13 +42,6 @@ def test_av1_reports_unsupported_and_vp9_does_not(leanback):
 
 @pytest.mark.gate
 @pytest.mark.playback
-@pytest.mark.xfail(
-    reason="P4 HW decode is DISABLED: VA-API engages but ANGLE renders green-band corruption on this "
-    "radeonsi stack, so we ship software decode (durable/hardware.md, m114.md). This gate stays here "
-    "as the P4 goal; if it ever XPASSes, HW decode was re-enabled and the xfail must be removed — but "
-    "ONLY alongside test_video_is_not_corrupt still passing (decoder identity is not display correctness).",
-    strict=False,
-)
 def test_hardware_decode_is_vaapi(leanback):
     """Playback uses a platform decoder whose name contains `Vaapi`; a missing value fails."""
     leanback.enable_media()
