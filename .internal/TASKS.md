@@ -315,9 +315,10 @@ gate, OSD Unreachable verdict, atomic CDM install, small fixes), on-Deck status 
 - [ ] Small beta group before Flathub, with a window for fixes.
 - [ ] Measure what removing `Network.enable` saved: run `just power` against v0.0.9 on the same
       video. The 6.39 W reading on a different video cannot be compared with the 5.6 W baseline.
-- [ ] The pre-sleep checkpoint fails on every real sleep: a power-button sleep mid-video logs
-      `player: suspend — no active video to checkpoint` (the CDP socket is already unusable ~100 ms
-      after `PrepareForSleep(true)`; the Exit path works). The video is never paused; needs a debug log.
+- [x] Pre-sleep checkpoint on real sleeps: the engine closes its DevTools socket at
+      `PrepareForSleep(true)` (`session closed (end of stream)`), so the pause failed on every real
+      sleep. It now retries once on a fresh session; two power-button sleeps on the OLED Deck
+      (2026-10-21) logged `paused + checkpointed at 6.7s` / `14.7s before suspend`.
 - [ ] `just soak` cannot exercise the launcher's sleep hooks. `rtcwake -m mem` bypasses logind, so
       no `PrepareForSleep` arrives (TEST-PLAN §1). Triggering a logind suspend over SSH needs polkit
       auth; until then, test with power-button sleeps by hand.

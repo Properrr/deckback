@@ -15,6 +15,7 @@ minor versions may include breaking changes.
   gestures on; gestures still respond instantly.
 
 ### Fixed
+- The video now pauses before the Deck goes to sleep; it used to keep playing into the sleep.
 - Unplugging one controller no longer interrupts the others.
 - `--collect-logs` now prints a support report (version, your settings and the recent log) to attach
   to a bug report; it was documented but did nothing.

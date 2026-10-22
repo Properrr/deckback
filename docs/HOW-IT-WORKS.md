@@ -231,8 +231,9 @@ cycles and on **every** resume the app was alive with `currentTime` advanced, au
 the screen undimmed. `rtcwake` bypasses logind, so soak never sends `PrepareForSleep`; the
 launcher's own hooks were verified by two power-button sleeps (*2026-10-21*), each logging
 `PrepareForSleep(false)` → network reachable → resume nudge sent, with the video advancing after.
-Open: the pre-sleep pause/checkpoint fails on real sleeps (the CDP socket is already gone), so the
-video is not paused before sleep; the resume nudge restarts it either way.
+Before sleep the video is paused and its position logged. The engine closes its DevTools socket as
+the sleep starts, so the pause retries once on a fresh session (verified on two power-button sleeps,
+*2026-10-21*).
 
 ### Audio recovery ✅ Verified
 Chromium audio goes through PipeWire's Pulse socket. SteamOS sometimes leaves Deckback's stream
@@ -394,6 +395,6 @@ impossible under Xwayland/without Steamworks; passing `js_mse_eme` is **not** ce
 
 Still unverified on hardware: auto-repeat acceleration, right-stick scroll, keymap layers, captions'
 actual effect, mic capture, single-instance lock, rumble, audio device hot-swap, and hardware decode
-on the LCD unit. Open: the pre-sleep pause/checkpoint fails on real sleeps. Not built: voice search
+on the LCD unit. Not built: voice search
 (withdrawn), text-entry/OSK, input-latency measurement, Crashpad, forced 720p surface + glyph-size
 check.
