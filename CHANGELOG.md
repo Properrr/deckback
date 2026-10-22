@@ -8,11 +8,13 @@ minor versions may include breaking changes.
 
 ## [Unreleased]
 
+## [0.0.11] - 2026-10-21
+
 ### Changed
 - **Faster start.** The TV interface starts loading sooner after launch, and the first-run card and
   Settings button appear over a second earlier.
-- **Lighter on the battery.** Deckback talks to the engine far less often, especially with touch
-  gestures on; gestures still respond instantly.
+- **Less CPU use.** Deckback's own background work now takes less than half the processor time it
+  did, especially with touch gestures on; gestures still respond instantly.
 
 ### Fixed
 - The video now pauses before the Deck goes to sleep; it used to keep playing into the sleep.
@@ -265,7 +267,8 @@ minor versions may include breaking changes.
 - Hardware VP9 decode via VA-API (clean on M138 / cobalt-27).
 - zypak-sandboxed Flatpak with a `.desktop` entry, icon, and AppStream metainfo.
 
-[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.10...HEAD
+[Unreleased]: https://github.com/properrr/deckback/compare/v0.0.11...HEAD
+[0.0.11]: https://github.com/properrr/deckback/releases/tag/v0.0.11
 [0.0.10]: https://github.com/properrr/deckback/releases/tag/v0.0.10
 [0.0.9]: https://github.com/properrr/deckback/releases/tag/v0.0.9
 [0.0.8]: https://github.com/properrr/deckback/releases/tag/v0.0.8
